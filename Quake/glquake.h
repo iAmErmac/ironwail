@@ -132,15 +132,12 @@ extern	const char	*gl_version;
 	x(void,			DrawElementsInstanced, (GLenum mode, GLsizei count, GLenum type, const void *indices, GLsizei instancecount))\
 	x(void,			VertexAttribDivisor, (GLuint index, GLuint divisor))\
 	x(void,			DrawElementsIndirect, (GLenum mode, GLenum type, const void *indirect))\
-	x(void,			MultiDrawElementsIndirect, (GLenum mode, GLenum type, const void *indirect, GLsizei drawcount, GLsizei stride))\
 	x(void,			GenBuffers, (GLsizei n, GLuint *buffers))\
 	x(void,			DeleteBuffers, (GLsizei n, const GLuint *buffers))\
 	x(void,			BindBuffer, (GLenum target, GLuint buffer))\
 	x(void,			BindBufferRange, (GLenum target, GLuint index, GLuint buffer, GLintptr offset, GLsizeiptr size))\
 	x(void,			BufferData, (GLenum target, GLsizeiptr size, const GLvoid *data, GLenum usage))\
 	x(void,			BufferSubData, (GLenum target, GLintptr offset, GLsizeiptr size, const GLvoid *data))\
-	x(GLvoid*,		MapBuffer, (GLenum target, GLenum access))\
-	x(GLboolean,	UnmapBuffer, (GLenum target))\
 	x(void*,		MapBufferRange, (GLenum target, GLintptr offset, GLsizeiptr length, GLbitfield access))\
 	x(void,			FlushMappedBufferRange, (GLenum target, GLintptr offset, GLsizeiptr length))\
 	x(GLsync,		FenceSync, (GLenum condition, GLbitfield flags))\
@@ -189,16 +186,10 @@ extern	const char	*gl_version;
 	x(void,			BlitFramebuffer, (GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter))\
 	x(void,			DrawBuffers, (GLsizei n, const GLenum *bufs))\
 	x(void,			ClearBufferfv, (GLenum buffer, GLint drawbuffer, const GLfloat *value))\
-	x(void,			BlendFunci, (GLuint buf, GLenum sfactor, GLenum dfactor))\
-	x(void,			DebugMessageCallback, (GLDEBUGPROC callback, const void *userParam))\
-	x(void,			ObjectLabel, (GLenum identifier, GLuint name, GLsizei length, const GLchar *label))\
-	x(void,			PushDebugGroup, (GLenum source, GLuint id, GLsizei length, const char * message))\
-	x(void,			PopDebugGroup, (void))\
 	x(const GLubyte*,GetStringi, (GLenum name, GLuint index))\
 	x(void,			TexStorage2D, (GLenum target, GLsizei levels, GLenum internalFormat, GLsizei width, GLsizei height))\
 	x(void,			TexStorage3D, (GLenum target, GLsizei levels, GLenum internalFormat, GLsizei width, GLsizei height, GLsizei depth))\
 	x(void,			TexStorage2DMultisample, (GLenum target, GLsizei samples, GLenum internalFormat, GLsizei width, GLsizei height, GLboolean fixedsamplelocations))\
-	x(void,			MinSampleShading, (GLfloat value))\
 	x(void,			TexImage3D, (GLenum target, GLint level, GLint internalFormat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const GLvoid *pixels))\
 	x(void,			TexSubImage3D, (GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, const GLvoid *pixels))\
 	x(void,			BindImageTexture, (GLuint unit, GLuint texture, GLint level, GLboolean layered, GLint layer, GLenum access, GLenum format))\
@@ -208,7 +199,9 @@ extern	const char	*gl_version;
 	x(void,			DeleteSamplers, (GLsizei n, const GLuint *samplers))\
 	x(void,			SamplerParameteri, (GLuint sampler, GLenum pname, GLint param))\
 	x(void,			SamplerParameterf, (GLuint sampler, GLenum pname, GLfloat param))\
-	x(void,			BindSampler, (GLuint unit, GLuint sampler))\
+	x(void,			BindSampler, (GLuint unit, GLuint sampler))
+
+#define QGL_GLES_OPTIONAL_FUNCTIONS(x)\
 	x(void,			GenQueries, (GLsizei n, GLuint *ids))\
 	x(void,			DeleteQueries, (GLsizei n, const GLuint *ids))\
 	x(void,			BeginQuery, (GLenum target, GLuint id))\
@@ -216,9 +209,20 @@ extern	const char	*gl_version;
 	x(void,			GetQueryiv, (GLenum target, GLenum pname, GLint *params))\
 	x(void,			GetQueryObjectiv, (GLuint id, GLenum pname, GLint *params))\
 	x(void,			GetQueryObjectuiv, (GLuint id, GLenum pname, GLuint *params))\
+	x(GLvoid*,		MapBuffer, (GLenum target, GLenum access))\
+	x(GLboolean,		UnmapBuffer, (GLenum target))\
+	x(void,			MultiDrawElementsIndirect, (GLenum mode, GLenum type, const void *indirect, GLsizei drawcount, GLsizei stride))\
+	x(void,			BlendFunci, (GLuint buf, GLenum sfactor, GLenum dfactor))\
+	x(void,			DebugMessageCallback, (GLDEBUGPROC callback, const void *userParam))\
+	x(void,			ObjectLabel, (GLenum identifier, GLuint name, GLsizei length, const GLchar *label))\
+	x(void,			PushDebugGroup, (GLenum source, GLuint id, GLsizei length, const char * message))\
+	x(void,			PopDebugGroup, (void))\
+	x(void,			MinSampleShading, (GLfloat value))
+
+#define QGL_TIMER_QUERY_FUNCTIONS(x)\
 	x(void,			QueryCounter, (GLuint id, GLenum target))\
 	x(void,			GetQueryObjecti64v, (GLuint id, GLenum pname, GLint64 *params))\
-	x(void,			GetQueryObjectui64v, (GLuint id, GLenum pname, GLuint64 *params))\
+	x(void,			GetQueryObjectui64v, (GLuint id, GLenum pname, GLuint64 *params))
 
 #define QGL_ARB_buffer_storage_FUNCTIONS(x)\
 	x(void,			BufferStorage, (GLenum target, GLsizeiptr size, const void *data, GLbitfield flags))\
@@ -242,6 +246,8 @@ extern	const char	*gl_version;
 
 #define QGL_ALL_FUNCTIONS(x)\
 	QGL_CORE_FUNCTIONS(x)\
+	QGL_GLES_OPTIONAL_FUNCTIONS(x)\
+	QGL_TIMER_QUERY_FUNCTIONS(x)\
 	QGL_ARB_buffer_storage_FUNCTIONS(x)\
 	QGL_ARB_multi_bind_FUNCTIONS(x)\
 	QGL_ARB_bindless_texture_FUNCTIONS(x)\

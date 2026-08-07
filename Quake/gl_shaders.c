@@ -30,6 +30,22 @@ static GLuint gl_programs[128];
 static GLuint gl_current_program;
 static int gl_num_programs;
 
+#if defined(ANDROID_GLES3)
+static cvar_t gl_gles_shader_dump = {"gl_gles_shader_dump", "1", CVAR_NONE};
+static qboolean gl_gles_shader_dump_registered;
+static unsigned gl_shader_dump_sequence;
+static int gl_shader_programs_linked;
+
+typedef struct gl_shader_source_s {
+	GLuint shader;
+	GLenum type;
+	char name[256];
+	char *source;
+} gl_shader_source_t;
+
+static gl_shader_source_t gl_shader_sources[8];
+#endif
+
 /*
 =============
 GL_InitError
@@ -78,6 +94,78 @@ static void GL_InitError (const char *message, ...)
 	);
 }
 
+#if defined(ANDROID_GLES3)
+static gl_shader_source_t *GL_FindShaderSource(GLuint shader)
+{
+	int i;
+
+	for (i = 0; i < countof(gl_shader_sources); ++i)
+		if (gl_shader_sources[i].shader == shader)
+			return &gl_shader_sources[i];
+	return NULL;
+}
+
+static void GL_ForgetShaderSource(GLuint shader)
+{
+	gl_shader_source_t *entry = GL_FindShaderSource(shader);
+
+	if (!entry)
+		return;
+	free(entry->source);
+	memset(entry, 0, sizeof(*entry));
+}
+
+static void GL_DumpShaderSource(GLenum type, const char *name, const char *source)
+{
+	char safe_name[192];
+	char dump_dir[MAX_OSPATH];
+	char dump_path[MAX_OSPATH];
+	const char *stage;
+	int i, j;
+
+	if (!gl_gles_shader_dump.value || !source || !host_parms || !host_parms->basedir)
+		return;
+
+	for (i = 0, j = 0; name[i] && j < (int)sizeof(safe_name) - 1; ++i)
+	{
+		char c = name[i];
+		if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '_' || c == '-')
+			safe_name[j++] = c;
+		else
+			safe_name[j++] = '_';
+	}
+	safe_name[j] = 0;
+	stage = type == GL_VERTEX_SHADER ? "vertex" : "fragment";
+	q_snprintf(dump_dir, sizeof(dump_dir), "%s/shader_dumps", host_parms->basedir);
+	Sys_mkdir(dump_dir);
+	q_snprintf(dump_path, sizeof(dump_path), "%s/%04u_%s_%s.glsl",
+		dump_dir, ++gl_shader_dump_sequence, safe_name, stage);
+	if (COM_WriteFile_OSPath(dump_path, source, strlen(source)))
+		Con_Printf("GLES shader source dump: %s\n", dump_path);
+	else
+		Con_Printf("GLES shader source dump failed: %s\n", dump_path);
+}
+
+static void GL_RegisterShaderSource(GLuint shader, GLenum type, const char *name, char *source)
+{
+	int i;
+
+	for (i = 0; i < countof(gl_shader_sources); ++i)
+	{
+		if (gl_shader_sources[i].shader)
+			continue;
+		gl_shader_sources[i].shader = shader;
+		gl_shader_sources[i].type = type;
+		q_strlcpy(gl_shader_sources[i].name, name, sizeof(gl_shader_sources[i].name));
+		gl_shader_sources[i].source = source;
+		return;
+	}
+	free(source);
+	Con_Printf("GLES shader source registry full for %s\n", name);
+}
+#endif
+
 /*
 =============
 AppendString
@@ -109,6 +197,11 @@ static GLuint GL_CreateShader (GLenum type, const char *source, const char *extr
 	int numstrings = 0;
 	GLint status;
 	GLuint shader;
+#if defined(ANDROID_GLES3)
+	const char *line_directive = "#line 1\n";
+	char *final_source;
+	size_t final_length;
+#endif
 
 	switch (type)
 	{
@@ -130,7 +223,10 @@ static GLuint GL_CreateShader (GLenum type, const char *source, const char *extr
 		"#version 310 es\n"
 		"precision highp float;\n"
 		"precision highp int;\n"
-        "precision highp usampler3D;\n"
+
+		"precision highp sampler2D;\n"
+		"precision highp samplerCube;\n"
+		"precision highp usampler3D;\n"
 		"\n"
 		"#define IW_GL_BACKEND_GLES 1\n"
 		"#define IW_NOPERSPECTIVE smooth\n"
@@ -159,11 +255,28 @@ static GLuint GL_CreateShader (GLenum type, const char *source, const char *extr
 		gl_clipcontrol_able
 	);
 #endif
-strings[numstrings++] = header;
-
+	strings[numstrings++] = header;
 	if (extradefs && *extradefs)
 		strings[numstrings++] = extradefs;
+#if defined(ANDROID_GLES3)
+	strings[numstrings++] = line_directive;
+#endif
 	strings[numstrings++] = source;
+
+#if defined(ANDROID_GLES3)
+	final_length = strlen(header) +
+		(extradefs && *extradefs ? strlen(extradefs) : 0) +
+		strlen(line_directive) + strlen(source);
+	final_source = (char *) malloc(final_length + 1);
+	if (!final_source)
+		Sys_Error ("GL_CreateShader: out of memory for %s", name);
+	final_source[0] = 0;
+	strcat(final_source, header);
+	if (extradefs && *extradefs)
+		strcat(final_source, extradefs);
+	strcat(final_source, line_directive);
+	strcat(final_source, source);
+#endif
 
 	shader = GL_CreateShaderFunc (type);
 	if (GL_ObjectLabelFunc)
@@ -174,12 +287,18 @@ strings[numstrings++] = header;
 
 	if (status != GL_TRUE)
 	{
-		char infolog[1024];
+		char infolog[4096];
 		memset(infolog, 0, sizeof(infolog));
+#if defined(ANDROID_GLES3)
+		GL_DumpShaderSource(type, name, final_source);
+#endif
 		GL_GetShaderInfoLogFunc (shader, sizeof(infolog), NULL, infolog);
 		GL_InitError ("Error compiling %s %s shader:\n\n%s", name, typestr, infolog);
 	}
 
+#if defined(ANDROID_GLES3)
+	GL_RegisterShaderSource(shader, type, name, final_source);
+#endif
 	return shader;
 }
 
@@ -192,35 +311,49 @@ static GLuint GL_CreateProgramFromShaders (const GLuint *shaders, int numshaders
 {
 	GLuint program;
 	GLint status;
+	int i;
 
 	program = GL_CreateProgramFunc ();
 	if (GL_ObjectLabelFunc)
 		GL_ObjectLabelFunc (GL_PROGRAM, program, -1, name);
 
-	while (numshaders-- > 0)
-	{
-		GL_AttachShaderFunc (program, *shaders);
-		GL_DeleteShaderFunc (*shaders);
-		++shaders;
-	}
-
+	for (i = 0; i < numshaders; ++i)
+		GL_AttachShaderFunc (program, shaders[i]);
 
 	GL_LinkProgramFunc (program);
 	GL_GetProgramivFunc (program, GL_LINK_STATUS, &status);
 
 	if (status != GL_TRUE)
 	{
-		char infolog[1024];
+		char infolog[4096];
 		memset(infolog, 0, sizeof(infolog));
+#if defined(ANDROID_GLES3)
+		for (i = 0; i < numshaders; ++i)
+		{
+			gl_shader_source_t *entry = GL_FindShaderSource(shaders[i]);
+			if (entry)
+				GL_DumpShaderSource(entry->type, entry->name, entry->source);
+		}
+#endif
 		GL_GetProgramInfoLogFunc (program, sizeof(infolog), NULL, infolog);
 		GL_InitError ("Error linking %s program:\n\n%s", name, infolog);
+	}
+
+	for (i = 0; i < numshaders; ++i)
+	{
+		GL_DeleteShaderFunc (shaders[i]);
+#if defined(ANDROID_GLES3)
+		GL_ForgetShaderSource(shaders[i]);
+#endif
 	}
 
 	if (gl_num_programs == countof(gl_programs))
 		Sys_Error ("gl_programs overflow");
 	gl_programs[gl_num_programs] = program;
 	gl_num_programs++;
-
+#if defined(ANDROID_GLES3)
+	gl_shader_programs_linked++;
+#endif
 	return program;
 }
 
@@ -359,6 +492,13 @@ void GL_CreateShaders (void)
 {
 	int palettize, dither, mode, alphatest, warp, oit, poseverttype;
 #if defined(ANDROID_GLES3)
+	if (!gl_gles_shader_dump_registered)
+	{
+		Cvar_RegisterVariable (&gl_gles_shader_dump);
+		gl_gles_shader_dump_registered = true;
+	}
+	gl_shader_programs_linked = 0;
+	Con_Printf ("GLES shader validation: base direct permutations begin\n");
 	const int poseverttype_count = 1;
 	const int oit_count = 1;
 	const int dither_count = 3;
@@ -417,6 +557,9 @@ void GL_CreateShaders (void)
 	for (mode = 0; mode < 3; mode++)
 		glprogs.palette_init[mode] = GL_CreateComputeProgram (palette_init_compute_shader, "palette init|MODE %d", mode);
 	glprogs.palette_postprocess = GL_CreateComputeProgram (palette_postprocess_compute_shader, "palette postprocess");
+#endif
+#if defined(ANDROID_GLES3)
+	Con_Printf ("GLES shader validation: linked=%d expected=38; skipped=OIT-resolve, compute/indirect, clustered-light, palette-compute, bindless, multisample\n", gl_shader_programs_linked);
 #endif
 }
 /*

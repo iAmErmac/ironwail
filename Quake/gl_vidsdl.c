@@ -37,6 +37,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #endif
 #if defined(ANDROID_GLES3)
 #include <dlfcn.h>
+#include "android_gles.h"
+#include "android_render_target.h"
 #endif
 
 //ericw -- for putting the driver into multithreaded mode
@@ -124,6 +126,27 @@ typedef struct glfunc_t {
 static const glfunc_t gl_core_functions[] =
 {
 	QGL_CORE_FUNCTIONS(QGL_REGISTER_NAMED_FUNC)
+	{NULL, NULL}
+};
+
+static const glfunc_t gl_gles_optional_functions[] =
+{
+	QGL_GLES_OPTIONAL_FUNCTIONS(QGL_REGISTER_NAMED_FUNC)
+	{NULL, NULL}
+};
+
+static const glfunc_t gl_timer_query_functions[] =
+{
+	QGL_TIMER_QUERY_FUNCTIONS(QGL_REGISTER_NAMED_FUNC)
+	{NULL, NULL}
+};
+
+static const glfunc_t gl_gles_debug_functions[] =
+{
+	{(void**)&GL_DebugMessageCallbackFunc, "glDebugMessageCallback"},
+	{(void**)&GL_ObjectLabelFunc, "glObjectLabel"},
+	{(void**)&GL_PushDebugGroupFunc, "glPushDebugGroup"},
+	{(void**)&GL_PopDebugGroupFunc, "glPopDebugGroup"},
 	{NULL, NULL}
 };
 
@@ -1014,9 +1037,6 @@ qboolean GL_InitFunctions (const glfunc_t *funcs, qboolean required)
 {
 	qboolean ret = true;
 
-#if defined(ANDROID_GLES3)
-	required = false;
-#endif
 
 	while (funcs->name)
 	{
@@ -1053,6 +1073,10 @@ GL_CheckExtensions
 static void GL_CheckExtensions (void)
 {
 	GL_InitFunctions (gl_core_functions, true);
+#if !defined(ANDROID_GLES3)
+	GL_InitFunctions (gl_gles_optional_functions, true);
+	GL_InitFunctions (gl_timer_query_functions, true);
+#endif
 
 	if (COM_CheckParm ("-glmarkers"))
 		glmarkers = true;
@@ -1061,12 +1085,20 @@ static void GL_CheckExtensions (void)
 	if (COM_CheckParm("-gldebug"))
 #endif
 	{
-		glmarkers = true;
-		GL_DebugMessageCallbackFunc (&GL_DebugCallback, NULL);
-		glEnable (GL_DEBUG_OUTPUT);
-		glEnable (GL_DEBUG_OUTPUT_SYNCHRONOUS);
+#if defined(ANDROID_GLES3)
+		if (GL_FindExtension("GL_KHR_debug"))
+			GL_InitFunctions (gl_gles_debug_functions, false);
+#endif
+		if (GL_DebugMessageCallbackFunc && GL_PushDebugGroupFunc && GL_PopDebugGroupFunc)
+		{
+			glmarkers = true;
+			GL_DebugMessageCallbackFunc (&GL_DebugCallback, NULL);
+			glEnable (GL_DEBUG_OUTPUT);
+			glEnable (GL_DEBUG_OUTPUT_SYNCHRONOUS);
+		}
+		else
+			glmarkers = false;
 	}
-
 	// anisotropic filtering
 	//
 	if (GL_FindExtension ("GL_EXT_texture_filter_anisotropic"))
@@ -1109,12 +1141,20 @@ static void GL_CheckExtensions (void)
 	}
 	Cvar_SetValueQuick (&gl_texture_anisotropy, CLAMP (1.f, gl_texture_anisotropy.value, gl_max_anisotropy));
 
+#if defined(ANDROID_GLES3)
+	gl_buffer_storage_able = false;
+	gl_multi_bind_able = false;
+	gl_bindless_able = false;
+	gl_clipcontrol_able = false;
+#else
 	gl_buffer_storage_able =
 		!COM_CheckParm ("-nobufferstorage") &&
 		GL_FindExtension ("GL_ARB_buffer_storage") &&
 		GL_InitFunctions (gl_arb_buffer_storage_functions, false)
 	;
+#endif
 
+#if !defined(ANDROID_GLES3)
 	gl_multi_bind_able =
 		!COM_CheckParm ("-nomultibind") &&
 		GL_FindExtension ("GL_ARB_multi_bind") &&
@@ -1133,6 +1173,7 @@ static void GL_CheckExtensions (void)
 		GL_FindExtension ("GL_ARB_clip_control") &&
 		GL_InitFunctions (gl_arb_clip_control_functions, false)
 	;
+#endif
 }
 
 /*
@@ -1306,6 +1347,11 @@ GL_Init
 */
 static void GL_Init (void)
 {
+#if defined(ANDROID_GLES3)
+	iw_gles_limits_t gles_limits;
+	iw_gles_features_t gles_features;
+	iw_render_target_caps_t target_caps;
+#endif
 	gl_vendor = (const char *) glGetString (GL_VENDOR);
 	gl_renderer = (const char *) glGetString (GL_RENDERER);
 	gl_version = (const char *) glGetString (GL_VERSION);
@@ -1331,7 +1377,16 @@ static void GL_Init (void)
 	if (gl_version_number < MIN_GL_VERSION)
 		Sys_Error("OpenGL " MIN_GL_VERSION_STR " required, found %d.%d\n", gl_version_major, gl_version_minor);
 
+#if defined(ANDROID_GLES3)
+	if (!IW_GLES_Probe (&gles_limits, &gles_features))
+		Sys_Error ("GLES 3.1 context probe failed\n");
+#endif
 	GL_CheckExtensions ();
+#if defined(ANDROID_GLES3)
+	if (!IW_GLES_ProbeFormats (vid.width, vid.height, &target_caps))
+		Sys_Error ("RGBA8/depth-stencil framebuffer probe failed\n");
+	IW_GLES_RecordFormatCaps (target_caps.baseline, target_caps.float_color, target_caps.msaa, target_caps.mrt, target_caps.integer_image);
+#endif
 
 	GL_GenVertexArraysFunc (1, &globalvao);
 	GL_BindVertexArrayFunc (globalvao);
