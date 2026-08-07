@@ -165,8 +165,8 @@ static const char warpscale_fragment_shader[] =
 "	coord &= 15;\n"\
 "	coord.y ^= coord.x;\n"\
 "	uint v = uint(coord.y | (coord.x << 8));	// 0  0  0  0 | x3 x2 x1 x0 |  0  0  0  0 | y3 y2 y1 y0\n"\
-"	v = (v ^ (v << 2)) & 0x3333;				// 0  0 x3 x2 |  0  0 x1 x0 |  0  0 y3 y2 |  0  0 y1 y0\n"\
-"	v = (v ^ (v << 1)) & 0x5555;				// 0 x3  0 x2 |  0 x1  0 x0 |  0 y3  0 y2 |  0 y1  0 y0\n"\
+"	v = (v ^ (v << 2)) & 0x3333u;				// 0  0 x3 x2 |  0  0 x1 x0 |  0  0 y3 y2 |  0  0 y1 y0\n"\
+"	v = (v ^ (v << 1)) & 0x5555u;				// 0 x3  0 x2 |  0 x1  0 x0 |  0 y3  0 y2 |  0 y1  0 y0\n"\
 "	v |= v >> 7;								// 0 x3  0 x2 |  0 x1  0 x0 | x3 y3 x2 y2 | x1 y1 x0 y0\n"\
 "	v = bitfieldReverse(v) >> 24;				// 0  0  0  0 |  0  0  0  0 | y0 x0 y1 x1 | y2 x2 y3 x3\n"\
 "	return float(v) * (1.0/256.0);\n"\
@@ -337,8 +337,11 @@ NOISE_FUNCTIONS
 
 ////////////////////////////////////////////////////////////////
 
-#define LIGHT_CLUSTER_IMAGE(mode) \
-"layout(rg32ui, binding=0) uniform " mode " uimage3D LightClusters;\n"\
+#if !defined(ANDROID_GLES3)
+#define LIGHT_CLUSTER_IMAGE(mode) "layout(rg32ui, binding=0) uniform " mode " uimage3D LightClusters;\n"
+#else
+#define LIGHT_CLUSTER_IMAGE(mode)
+#endif
 
 ////////////////////////////////////////////////////////////////
 
@@ -501,7 +504,7 @@ WORLD_VERTEX_BUFFER
 "#endif\n"
 "layout(location=4) centroid out vec2 out_lmuv;\n"
 "layout(location=5) out float out_depth;\n"
-"layout(location=6) noperspective out vec2 out_coord;\n"
+"layout(location=6) IW_NOPERSPECTIVE out vec2 out_coord;\n"
 "layout(location=7) flat out vec4 out_styles;\n"
 "layout(location=8) flat out float out_lmofs;\n"
 "#if BINDLESS\n"
@@ -516,9 +519,9 @@ WORLD_VERTEX_BUFFER
 "	out_pos = Transform(in_pos, instance);\n"
 "	gl_Position = ViewProj * vec4(out_pos, 1.0);\n"
 "#if REVERSED_Z\n"
-"	const float ZBIAS = -1./1024;\n"
+"	const float ZBIAS = -1./1024.0;\n"
 "#else\n"
-"	const float ZBIAS =  1./1024;\n"
+"	const float ZBIAS =  1./1024.0;\n"
 "#endif\n"
 "	if ((call.flags & CF_USE_POLYGON_OFFSET) != 0u)\n"
 "		gl_Position.z += ZBIAS;\n"
@@ -584,7 +587,7 @@ NOISE_FUNCTIONS
 "#endif\n"
 "layout(location=4) centroid in vec2 in_lmuv;\n"
 "layout(location=5) in float in_depth;\n"
-"layout(location=6) noperspective in vec2 in_coord;\n"
+"layout(location=6) IW_NOPERSPECTIVE in vec2 in_coord;\n"
 "layout(location=7) flat in vec4 in_styles;\n"
 "layout(location=8) flat in float in_lmofs;\n"
 "#if BINDLESS\n"
@@ -663,6 +666,7 @@ OIT_OUTPUT (out_fragcolor)
 "		}\n"
 "	}\n"
 "\n"
+"#if !IW_GL_BACKEND_GLES\n"
 "	if (NumLights > 0u)\n"
 "	{\n"
 "		uint i, ofs;\n"
@@ -708,6 +712,7 @@ OIT_OUTPUT (out_fragcolor)
 "			total_light += max(min(dynamic_light, 1. - total_light), 0.);\n"
 "		}\n"
 "	}\n"
+"#endif // !IW_GL_BACKEND_GLES\n"
 "#if DITHER >= 2\n"
 "	total_light = floor(total_light * 63. + 0.5) * (2./63.);\n"
 "#else\n"
@@ -1041,8 +1046,8 @@ NOISE_FUNCTIONS
 "{\n"\
 "	vec4	WorldMatrix[3];\n"\
 "	vec4	LightColor; // xyz=LightColor w=Alpha\n"\
-"	int		Pose1;\n"\
-"	int		Pose2;\n"\
+"	uint	Pose1;\n"\
+"	uint	Pose2;\n"\
 "	float	Blend;\n"\
 "	int		Padding;\n"\
 "};\n"\
@@ -1102,11 +1107,11 @@ ALIAS_INSTANCE_BUFFER
 "\n"
 "	PoseVertex GetPoseVertex (uint pose)\n"
 "	{\n"
-"		uvec2 data = PackedPosNor[pose + gl_VertexID];\n"
+"		uvec2 data = PackedPosNor[pose + uint(gl_VertexID)];\n"
 "#if POSEVERTTYPE == 2 // PV_MD3\n"
 "		PoseVertex ret;\n"
-"		ret.pos = vec3((ivec3(data.xxy >> uvec3(0, 16, 0)) & 65535) - 32768);\n"
-"		vec2 spherical = vec2((data.yy >> uvec2(16, 24)) & 255) * (2.0 * 3.14159265 / 255.0);\n"
+"		ret.pos = vec3((ivec3(data.xxy >> uvec3(0, 16, 0)) & uvec3(65535u)) - 32768);\n"
+"		vec2 spherical = vec2((data.yy >> uvec2(16, 24)) & uvec2(255u)) * (2.0 * 3.14159265 / 255.0);\n"
 "		float sinlat = sin(spherical.x);\n"
 "		float coslat = cos(spherical.x);\n"
 "		float sinlng = sin(spherical.y);\n"
@@ -1116,7 +1121,7 @@ ALIAS_INSTANCE_BUFFER
 "		ret.nor.z = coslat;\n"
 "		return ret;\n"
 "#else // PV_QUAKE1\n"
-"		return PoseVertex(vec3((data.xxx >> uvec3(0, 8, 16)) & 255), unpackSnorm4x8(data.y).xyz);\n"
+"		return PoseVertex(vec3((data.xxx >> uvec3(0, 8, 16)) & uvec3(255u)), unpackSnorm4x8(data.y).xyz);\n"
 "#endif // POSEVERTTYPE\n"
 "	}\n"
 "\n"
@@ -1132,7 +1137,7 @@ ALIAS_INSTANCE_BUFFER
 "}\n"
 "\n"
 "#if MODE == " QS_STRINGIFY (ALIASSHADER_NOPERSP) "\n"
-"	layout(location=0) noperspective out vec2 out_texcoord;\n"
+"	layout(location=0) IW_NOPERSPECTIVE out vec2 out_texcoord;\n"
 "#else\n"
 "	layout(location=0) out vec2 out_texcoord;\n"
 "#endif\n"
@@ -1170,7 +1175,7 @@ NOISE_FUNCTIONS
 "layout(binding=1) uniform sampler2D FullbrightTex;\n"
 "\n"
 "#if MODE == " QS_STRINGIFY (ALIASSHADER_NOPERSP) "\n"
-"	layout(location=0) noperspective in vec2 in_texcoord;\n"
+"	layout(location=0) IW_NOPERSPECTIVE in vec2 in_texcoord;\n"
 "#else\n"
 "	layout(location=0) in vec2 in_texcoord;\n"
 "#endif\n"

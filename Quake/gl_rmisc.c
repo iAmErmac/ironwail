@@ -583,7 +583,7 @@ GLuint GL_CreateBuffer (GLenum target, GLenum usage, const char *name, size_t si
 	GLuint buffer;
 	GL_GenBuffersFunc (1, &buffer);
 	GL_BindBuffer (target, buffer);
-	if (name)
+	if (name && GL_ObjectLabelFunc)
 		GL_ObjectLabelFunc (GL_BUFFER, buffer, -1, name);
 	GL_BufferDataFunc (target, size, data, usage);
 	return buffer;
@@ -817,7 +817,8 @@ static void GL_AllocFrameResources (frameres_bits_t bits)
 			GL_GenBuffersFunc (1, &frame->host_buffer);
 			GL_BindBuffer (GL_ARRAY_BUFFER, frame->host_buffer);
 			q_snprintf (name, sizeof (name), "dynamic host buffer %d", i);
-			GL_ObjectLabelFunc (GL_BUFFER, frame->host_buffer, -1, name);
+			if (GL_ObjectLabelFunc)
+				GL_ObjectLabelFunc (GL_BUFFER, frame->host_buffer, -1, name);
 			if (gl_buffer_storage_able)
 			{
 				GL_BufferStorageFunc (GL_ARRAY_BUFFER, frameres_host_buffer_size, NULL, flags);
@@ -839,7 +840,8 @@ static void GL_AllocFrameResources (frameres_bits_t bits)
 			GL_GenBuffersFunc (1, &frame->device_buffer);
 			GL_BindBuffer (GL_SHADER_STORAGE_BUFFER, frame->device_buffer);
 			q_snprintf (name, sizeof (name), "dynamic device buffer %d", i);
-			GL_ObjectLabelFunc (GL_BUFFER, frame->device_buffer, -1, name);
+			if (GL_ObjectLabelFunc)
+				GL_ObjectLabelFunc (GL_BUFFER, frame->device_buffer, -1, name);
 			GL_BufferDataFunc (GL_SHADER_STORAGE_BUFFER, frameres_device_buffer_size, NULL, GL_STREAM_DRAW);
 		}
 	}

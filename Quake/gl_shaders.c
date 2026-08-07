@@ -105,7 +105,7 @@ static GLuint GL_CreateShader (GLenum type, const char *source, const char *extr
 {
 	const char *strings[16];
 	const char *typestr = NULL;
-	char header[256];
+	char header[512];
 	int numstrings = 0;
 	GLint status;
 	GLuint shader;
@@ -125,23 +125,49 @@ static GLuint GL_CreateShader (GLenum type, const char *source, const char *extr
 			Sys_Error ("GL_CreateShader: unknown type 0x%X for %s", type, name);
 			break;
 	}
-
+#if defined(ANDROID_GLES3)
+	q_snprintf (header, sizeof (header),
+		"#version 310 es\n"
+		"precision highp float;\n"
+		"precision highp int;\n"
+        "precision highp usampler3D;\n"
+		"\n"
+		"#define IW_GL_BACKEND_GLES 1\n"
+		"#define IW_NOPERSPECTIVE smooth\n"
+		"#define BINDLESS 0\n"
+		"#define USE_BINDLESS 0\n"
+		"#define USE_DRAW_ID 0\n"
+		"#define USE_OIT 0\n"
+		"#define USE_MULTISAMPLE 0\n"
+		"#define REVERSED_Z 0\n"
+	);
+#else
 	q_snprintf (header, sizeof (header),
 		"#version 430\n"
 		"\n"
+		"#define IW_GL_BACKEND_GLES 0\n"
+		"#define IW_NOPERSPECTIVE noperspective\n"
 		"#define BINDLESS %d\n"
+		"#define USE_BINDLESS %d\n"
+		"#define USE_DRAW_ID 0\n"
+		"#define USE_OIT %d\n"
+		"#define USE_MULTISAMPLE 0\n"
 		"#define REVERSED_Z %d\n",
 		gl_bindless_able,
+		gl_bindless_able,
+		gl_bindless_able ? 1 : 0,
 		gl_clipcontrol_able
 	);
-	strings[numstrings++] = header;
+#endif
+strings[numstrings++] = header;
 
 	if (extradefs && *extradefs)
 		strings[numstrings++] = extradefs;
 	strings[numstrings++] = source;
 
 	shader = GL_CreateShaderFunc (type);
-	GL_ObjectLabelFunc (GL_SHADER, shader, -1, name);
+	if (GL_ObjectLabelFunc)
+		GL_ObjectLabelFunc (GL_SHADER, shader, -1, name);
 	GL_ShaderSourceFunc (shader, numstrings, strings, NULL);
 	GL_CompileShaderFunc (shader);
 	GL_GetShaderivFunc (shader, GL_COMPILE_STATUS, &status);
@@ -168,7 +194,8 @@ static GLuint GL_CreateProgramFromShaders (const GLuint *shaders, int numshaders
 	GLint status;
 
 	program = GL_CreateProgramFunc ();
-	GL_ObjectLabelFunc (GL_PROGRAM, program, -1, name);
+	if (GL_ObjectLabelFunc)
+		GL_ObjectLabelFunc (GL_PROGRAM, program, -1, name);
 
 	while (numshaders-- > 0)
 	{
@@ -176,6 +203,7 @@ static GLuint GL_CreateProgramFromShaders (const GLuint *shaders, int numshaders
 		GL_DeleteShaderFunc (*shaders);
 		++shaders;
 	}
+
 
 	GL_LinkProgramFunc (program);
 	GL_GetProgramivFunc (program, GL_LINK_STATUS, &status);
@@ -329,7 +357,16 @@ GL_CreateShaders
 */
 void GL_CreateShaders (void)
 {
-	int palettize, dither, mode, alphatest, warp, oit;
+	int palettize, dither, mode, alphatest, warp, oit, poseverttype;
+#if defined(ANDROID_GLES3)
+	const int poseverttype_count = 1;
+	const int oit_count = 1;
+	const int dither_count = 3;
+#else
+	const int poseverttype_count = 3;
+	const int oit_count = 2;
+	const int dither_count = 3;
+#endif
 
 	glprogs.gui = GL_CreateProgram (gui_vertex_shader, gui_fragment_shader, "gui");
 	glprogs.viewblend = GL_CreateProgram (viewblend_vertex_shader, viewblend_fragment_shader, "viewblend");
@@ -338,17 +375,19 @@ void GL_CreateShaders (void)
 	for (palettize = 0; palettize < 3; palettize++)
 		glprogs.postprocess[palettize] = GL_CreateProgram (postprocess_vertex_shader, postprocess_fragment_shader, "postprocess|PALETTIZE %d", palettize);
 
+#if !defined(ANDROID_GLES3)
 	for (mode = 0; mode < 2; mode++)
 		glprogs.oit_resolve[mode] = GL_CreateProgram (oit_resove_vertex_shader, oit_resove_fragment_shader, "oit resolve|MSAA %d", mode);
+#endif
 
-	for (oit = 0; oit < 2; oit++)
-		for (dither = 0; dither < 3; dither++)
+	for (oit = 0; oit < oit_count; oit++)
+		for (dither = 0; dither < dither_count; dither++)
 			for (mode = 0; mode < 3; mode++)
 				glprogs.world[oit][dither][mode] = GL_CreateProgram (world_vertex_shader, world_fragment_shader, "world|OIT %d; DITHER %d; MODE %d", oit, dither, mode);
 
 	for (dither = 0; dither < 2; dither++)
 	{
-		for (oit = 0; oit < 2; oit++)
+		for (oit = 0; oit < oit_count; oit++)
 		{
 			glprogs.water[oit][dither] = GL_CreateProgram (water_vertex_shader, water_fragment_shader, "water|OIT %d; DITHER %d", oit, dither);
 			glprogs.particles[oit][dither] = GL_CreateProgram (particles_vertex_shader, particles_fragment_shader, "particles|OIT %d; DITHER %d", oit, dither);
@@ -361,16 +400,16 @@ void GL_CreateShaders (void)
 	}
 	glprogs.skystencil = GL_CreateProgram (skystencil_vertex_shader, NULL, "sky stencil");
 
-	int poseverttype;
-	for (oit = 0; oit < 2; oit++)
+	for (oit = 0; oit < oit_count; oit++)
 		for (mode = 0; mode < 3; mode++)
 			for (alphatest = 0; alphatest < 2; alphatest++)
-				for (poseverttype = 0; poseverttype < 3; poseverttype++) 
+				for (poseverttype = 0; poseverttype < poseverttype_count; poseverttype++)
 					glprogs.alias[oit][mode][alphatest][poseverttype] =
 					GL_CreateProgram (alias_vertex_shader, alias_fragment_shader, "alias|OIT %d; MODE %d; ALPHATEST %d; POSEVERTTYPE %d", oit, mode, alphatest, poseverttype);
 
 	glprogs.debug3d = GL_CreateProgram (debug3d_vertex_shader, debug3d_fragment_shader, "debug3d");
 
+#if !defined(ANDROID_GLES3)
 	glprogs.clear_indirect = GL_CreateComputeProgram (clear_indirect_compute_shader, "clear indirect draw params");
 	glprogs.gather_indirect = GL_CreateComputeProgram (gather_indirect_compute_shader, "indirect draw gather");
 	glprogs.cull_mark = GL_CreateComputeProgram (cull_mark_compute_shader, "cull/mark");
@@ -378,8 +417,8 @@ void GL_CreateShaders (void)
 	for (mode = 0; mode < 3; mode++)
 		glprogs.palette_init[mode] = GL_CreateComputeProgram (palette_init_compute_shader, "palette init|MODE %d", mode);
 	glprogs.palette_postprocess = GL_CreateComputeProgram (palette_postprocess_compute_shader, "palette postprocess");
+#endif
 }
-
 /*
 =============
 GL_DeleteShaders

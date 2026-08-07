@@ -27,9 +27,16 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "bgmusic.h"
 #include "resource.h"
 #if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
+#if defined(ANDROID_GLES3)
+#include <SDL.h>
+#else
 #include <SDL2/SDL.h>
+#endif
 #else
 #include "SDL.h"
+#endif
+#if defined(ANDROID_GLES3)
+#include <dlfcn.h>
 #endif
 
 //ericw -- for putting the driver into multithreaded mode
@@ -40,13 +47,22 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #define MAXWIDTH		10000
 #define MAXHEIGHT		10000
 
+#if defined(ANDROID_GLES3)
+#define DEFAULT_SDL_FLAGS	0
+#else
 #define DEFAULT_SDL_FLAGS	SDL_OPENGL
+#endif
 
 #define DEFAULT_REFRESHRATE	60
 
 #define MAKE_GL_VERSION(major, minor)		(((major) << 16) | (minor))
+#if defined(ANDROID_GLES3)
+#define MIN_GL_VERSION_MAJOR				3
+#define MIN_GL_VERSION_MINOR				1
+#else
 #define MIN_GL_VERSION_MAJOR				4
 #define MIN_GL_VERSION_MINOR				3
+#endif
 #define MIN_GL_VERSION						MAKE_GL_VERSION(MIN_GL_VERSION_MAJOR, MIN_GL_VERSION_MINOR)
 #define MIN_GL_VERSION_STR					QS_STRINGIFY(MIN_GL_VERSION_MAJOR)"."QS_STRINGIFY(MIN_GL_VERSION_MINOR)
 
@@ -434,6 +450,15 @@ VID_SetMode
 */
 static qboolean VID_SetMode (int width, int height, int refreshrate, qboolean fullscreen)
 {
+#if defined(ANDROID_GLES3)
+	(void)refreshrate;
+	(void)fullscreen;
+	vid.width = width;
+	vid.height = height;
+	vid.refreshrate = DEFAULT_REFRESHRATE;
+	modestate = MS_WINDOWED;
+	return true;
+#endif
 	int		temp;
 	Uint32	flags;
 	char		caption[50];
@@ -627,7 +652,9 @@ Called when vid_vsync changes
 */
 static void VID_VSync_f (cvar_t *cvar)
 {
+#if !defined(ANDROID_GLES3)
 	VID_ApplyVSync ();
+#endif
 }
 
 /*
@@ -987,9 +1014,20 @@ qboolean GL_InitFunctions (const glfunc_t *funcs, qboolean required)
 {
 	qboolean ret = true;
 
+#if defined(ANDROID_GLES3)
+	required = false;
+#endif
+
 	while (funcs->name)
 	{
-		if ((*funcs->ptr = SDL_GL_GetProcAddress (funcs->name)) == NULL)
+		void *proc = NULL;
+#if defined(ANDROID_GLES3)
+		proc = dlsym (RTLD_DEFAULT, funcs->name);
+#endif
+		if (!proc)
+			proc = SDL_GL_GetProcAddress (funcs->name);
+		*funcs->ptr = proc;
+		if (*funcs->ptr == NULL)
 		{
 			if (required)
 			{
@@ -1248,11 +1286,15 @@ static void GL_SetupState (void)
 		glDepthFunc (GL_LEQUAL);
 	}
 	glFrontFace (GL_CW); //johnfitz -- glquake used CCW with backwards culling -- let's do it right
+#if !defined(ANDROID_GLES3)
 	glPolygonMode (GL_FRONT_AND_BACK, GL_FILL);
+#endif
 	GL_DepthRange (ZRANGE_FULL); //johnfitz -- moved here becuase gl_ztrick is gone.
 	glEnable (GL_BLEND);
+#if !defined(ANDROID_GLES3)
 	glEnable (GL_TEXTURE_CUBE_MAP_SEAMLESS);
 	glEnable (GL_SAMPLE_SHADING);
+#endif
 
 	GL_ResetState ();
 }
@@ -1273,7 +1315,14 @@ static void GL_Init (void)
 	Con_SafePrintf ("GL_RENDERER: %s\n", gl_renderer);
 	Con_SafePrintf ("GL_VERSION:  %s\n", gl_version);
 
-	if (gl_version == NULL || sscanf(gl_version, "%d.%d", &gl_version_major, &gl_version_minor) < 2)
+	if (gl_version == NULL ||
+#if defined(ANDROID_GLES3)
+		(sscanf(gl_version, "OpenGL ES %d.%d", &gl_version_major, &gl_version_minor) < 2 &&
+		 sscanf(gl_version, "%d.%d", &gl_version_major, &gl_version_minor) < 2)
+#else
+		sscanf(gl_version, "%d.%d", &gl_version_major, &gl_version_minor) < 2
+#endif
+	)
 	{
 		gl_version_major = 0;
 		gl_version_minor = 0;
@@ -1380,7 +1429,9 @@ void GL_EndRendering (void)
 
 	if (!scr_skipupdate)
 	{
+#if !defined(ANDROID_GLES3)
 		SDL_GL_SwapWindow(draw_context);
+#endif
 	}
 }
 
@@ -1630,7 +1681,12 @@ void	VID_Init (void)
 	Cmd_AddCommand ("vid_describecurrentmode", VID_DescribeCurrentMode_f);
 	Cmd_AddCommand ("vid_describemodes", VID_DescribeModes_f);
 
-	putenv (vid_center);	/* SDL_putenv is problematic in versions <= 1.2.9 */
+	#if defined(ANDROID_GLES3)
+	display_width = (int)vid_width.value;
+	display_height = (int)vid_height.value;
+	display_refreshrate = DEFAULT_REFRESHRATE;
+#else
+putenv (vid_center);	/* SDL_putenv is problematic in versions <= 1.2.9 */
 
 	if (SDL_InitSubSystem(SDL_INIT_VIDEO) < 0)
 		Sys_Error("Couldn't init SDL video: %s", SDL_GetError());
@@ -1644,8 +1700,9 @@ void	VID_Init (void)
 		display_height = mode.h;
 		display_refreshrate = mode.refresh_rate;
 	}
+#endif
 
-	Cvar_SetValueQuick (&vid_width, (float)display_width);
+Cvar_SetValueQuick (&vid_width, (float)display_width);
 	Cvar_SetValueQuick (&vid_height, (float)display_height);
 	Cvar_SetValueQuick (&vid_refreshrate, (float)display_refreshrate);
 
@@ -1656,8 +1713,12 @@ void	VID_Init (void)
 	}
 	CFG_ReadCvarOverrides(read_vars, num_readvars);
 
+#if !defined(ANDROID_GLES3)
 	VID_InitModelist();
 	VID_InitMouseCursors();
+#else
+	nummodes = 0;
+#endif
 
 	width = (int)vid_width.value;
 	height = (int)vid_height.value;
@@ -1728,9 +1789,13 @@ void	VID_Init (void)
 	vid.fullbright = 256 - LittleLong (*((int *)vid.colormap + 2048));
 
 	VID_SetMode (width, height, refreshrate, fullscreen);
+#if !defined(ANDROID_GLES3)
 	VID_ApplyVSync ();
+#endif
 
+#if !defined(ANDROID_GLES3)
 	PL_SetWindowIcon();
+#endif
 
 	GL_Init ();
 	GL_SetupState ();
