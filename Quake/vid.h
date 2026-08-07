@@ -101,5 +101,9 @@ void		VID_SetMouseCursor (mousecursor_t cursor);
 void		VID_RecalcConsoleSize (void);
 void		VID_RecalcInterfaceSize (void);
 
+void	VID_Android_SurfaceCreated (void);
+void	VID_Android_Resize (int width, int height);
+void	VID_Android_SurfaceDestroyed (void);
+
 #endif	/* __VID_DEFS_H */
 

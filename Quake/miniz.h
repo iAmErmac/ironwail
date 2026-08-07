@@ -125,7 +125,11 @@
 #endif
 
 #if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
+#if defined(ANDROID_GLES3)
+#include <SDL.h>
+#else
 #include <SDL2/SDL.h>
+#endif
 #else
 #include "SDL.h"
 #endif

@@ -22,6 +22,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // r_main.c
 
 #include "quakedef.h"
+#if defined(ANDROID_GLES3)
+#define glDepthRange glDepthRangef
+#endif
 
 qboolean	r_cache_thrash;		// compatability
 
@@ -81,7 +84,11 @@ cvar_t	r_novis = {"r_novis","0",CVAR_ARCHIVE};
 cvar_t	r_simd = {"r_simd","1",CVAR_ARCHIVE};
 #endif
 cvar_t	r_alphasort = {"r_alphasort","1",CVAR_ARCHIVE};
+#if defined(ANDROID_GLES3)
+cvar_t	r_oit = {"r_oit","0",CVAR_ARCHIVE};
+#else
 cvar_t	r_oit = {"r_oit","1",CVAR_ARCHIVE};
+#endif
 cvar_t	r_dither = {"r_dither", "1.0", CVAR_ARCHIVE};
 
 cvar_t	gl_finish = {"gl_finish","0",CVAR_NONE};
@@ -152,6 +159,7 @@ static GLuint GL_CreateFBOAttachment (GLenum format, int samples, GLenum filter,
 
 	glGenTextures (1, &texnum);
 	GL_BindNative (GL_TEXTURE0, target, texnum);
+	if (GL_ObjectLabelFunc)
 	GL_ObjectLabelFunc (GL_TEXTURE, texnum, -1, name);
 	if (samples > 1)
 	{
@@ -185,6 +193,7 @@ static GLuint GL_CreateFBO (GLenum target, const GLuint *colors, int numcolors, 
 
 	GL_GenFramebuffersFunc (1, &fbo);
 	GL_BindFramebufferFunc (GL_FRAMEBUFFER, fbo);
+	if (GL_ObjectLabelFunc)
 	GL_ObjectLabelFunc (GL_FRAMEBUFFER, fbo, -1, name);
 
 	for (i = 0; i < numcolors; i++)
@@ -518,6 +527,16 @@ negative offset moves polygon closer to camera
 */
 void GL_PolygonOffset (int offset)
 {
+#if defined(ANDROID_GLES3)
+	if (offset != 0)
+	{
+		glEnable (GL_POLYGON_OFFSET_FILL);
+		glPolygonOffset (offset > 0 ? 1.f : -1.f, (GLfloat)offset);
+	}
+	else
+		glDisable (GL_POLYGON_OFFSET_FILL);
+	return;
+#else
 	if (gl_clipcontrol_able)
 		offset = -offset;
 
@@ -538,6 +557,7 @@ void GL_PolygonOffset (int offset)
 		glDisable (GL_POLYGON_OFFSET_FILL);
 		glDisable (GL_POLYGON_OFFSET_LINE);
 	}
+#endif
 }
 
 /*
@@ -579,11 +599,14 @@ R_GetAlphaMode
 */
 alphamode_t R_GetAlphaMode (void)
 {
+#if defined(ANDROID_GLES3)
+	return r_alphasort.value ? ALPHAMODE_SORTED : ALPHAMODE_BASIC;
+#else
 	if (r_oit.value)
 		return ALPHAMODE_OIT;
 	return r_alphasort.value ? ALPHAMODE_SORTED : ALPHAMODE_BASIC;
+#endif
 }
-
 /*
 =============
 R_GetEffectiveAlphaMode
@@ -591,6 +614,9 @@ R_GetEffectiveAlphaMode
 */
 alphamode_t R_GetEffectiveAlphaMode (void)
 {
+#if defined(ANDROID_GLES3)
+	return r_alphasort.value ? ALPHAMODE_SORTED : ALPHAMODE_BASIC;
+#endif
 	if (map_checks.value)
 		return ALPHAMODE_BASIC;
 	return R_GetAlphaMode ();
@@ -1805,6 +1831,9 @@ R_ShowTris -- johnfitz
 */
 void R_ShowTris (void)
 {
+#if defined(ANDROID_GLES3)
+	return;
+#endif
 	int		*ofs;
 	entity_t **entlist = cl_sorted_visedicts;
 
@@ -1818,7 +1847,9 @@ void R_ShowTris (void)
 
 	if (r_showtris.value == 1)
 		GL_DepthRange (ZRANGE_NEAR);
+#if !defined(ANDROID_GLES3)
 	glPolygonMode (GL_FRONT_AND_BACK, GL_LINE);
+#endif
 	GL_PolygonOffset (OFFSET_SHOWTRIS);
 
 	ofs = cl_modtype_ofs;
@@ -1841,7 +1872,9 @@ void R_ShowTris (void)
 
 	R_DrawParticles_ShowTris ();
 
+#if !defined(ANDROID_GLES3)
 	glPolygonMode (GL_FRONT_AND_BACK, GL_FILL);
+#endif
 	GL_PolygonOffset (OFFSET_NONE);
 	if (r_showtris.value == 1)
 		GL_DepthRange (ZRANGE_FULL);
