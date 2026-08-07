@@ -9,3 +9,7 @@ Quake/ironwail
 build/
 /.vs
 /out/
+
+# docs
+AGENTS.md
+docs/*.md

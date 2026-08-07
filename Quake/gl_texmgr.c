@@ -436,6 +436,10 @@ TexMgr_Imagedump_f -- dump all current textures to TGA files
 */
 static void TexMgr_Imagedump_f (void)
 {
+#if defined(ANDROID_GLES3)
+	Con_Warning ("imagedump is unavailable on GLES; texture readback is intentionally disabled\n");
+	return;
+#else
 	char tganame[MAX_OSPATH], tempname[MAX_OSPATH], dirname[MAX_OSPATH];
 	const char *reldirname = "imagedump";
 	const char *filter = NULL;
@@ -498,6 +502,7 @@ static void TexMgr_Imagedump_f (void)
 		Con_SafePrintf ("dumped %i textures to ", count);
 	Con_LinkPrintf (va ("%s/", dirname), "%s", reldirname);
 	Con_SafePrintf (".\n");
+#endif
 }
 
 /*
@@ -1568,6 +1573,7 @@ gltexture_t *TexMgr_LoadImageEx (qmodel_t *owner, const char *name, int width, i
 		break;
 	}
 
+	if (GL_ObjectLabelFunc)
 	GL_ObjectLabelFunc (GL_TEXTURE, glt->texnum, -1, glt->name);
 	if (flags & TEXPREF_BINDLESS && gl_bindless_able)
 	{
@@ -1731,6 +1737,7 @@ invalid:	Con_Printf ("TexMgr_ReloadImage: invalid source for %s\n", glt->name);
 		break;
 	}
 
+	if (GL_ObjectLabelFunc)
 	GL_ObjectLabelFunc (GL_TEXTURE, glt->texnum, -1, glt->name);
 	if (glt->flags & TEXPREF_BINDLESS && gl_bindless_able)
 	{
@@ -1998,6 +2005,7 @@ void GLPalette_CreateResources (void)
 
 	glGenTextures (1, &gl_palette_lut);
 	GL_BindNative (GL_TEXTURE0, GL_TEXTURE_3D, gl_palette_lut);
+	if (GL_ObjectLabelFunc)
 	GL_ObjectLabelFunc (GL_TEXTURE, gl_palette_lut, -1, "palette lut");
 	GL_TexImage3DFunc (GL_TEXTURE_3D, 0, GL_R8UI, 128, 128, 128, 0, GL_RED_INTEGER, GL_UNSIGNED_BYTE, NULL);
 	glTexParameteri (GL_TEXTURE_3D, GL_TEXTURE_BASE_LEVEL, 0);

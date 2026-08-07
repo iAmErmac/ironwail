@@ -42,7 +42,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
 #if defined(USE_SDL2)
+#if defined(ANDROID_GLES3)
+#include <SDL.h>
+#else
 #include <SDL2/SDL.h>
+#endif
 #else
 #include <SDL/SDL.h>
 #endif
@@ -796,7 +800,11 @@ void Sys_Init (void)
 			!(term && (!strcmp(term, "raw") || !strcmp(term, "dumb")));
 	if (!stdinIsATTY)
 		Sys_Printf("Terminal input not available.\n");
-
+#ifdef ANDROID_GLES3
+	/* Android supplies a shared, user-selected data directory through host_parms. */
+	host_parms->exedir = host_parms->basedir;
+	host_parms->userdir = host_parms->basedir;
+#else
 	memset (cwd, 0, sizeof(cwd));
 	Sys_GetBasedir(host_parms->argv[0], cwd, sizeof(cwd));
 	host_parms->basedir = cwd;
@@ -808,6 +816,7 @@ void Sys_Init (void)
 	Sys_GetUserdir(userdir, sizeof(userdir));
 	Sys_mkdir (userdir);
 	host_parms->userdir = userdir;
+#endif
 #endif
 	host_parms->numcpus = Sys_NumCPUs ();
 	Sys_Printf("Detected %d CPUs.\n", host_parms->numcpus);
