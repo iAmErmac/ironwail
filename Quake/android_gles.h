@@ -21,10 +21,12 @@ typedef struct iw_gles_features_s {
     qboolean msaa;
     qboolean integer_images;
     qboolean oit;
+    qboolean baseline_target;
 } iw_gles_features_t;
 
 /* Called after IronRift has made its GLES context current. */
 qboolean IW_GLES_Probe(iw_gles_limits_t *limits, iw_gles_features_t *features);
 const char *IW_GLES_FeatureTier(void);
+void IW_GLES_RecordFormatCaps(qboolean baseline, qboolean float_color, qboolean msaa, qboolean mrt, qboolean integer_image);
 
 #endif

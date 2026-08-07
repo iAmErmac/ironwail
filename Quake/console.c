@@ -2409,12 +2409,18 @@ void LOG_Init (quakeparms_t *parms)
 	time_t	inittime;
 	char	session[24];
 
+#if !defined(ANDROID_GLES3)
 	if (!COM_CheckParm("-condebug"))
 		return;
+#endif
 
 	inittime = time (NULL);
 	strftime (session, sizeof(session), "%m/%d/%Y %H:%M:%S", localtime(&inittime));
+#if defined(ANDROID_GLES3)
+	q_snprintf (logfilename, sizeof(logfilename), "%s/engine.log", parms->basedir);
+#else
 	q_snprintf (logfilename, sizeof(logfilename), "%s/qconsole.log", parms->basedir);
+#endif
 
 //	unlink (logfilename);
 

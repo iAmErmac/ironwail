@@ -19,6 +19,36 @@ static qboolean iw_surface;
 static qboolean iw_paused;
 static uint64_t iw_last_frame_ns;
 
+static void IW_Android_QueueLaunchArgs(int argc, const char *const *argv)
+{
+    int i;
+    qboolean active = false;
+
+    for (i = 1; i < argc; ++i)
+    {
+        const char *arg = argv[i];
+        if (!arg || !*arg)
+            continue;
+        if (arg[0] == '+')
+        {
+            Cbuf_AddText(arg + 1);
+            Cbuf_AddText(" ");
+            active = true;
+        }
+        else if (arg[0] == '-')
+        {
+            active = false;
+        }
+        else if (active)
+        {
+            Cbuf_AddText(arg);
+            Cbuf_AddText(" ");
+        }
+    }
+    if (active)
+        Cbuf_AddText("\n");
+}
+
 qboolean IW_Android_Init(const char *base_dir, int argc, const char *const *argv)
 {
     iw_gles_limits_t limits;
@@ -59,6 +89,12 @@ qboolean IW_Android_Init(const char *base_dir, int argc, const char *const *argv
     IW_LOG("initializing native Android lifecycle; tier=%s data=%s",
            IW_GLES_FeatureTier(), iw_parms.basedir);
     Host_Init();
+    Con_Printf("Android launch arguments:");
+    for (i = 0; i < argc; ++i)
+        Con_Printf(" %s", argv[i] ? argv[i] : "");
+    Con_Printf("\n");
+    IW_Android_QueueLaunchArgs(argc, argv);
+    Cbuf_Execute();
     iw_initialized = true;
     return true;
 }
