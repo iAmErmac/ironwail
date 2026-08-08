@@ -163,6 +163,7 @@ void IW_Android_Key(int android_keycode, qboolean down)
         case AKEYCODE_CTRL_RIGHT: key = K_CTRL; break;
         case AKEYCODE_ALT_LEFT:
         case AKEYCODE_ALT_RIGHT: key = K_ALT; break;
+        case AKEYCODE_F12: key = K_F12; break;
         default: break;
         }
     }

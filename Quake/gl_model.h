@@ -142,6 +142,9 @@ typedef struct msurface_s
 	int			flags;
 
 	int			vbo_firstvert;		// index of this surface's first vert in the VBO
+	int			vbo_firstindex;		// index of this surface's first index in the IBO
+	int			vbo_cmd;			// indirect draw command containing this surface
+	int		visframe;
 	int			firstedge;			// look up in model->surfedges[], negative numbers
 	short		numedges;			// are backwards edges
 

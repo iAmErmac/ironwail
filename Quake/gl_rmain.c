@@ -241,6 +241,7 @@ void GL_CreateFrameBuffers (void)
 #endif
 	#if defined(ANDROID_GLES3)
 	GLenum depth_format = GL_DEPTH_COMPONENT24;
+	Con_Printf ("GLES scene targets: color=RGBA8 depth=DEPTH_COMPONENT24 samples=1 stencil=0 alpha=sorted\n");
 #else
 	GLenum depth_format = GL_DEPTH24_STENCIL8;
 #endif
@@ -923,11 +924,7 @@ GL_NeedsSceneEffects
 */
 qboolean GL_NeedsSceneEffects (void)
 {
-#if defined(ANDROID_GLES3)
-	return false;
-#else
 	return framebufs.scene.samples > 1 || water_warp || r_refdef.scale != 1;
-#endif
 }
 
 /*
@@ -937,11 +934,7 @@ GL_NeedsPostprocess
 */
 qboolean GL_NeedsPostprocess (void)
 {
-#if defined(ANDROID_GLES3)
-	return false;
-#else
 	return vid_gamma.value != 1.f || vid_contrast.value != 1.f || softemu || R_GetEffectiveAlphaMode () == ALPHAMODE_OIT;
-#endif
 }
 
 /*

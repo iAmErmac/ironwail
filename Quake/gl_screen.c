@@ -989,7 +989,7 @@ SCR_DrawDevStats
 static void SCR_DrawDevStats (void)
 {
 	char	str[40];
-	int		y = 25-10; //10=number of lines to print
+	int		y = 25-11; //11=number of lines to print
 	int		x = 0; //margin
 
 	if (!devstats.value)
@@ -1027,6 +1027,9 @@ static void SCR_DrawDevStats (void)
 	Draw_String (x, (y++)*8-x, str);
 
 	sprintf (str, "GL upload|%4iK %4iK", dev_stats.gpu_upload/1024, dev_peakstats.gpu_upload/1024);
+	Draw_String (x, (y++)*8-x, str);
+
+	sprintf (str, "GPU stalls|%5i %5i", dev_stats.gpu_stalls, dev_peakstats.gpu_stalls);
 	Draw_String (x, (y++)*8-x, str);
 }
 

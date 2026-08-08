@@ -289,6 +289,13 @@ static void TexMgr_SoftEmu_f (cvar_t *var)
 {
 	softemu = (int)r_softemu.value;
 	softemu = CLAMP (0, (int)softemu, SOFTEMU_NUMMODES - 1);
+#if defined(ANDROID_GLES3)
+	if (softemu)
+	{
+		Con_Printf ("GLES palette compute unavailable; forcing r_softemu 0\n");
+		softemu = SOFTEMU_OFF;
+	}
+#endif
 }
 
 /*
@@ -2041,6 +2048,10 @@ void GLPalette_UpdateLookupTable (void)
 {
 	softemu_metric_t metric;
 	int i;
+
+#if defined(ANDROID_GLES3)
+	return;
+#endif
 
 	if (r_softemu_metric.value < 0.f)
 	{
