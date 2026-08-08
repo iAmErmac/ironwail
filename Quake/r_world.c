@@ -58,8 +58,17 @@ R_MarkVisSurfaces
 static void R_MarkVisSurfaces (byte* vis)
 {
 #if defined(ANDROID_GLES3)
-	(void)vis;
-	return;
+	int i, j;
+	for (i = 0; i < cl.worldmodel->numsurfaces; i++)
+		cl.worldmodel->surfaces[i].visframe = 0;
+	for (i = 0; i < cl.worldmodel->numleafs; i++)
+	{
+		mleaf_t *leaf = &cl.worldmodel->leafs[i + 1];
+		if (!(vis[i >> 3] & (1 << (i & 7))))
+			continue;
+		for (j = 0; j < leaf->nummarksurfaces; j++)
+			cl.worldmodel->surfaces[leaf->firstmarksurface[j]].visframe = r_visframecount;
+	}
 #else
 	int			i;
 	GLuint		buf;
@@ -240,6 +249,8 @@ static void R_FlushBModelCalls (void)
 	size_t	dstcmdofs;
 #if defined(ANDROID_GLES3)
 	static qboolean logged_direct_path;
+	static qboolean logged_cpu_visibility;
+	static bmodel_draw_indirect_t commands[MAX_BMODEL_DRAWS];
 #endif
 
 	if (!num_bmodel_calls)
@@ -247,14 +258,10 @@ static void R_FlushBModelCalls (void)
 
 #if defined(ANDROID_GLES3)
 	{
-		bmodel_draw_indirect_t *commands;
 		GLuint buf;
 		GLbyte *ofs;
 		int i;
-
-		commands = (bmodel_draw_indirect_t *) malloc (sizeof (*commands) * num_bmodel_calls);
-		if (!commands)
-			Sys_Error ("R_FlushBModelCalls: out of memory for GLES draw commands (%d)", num_bmodel_calls);
+		int visible_world_surfaces = 0;
 
 		for (i = 0; i < num_bmodel_calls; i++)
 		{
@@ -270,16 +277,37 @@ static void R_FlushBModelCalls (void)
 		GL_VertexAttribPointerFunc (0, 3, GL_FLOAT, GL_FALSE, sizeof (glvert_t), (void *) offsetof (glvert_t, pos));
 		GL_VertexAttribPointerFunc (1, 4, GL_FLOAT, GL_FALSE, sizeof (glvert_t), (void *) offsetof (glvert_t, st));
 		GL_VertexAttribPointerFunc (2, 1, GL_FLOAT, GL_FALSE, sizeof (glvert_t), (void *) offsetof (glvert_t, lmofs));
-		GL_VertexAttribIPointerFunc (3, 4, GL_UNSIGNED_BYTE, sizeof (glvert_t), (void *) offsetof (glvert_t, styles));
+		GL_VertexAttribIPointerFunc (3, 1, GL_UNSIGNED_INT, sizeof (glvert_t), (void *) offsetof (glvert_t, styles));
 		GL_Upload (GL_SHADER_STORAGE_BUFFER, &bmodel_calls.bound.params, sizeof (bmodel_calls.bound.params[0]) * num_bmodel_calls, &buf, &ofs);
 		GL_BindBufferRange (GL_SHADER_STORAGE_BUFFER, 1, buf, (GLintptr)ofs, sizeof (bmodel_calls.bound.params[0]) * num_bmodel_calls);
 		GL_Bind (GL_TEXTURE2, r_fullbright_cheatsafe ? greytexture : lightmap_texture);
 		for (i = 0; i < num_bmodel_calls; i++)
 		{
+			int src = bmodel_call_remap[i].src;
+			qboolean worldcmd = cl.worldmodel && src >= cl.worldmodel->firstcmd && src < cl.worldmodel->firstcmd + cl.worldmodel->texofs[TEXTYPE_COUNT];
 			GL_Uniform1iFunc (0, i);
 			GL_BindTextures (0, 2, bmodel_calls.bound.textures[i]);
-			glDrawElements (GL_TRIANGLES, (GLsizei)commands[i].count, GL_UNSIGNED_INT,
-				(const void *)((size_t)commands[i].firstIndex * sizeof (GLuint)));
+			if (worldcmd)
+			{
+				int surfindex;
+				for (surfindex = 0; surfindex < cl.worldmodel->numsurfaces; surfindex++)
+				{
+					msurface_t *surf = &cl.worldmodel->surfaces[surfindex];
+					if (surf->vbo_cmd != src || surf->visframe != r_visframecount)
+						continue;
+					glDrawElements (GL_TRIANGLES, (GLsizei)((q_max (surf->numedges, 2) - 2) * 3), GL_UNSIGNED_INT,
+						(const void *)((size_t)surf->vbo_firstindex * sizeof (GLuint)));
+					visible_world_surfaces++;
+				}
+			}
+			else
+				glDrawElements (GL_TRIANGLES, (GLsizei)commands[i].count, GL_UNSIGNED_INT,
+					(const void *)((size_t)commands[i].firstIndex * sizeof (GLuint)));
+		}
+		if (!logged_cpu_visibility)
+		{
+			Con_Printf ("GLES CPU PVS direct: visible_world_surfaces=%d\n", visible_world_surfaces);
+			logged_cpu_visibility = true;
 		}
 		if (!logged_direct_path)
 		{
@@ -287,7 +315,6 @@ static void R_FlushBModelCalls (void)
 				num_bmodel_calls, commands[0].count, commands[0].firstIndex);
 			logged_direct_path = true;
 		}
-		free (commands);
 		num_bmodel_calls = 0;
 		return;
 	}
@@ -310,7 +337,7 @@ static void R_FlushBModelCalls (void)
 	GL_VertexAttribPointerFunc (0, 3, GL_FLOAT, GL_FALSE, sizeof (glvert_t), (void *) offsetof (glvert_t, pos));
 	GL_VertexAttribPointerFunc (1, 4, GL_FLOAT, GL_FALSE, sizeof (glvert_t), (void *) offsetof (glvert_t, st));
 	GL_VertexAttribPointerFunc (2, 1, GL_FLOAT, GL_FALSE, sizeof (glvert_t), (void *) offsetof (glvert_t, lmofs));
-	GL_VertexAttribIPointerFunc (3, 4, GL_UNSIGNED_BYTE, sizeof (glvert_t), (void *) offsetof (glvert_t, styles));
+	GL_VertexAttribIPointerFunc (3, 1, GL_UNSIGNED_INT, sizeof (glvert_t), (void *) offsetof (glvert_t, styles));
 
 	if (gl_bindless_able)
 	{
@@ -321,6 +348,7 @@ static void R_FlushBModelCalls (void)
 	else
 	{
 		int i;
+		int visible_world_surfaces = 0;
 
 		GL_Upload (GL_SHADER_STORAGE_BUFFER, &bmodel_calls.bound.params, sizeof (bmodel_calls.bound.params[0]) * num_bmodel_calls, &buf, &ofs);
 		GL_BindBufferRange (GL_SHADER_STORAGE_BUFFER, 1, buf, (GLintptr)ofs, sizeof (bmodel_calls.bound.params[0]) * num_bmodel_calls);

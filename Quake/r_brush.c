@@ -852,7 +852,10 @@ void GL_BuildBModelMarkBuffers (void)
 			texidx[m->usedtextures[i]] = i;
 
 		for (i = 0, s = m->surfaces + m->firstmodelsurface; i < m->nummodelsurfaces; i++, s++)
-			cmds[m->firstcmd + texidx[s->texinfo->texnum]].count += (q_max (s->numedges, 2) - 2) * 3;
+		{
+			s->vbo_cmd = m->firstcmd + texidx[s->texinfo->texnum];
+			cmds[s->vbo_cmd].count += (q_max (s->numedges, 2) - 2) * 3;
+		}
 	}
 
 	// compute per-drawcall index buffer offsets
@@ -879,6 +882,7 @@ void GL_BuildBModelMarkBuffers (void)
 		for (i = 0, s = m->surfaces + m->firstmodelsurface; i < m->nummodelsurfaces; i++, s++)
 		{
 			bmodel_draw_indirect_t *draw = &cmds[m->firstcmd + texidx[s->texinfo->texnum]];
+			s->vbo_firstindex = draw->firstIndex;
 			for (k = 2; k < s->numedges; k++)
 			{
 				idx[draw->firstIndex++] = s->vbo_firstvert;

@@ -358,6 +358,7 @@ typedef struct {
 	int		beams;
 	int		dlights;
 	int		gpu_upload;
+	int		gpu_stalls;
 } devstats_t;
 extern devstats_t dev_stats, dev_peakstats;
 
