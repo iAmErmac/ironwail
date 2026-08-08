@@ -541,6 +541,8 @@ GLuint gl_bmodel_ibo = 0;
 size_t gl_bmodel_ibo_size = 0;
 GLuint gl_bmodel_indirect_buffer = 0;
 size_t gl_bmodel_indirect_buffer_size = 0;
+bmodel_draw_indirect_t *gl_bmodel_indirect_cmds = NULL;
+size_t gl_bmodel_indirect_cmd_count = 0;
 GLuint gl_bmodel_surf_buffer = 0;
 GLuint gl_bmodel_marksurf_buffer = 0;
 GLuint gl_bmodel_marksurf_buffer_size = 0;
@@ -555,6 +557,9 @@ void GL_DeleteBModelBuffers (void)
 	GL_DeleteBuffer (gl_bmodel_vbo);
 	GL_DeleteBuffer (gl_bmodel_ibo);
 	GL_DeleteBuffer (gl_bmodel_indirect_buffer);
+	free (gl_bmodel_indirect_cmds);
+	gl_bmodel_indirect_cmds = NULL;
+	gl_bmodel_indirect_cmd_count = 0;
 	GL_DeleteBuffer (gl_bmodel_surf_buffer);
 	GL_DeleteBuffer (gl_bmodel_marksurf_buffer);
 	gl_bmodel_vbo = 0;
@@ -890,6 +895,12 @@ void GL_BuildBModelMarkBuffers (void)
 		cmds[i].firstIndex = sum;
 		sum += cmds[i].count;
 	}
+
+	gl_bmodel_indirect_cmd_count = numtex;
+	gl_bmodel_indirect_cmds = (bmodel_draw_indirect_t *) malloc (sizeof (cmds[0]) * numtex);
+	if (!gl_bmodel_indirect_cmds)
+		Sys_Error ("GL_BuildBModelMarkBuffers: out of memory for CPU draw commands (%d)", numtex);
+	memcpy (gl_bmodel_indirect_cmds, cmds, sizeof (cmds[0]) * numtex);
 
 	// create gpu buffers
 	gl_bmodel_indirect_buffer = GL_CreateBuffer (GL_SHADER_STORAGE_BUFFER, GL_DYNAMIC_DRAW, "bmodel indirect cmds",

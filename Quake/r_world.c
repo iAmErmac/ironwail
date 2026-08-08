@@ -57,6 +57,10 @@ R_MarkVisSurfaces
 */
 static void R_MarkVisSurfaces (byte* vis)
 {
+#if defined(ANDROID_GLES3)
+	(void)vis;
+	return;
+#else
 	int			i;
 	GLuint		buf;
 	GLbyte*		ofs;
@@ -101,6 +105,7 @@ static void R_MarkVisSurfaces (byte* vis)
 	GL_MemoryBarrierFunc (GL_COMMAND_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT | GL_ELEMENT_ARRAY_BARRIER_BIT);
 
 	GL_EndGroup ();
+#endif
 }
 
 /*
@@ -233,9 +238,60 @@ static void R_FlushBModelCalls (void)
 	GLuint	cmdbuf, buf;
 	GLbyte	*ofs;
 	size_t	dstcmdofs;
+#if defined(ANDROID_GLES3)
+	static qboolean logged_direct_path;
+#endif
 
 	if (!num_bmodel_calls)
 		return;
+
+#if defined(ANDROID_GLES3)
+	{
+		bmodel_draw_indirect_t *commands;
+		GLuint buf;
+		GLbyte *ofs;
+		int i;
+
+		commands = (bmodel_draw_indirect_t *) malloc (sizeof (*commands) * num_bmodel_calls);
+		if (!commands)
+			Sys_Error ("R_FlushBModelCalls: out of memory for GLES draw commands (%d)", num_bmodel_calls);
+
+		for (i = 0; i < num_bmodel_calls; i++)
+		{
+			bmodel_draw_indirect_t command = gl_bmodel_indirect_cmds[bmodel_call_remap[i].src];
+			command.instanceCount = (bmodel_call_remap[i].inst % MAX_BMODEL_INSTANCES) + 1;
+			command.baseInstance = bmodel_call_remap[i].inst / MAX_BMODEL_INSTANCES;
+			commands[i] = command;
+		}
+
+		GL_UseProgram (bmodel_batch_program);
+		GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, gl_bmodel_ibo);
+		GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_vbo);
+		GL_VertexAttribPointerFunc (0, 3, GL_FLOAT, GL_FALSE, sizeof (glvert_t), (void *) offsetof (glvert_t, pos));
+		GL_VertexAttribPointerFunc (1, 4, GL_FLOAT, GL_FALSE, sizeof (glvert_t), (void *) offsetof (glvert_t, st));
+		GL_VertexAttribPointerFunc (2, 1, GL_FLOAT, GL_FALSE, sizeof (glvert_t), (void *) offsetof (glvert_t, lmofs));
+		GL_VertexAttribIPointerFunc (3, 4, GL_UNSIGNED_BYTE, sizeof (glvert_t), (void *) offsetof (glvert_t, styles));
+		GL_Upload (GL_SHADER_STORAGE_BUFFER, &bmodel_calls.bound.params, sizeof (bmodel_calls.bound.params[0]) * num_bmodel_calls, &buf, &ofs);
+		GL_BindBufferRange (GL_SHADER_STORAGE_BUFFER, 1, buf, (GLintptr)ofs, sizeof (bmodel_calls.bound.params[0]) * num_bmodel_calls);
+		GL_Bind (GL_TEXTURE2, r_fullbright_cheatsafe ? greytexture : lightmap_texture);
+		for (i = 0; i < num_bmodel_calls; i++)
+		{
+			GL_Uniform1iFunc (0, i);
+			GL_BindTextures (0, 2, bmodel_calls.bound.textures[i]);
+			glDrawElements (GL_TRIANGLES, (GLsizei)commands[i].count, GL_UNSIGNED_INT,
+				(const void *)((size_t)commands[i].firstIndex * sizeof (GLuint)));
+		}
+		if (!logged_direct_path)
+		{
+			Con_Printf ("GLES direct bmodel draw: calls=%d first_count=%u first_index=%u\n",
+				num_bmodel_calls, commands[0].count, commands[0].firstIndex);
+			logged_direct_path = true;
+		}
+		free (commands);
+		num_bmodel_calls = 0;
+		return;
+	}
+#endif
 
 	GL_ReserveDeviceMemory (GL_DRAW_INDIRECT_BUFFER, sizeof (bmodel_draw_indirect_t) * num_bmodel_calls, &cmdbuf, &dstcmdofs);
 

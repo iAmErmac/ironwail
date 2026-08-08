@@ -2119,7 +2119,7 @@ void SCR_UpdateScreen (void)
 	//
 	if (vid.recalc_refdef)
 		SCR_CalcRefdef ();
-	r_refdef.scale = CLAMP (1, (int)r_scale.value, vid.maxscale);
+	r_refdef.scale = q_max (1, CLAMP (1, (int)r_scale.value, vid.maxscale));
 
 //
 // do 3D refresh drawing, and then update the screen
