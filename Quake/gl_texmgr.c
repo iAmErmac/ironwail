@@ -30,10 +30,17 @@ typedef struct {
 	int			ratio;
 } glformat_t;
 
+#if defined(ANDROID_GLES3)
+#define IW_GL_SOLID_FORMAT GL_RGBA8
+#define IW_GL_ALPHA_FORMAT GL_RGBA8
+#else
+#define IW_GL_SOLID_FORMAT GL_RGB
+#define IW_GL_ALPHA_FORMAT GL_RGBA
+#endif
 static const struct {
 	glformat_t	solid, alpha;
 } glformats[2] = {
-	{{GL_RGB, 1},							{GL_RGBA, 1}},
+    {{IW_GL_SOLID_FORMAT, 1},                    {IW_GL_ALPHA_FORMAT, 1}},
 	{{GL_COMPRESSED_RGBA_BPTC_UNORM, 4},	{GL_COMPRESSED_RGBA_BPTC_UNORM, 4}},
 };
 
