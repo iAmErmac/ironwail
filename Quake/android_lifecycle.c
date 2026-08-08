@@ -123,6 +123,8 @@ void IW_Android_Frame(uint64_t frame_time_ns)
     double dt;
     if (!iw_initialized || !iw_surface || iw_paused)
         return;
+    if (vid.width <= 0 || vid.height <= 0)
+        return;
     if (!iw_last_frame_ns)
         dt = 1.0 / 60.0;
     else

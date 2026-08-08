@@ -488,6 +488,9 @@ typedef struct bmodel_draw_indirect_s {
 	GLuint		baseInstance;
 } bmodel_draw_indirect_t;
 
+extern bmodel_draw_indirect_t *gl_bmodel_indirect_cmds;
+extern size_t gl_bmodel_indirect_cmd_count;
+
 typedef struct bmodel_gpu_marksurf_s {
 	GLuint		packedleafsky; // bit 0=sky; bits 1..31=leafindex
 	GLuint		surfindex;

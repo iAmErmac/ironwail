@@ -201,12 +201,15 @@ static GLuint GL_CreateFBO (GLenum target, const GLuint *colors, int numcolors, 
 		buffers[i] = GL_COLOR_ATTACHMENT0 + i;
 	}
 	GL_DrawBuffersFunc (numcolors, buffers);
-
-	if (depth)
-		GL_FramebufferTexture2DFunc (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, target, depth, 0);
-	if (stencil)
-		GL_FramebufferTexture2DFunc (GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, target, stencil, 0);
-
+	if (depth && depth == stencil)
+		GL_FramebufferTexture2DFunc (GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, target, depth, 0);
+	else
+	{
+		if (depth)
+			GL_FramebufferTexture2DFunc (GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, target, depth, 0);
+		if (stencil)
+			GL_FramebufferTexture2DFunc (GL_FRAMEBUFFER, GL_STENCIL_ATTACHMENT, target, stencil, 0);
+	}
 	status = GL_CheckFramebufferStatusFunc (GL_FRAMEBUFFER);
 	if (status != GL_FRAMEBUFFER_COMPLETE)
 		Sys_Error ("Failed to create %s (status code 0x%X)", name, status);
@@ -231,9 +234,24 @@ GL_CreateFrameBuffers
 */
 void GL_CreateFrameBuffers (void)
 {
+	#if defined(ANDROID_GLES3)
+	GLenum color_format = GL_RGBA8;
+#else
 	GLenum color_format = GL_RGB10_A2;
+#endif
+	#if defined(ANDROID_GLES3)
+	GLenum depth_format = GL_DEPTH_COMPONENT24;
+#else
 	GLenum depth_format = GL_DEPTH24_STENCIL8;
+#endif
 
+#if defined(ANDROID_GLES3)
+	GLuint depth_attachment = 1;
+	GLuint stencil_attachment = 0;
+#else
+	GLuint depth_attachment = 1;
+	GLuint stencil_attachment = 1;
+#endif
 	/* query MSAA limits */
 	glGetIntegerv (GL_MAX_COLOR_TEXTURE_SAMPLES, &framebufs.max_color_tex_samples);
 	glGetIntegerv (GL_MAX_DEPTH_TEXTURE_SAMPLES, &framebufs.max_depth_tex_samples);
@@ -244,21 +262,25 @@ void GL_CreateFrameBuffers (void)
 	framebufs.composite.depth_stencil_tex = GL_CreateFBOAttachment (depth_format, 1, GL_NEAREST, "composite depth/stencil");
 	framebufs.composite.fbo = GL_CreateSimpleFBO (GL_TEXTURE_2D,
 		framebufs.composite.color_tex,
-		framebufs.composite.depth_stencil_tex,
-		framebufs.composite.depth_stencil_tex,
+		depth_attachment ? framebufs.composite.depth_stencil_tex : 0,
+		stencil_attachment ? framebufs.composite.depth_stencil_tex : 0,
 		"composite fbo"
 	);
 
 	/* scene framebuffer (color + depth + stencil, potentially multisampled) */
+	#if defined(ANDROID_GLES3)
+	framebufs.scene.samples = 1;
+	#else
 	framebufs.scene.samples = Q_nextPow2 ((int) q_max (1.f, vid_fsaa.value));
 	framebufs.scene.samples = CLAMP (1, framebufs.scene.samples, framebufs.max_samples);
+	#endif
 
 	framebufs.scene.color_tex = GL_CreateFBOAttachment (color_format, framebufs.scene.samples, GL_NEAREST, "scene colors");
 	framebufs.scene.depth_stencil_tex = GL_CreateFBOAttachment (depth_format, framebufs.scene.samples, GL_NEAREST, "scene depth/stencil");
 	framebufs.scene.fbo = GL_CreateSimpleFBO (framebufs.scene.samples > 1 ? GL_TEXTURE_2D_MULTISAMPLE : GL_TEXTURE_2D,
 		framebufs.scene.color_tex,
-		framebufs.scene.depth_stencil_tex,
-		framebufs.scene.depth_stencil_tex,
+		depth_attachment ? framebufs.scene.depth_stencil_tex : 0,
+		stencil_attachment ? framebufs.scene.depth_stencil_tex : 0,
 		"scene fbo"
 	);
 
@@ -267,8 +289,8 @@ void GL_CreateFrameBuffers (void)
 	framebufs.oit.revealage_tex = GL_CreateFBOAttachment (GL_R8, framebufs.scene.samples, GL_NEAREST, "oit revealage");
 	framebufs.oit.fbo_scene = GL_CreateFBO (framebufs.scene.samples > 1 ? GL_TEXTURE_2D_MULTISAMPLE : GL_TEXTURE_2D,
 		framebufs.oit.mrt, 2,
-		framebufs.scene.depth_stencil_tex,
-		framebufs.scene.depth_stencil_tex,
+		depth_attachment ? framebufs.scene.depth_stencil_tex : 0,
+		stencil_attachment ? framebufs.scene.depth_stencil_tex : 0,
 		"oit scene fbo"
 	);
 
@@ -285,8 +307,8 @@ void GL_CreateFrameBuffers (void)
 
 		framebufs.oit.fbo_composite = GL_CreateFBO (GL_TEXTURE_2D,
 			framebufs.oit.mrt, 2,
-			framebufs.composite.depth_stencil_tex,
-			framebufs.composite.depth_stencil_tex,
+			depth_attachment ? framebufs.composite.depth_stencil_tex : 0,
+			stencil_attachment ? framebufs.composite.depth_stencil_tex : 0,
 			"oit composite fbo"
 		);
 	}
@@ -901,7 +923,11 @@ GL_NeedsSceneEffects
 */
 qboolean GL_NeedsSceneEffects (void)
 {
+#if defined(ANDROID_GLES3)
+	return false;
+#else
 	return framebufs.scene.samples > 1 || water_warp || r_refdef.scale != 1;
+#endif
 }
 
 /*
@@ -911,7 +937,11 @@ GL_NeedsPostprocess
 */
 qboolean GL_NeedsPostprocess (void)
 {
+#if defined(ANDROID_GLES3)
+	return false;
+#else
 	return vid_gamma.value != 1.f || vid_contrast.value != 1.f || softemu || R_GetEffectiveAlphaMode () == ALPHAMODE_OIT;
+#endif
 }
 
 /*
@@ -2048,7 +2078,10 @@ void R_RenderView (void)
 
 	if (!cl.worldmodel)
 		Sys_Error ("R_RenderView: NULL worldmodel");
-
+#if defined(ANDROID_GLES3)
+	if (r_refdef.vrect.width <= 0 || r_refdef.vrect.height <= 0)
+		return;
+#endif
 	time1 = 0; /* avoid compiler warning */
 	if (r_speeds.value)
 	{
@@ -2063,6 +2096,7 @@ void R_RenderView (void)
 		glFinish ();
 
 	R_SetupView (); //johnfitz -- this does everything that should be done once per frame
+	R_UploadFrameData ();
 	R_RenderScene ();
 	R_WarpScaleView ();
 
