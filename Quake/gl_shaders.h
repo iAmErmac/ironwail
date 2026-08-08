@@ -424,7 +424,7 @@ DRAW_ELEMENTS_INDIRECT_COMMAND \
 "layout(location=0) in vec3 in_pos;\n"\
 "layout(location=1) in vec4 in_uv;\n"\
 "layout(location=2) in float in_lmofs;\n"\
-"layout(location=3) in ivec4 in_styles;\n"\
+"layout(location=3) in uint in_styles_packed;\n"\
 "\n"\
 
 ////////////////////////////////////////////////////////////////
@@ -513,6 +513,7 @@ WORLD_VERTEX_BUFFER
 "\n"
 "void main()\n"
 "{\n"
+"\tivec4 in_styles = ivec4(int(in_styles_packed & 255u), int((in_styles_packed >> 8u) & 255u), int((in_styles_packed >> 16u) & 255u), int(in_styles_packed >> 24u));\n"\
 "	Call call = call_data[DRAW_ID];\n"
 "	int instance_id = GET_INSTANCE_ID(call);\n"
 "	Instance instance = instance_data[instance_id];\n"

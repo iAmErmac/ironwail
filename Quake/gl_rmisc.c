@@ -920,6 +920,7 @@ void GL_AcquireFrameResources (void)
 	frameres_t *prev_frame = &frameres[(frameres_idx + FRAMES_IN_FLIGHT - 1) % FRAMES_IN_FLIGHT];
 	frameres_t *frame = &frameres[frameres_idx];
 	size_t i, num_garbage_bufs;
+	dev_stats.gpu_stalls = 0;
 
 	if (prev_frame->fence)
 		GL_WaitSyncFunc (prev_frame->fence, 0, GL_TIMEOUT_IGNORED);
@@ -929,7 +930,10 @@ void GL_AcquireFrameResources (void)
 		GLuint64 timeout = 1ull * 1000 * 1000 * 1000; // 1 second
 		GLenum result = GL_ClientWaitSyncFunc (frame->fence, GL_SYNC_FLUSH_COMMANDS_BIT, timeout);
 		if (result == GL_TIMEOUT_EXPIRED)
+		{
 			glFinish ();
+			dev_stats.gpu_stalls++;
+		}
 		else if (result == GL_WAIT_FAILED)
 			Sys_Error ("GL_AcquireFrameResources: wait failed (0x%04X)", glGetError ());
 		else if (result != GL_CONDITION_SATISFIED && result != GL_ALREADY_SIGNALED)
@@ -942,6 +946,16 @@ void GL_AcquireFrameResources (void)
 	for (i = 0; i < num_garbage_bufs; i++)
 		GL_DeleteBuffer (frame->garbage[i]);
 	VEC_CLEAR (frame->garbage);
+
+#if defined(ANDROID_GLES3)
+	if (!frame->host_ptr)
+	{
+		GL_BindBuffer (GL_ARRAY_BUFFER, frame->host_buffer);
+		GL_BufferDataFunc (GL_ARRAY_BUFFER, frameres_host_buffer_size, NULL, GL_STREAM_DRAW);
+	}
+	GL_BindBuffer (GL_SHADER_STORAGE_BUFFER, frame->device_buffer);
+	GL_BufferDataFunc (GL_SHADER_STORAGE_BUFFER, frameres_device_buffer_size, NULL, GL_STREAM_DRAW);
+#endif
 }
 
 /*
@@ -961,6 +975,14 @@ void GL_ReleaseFrameResources (void)
 
 	dev_stats.gpu_upload = frameres_host_offset;
 	dev_peakstats.gpu_upload = q_max (dev_peakstats.gpu_upload, dev_stats.gpu_upload);
+	dev_peakstats.gpu_stalls = q_max (dev_peakstats.gpu_stalls, dev_stats.gpu_stalls);
+#if defined(ANDROID_GLES3)
+	{
+		static int validation_frames;
+		if (++validation_frames == 120)
+			Con_Printf ("GLES streaming validation: frames=%d stalls=%d peak=%d\n", validation_frames, dev_stats.gpu_stalls, dev_peakstats.gpu_stalls);
+	}
+#endif
 
 	if (++frameres_idx == countof (frameres))
 		frameres_idx = 0;
