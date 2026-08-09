@@ -103,6 +103,7 @@ typedef enum
 	SOFTEMU_NUMMODES,
 } softemu_t;
 extern softemu_t softemu;
+extern cvar_t r_gles_ssbo;
 
 typedef enum
 {

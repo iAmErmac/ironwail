@@ -817,7 +817,11 @@ static void GL_AllocFrameResources (frameres_bits_t bits)
 			}
 
 			GL_GenBuffersFunc (1, &frame->host_buffer);
+#if defined(ANDROID_GLES3)
+			GL_BindBuffer (GL_SHADER_STORAGE_BUFFER, frame->host_buffer);
+#else
 			GL_BindBuffer (GL_ARRAY_BUFFER, frame->host_buffer);
+#endif
 			q_snprintf (name, sizeof (name), "dynamic host buffer %d", i);
 			if (GL_ObjectLabelFunc)
 				GL_ObjectLabelFunc (GL_BUFFER, frame->host_buffer, -1, name);
@@ -830,7 +834,11 @@ static void GL_AllocFrameResources (frameres_bits_t bits)
 			}
 			else
 			{
+#if defined(ANDROID_GLES3)
+				GL_BufferDataFunc (GL_SHADER_STORAGE_BUFFER, frameres_host_buffer_size, NULL, GL_STREAM_DRAW);
+#else
 				GL_BufferDataFunc (GL_ARRAY_BUFFER, frameres_host_buffer_size, NULL, GL_STREAM_DRAW);
+#endif
 			}
 		}
 
@@ -950,8 +958,8 @@ void GL_AcquireFrameResources (void)
 #if defined(ANDROID_GLES3)
 	if (!frame->host_ptr)
 	{
-		GL_BindBuffer (GL_ARRAY_BUFFER, frame->host_buffer);
-		GL_BufferDataFunc (GL_ARRAY_BUFFER, frameres_host_buffer_size, NULL, GL_STREAM_DRAW);
+		GL_BindBuffer (GL_SHADER_STORAGE_BUFFER, frame->host_buffer);
+		GL_BufferDataFunc (GL_SHADER_STORAGE_BUFFER, frameres_host_buffer_size, NULL, GL_STREAM_DRAW);
 	}
 	GL_BindBuffer (GL_SHADER_STORAGE_BUFFER, frame->device_buffer);
 	GL_BufferDataFunc (GL_SHADER_STORAGE_BUFFER, frameres_device_buffer_size, NULL, GL_STREAM_DRAW);

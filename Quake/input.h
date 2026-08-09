@@ -85,6 +85,14 @@ void IN_Move (usercmd_t *cmd);
 // add additional movement on top of the keyboard move cmd
 
 void IN_ClearStates (void);
+void IN_AttackDown(void);
+void IN_AttackUp(void);
+void IN_UseDown(void);
+void IN_UseUp(void);
+void IN_JumpDown(void);
+void IN_JumpUp(void);
+void IN_DownDown(void);
+void IN_DownUp(void);
 // restores all button and position states to defaults
 
 // called when the app becomes active
