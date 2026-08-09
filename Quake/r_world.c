@@ -248,9 +248,12 @@ static void R_FlushBModelCalls (void)
 	GLbyte	*ofs;
 	size_t	dstcmdofs;
 #if defined(ANDROID_GLES3)
-	static qboolean logged_direct_path;
-	static qboolean logged_cpu_visibility;
 	static bmodel_draw_indirect_t commands[MAX_BMODEL_DRAWS];
+	static const GLfloat identity_matrix[12] = {
+		1.f, 0.f, 0.f, 0.f,
+		0.f, 1.f, 0.f, 0.f,
+		0.f, 0.f, 1.f, 0.f
+	};
 #endif
 
 	if (!num_bmodel_calls)
@@ -260,8 +263,8 @@ static void R_FlushBModelCalls (void)
 	{
 		GLuint buf;
 		GLbyte *ofs;
-		int i;
-		int visible_world_surfaces = 0;
+		int i, oit, dither, mode;
+		qboolean gles_world_program = false;
 
 		for (i = 0; i < num_bmodel_calls; i++)
 		{
@@ -272,6 +275,17 @@ static void R_FlushBModelCalls (void)
 		}
 
 		GL_UseProgram (bmodel_batch_program);
+		for (oit = 0; oit < countof (glprogs.world); oit++)
+			for (dither = 0; dither < countof (glprogs.world[oit]); dither++)
+				for (mode = 0; mode < countof (glprogs.world[oit][dither]); mode++)
+					if (bmodel_batch_program == glprogs.world[oit][dither][mode])
+						gles_world_program = true;
+		if (gles_world_program)
+		{
+			GL_Uniform1iFunc (3, r_framedata.numlights);
+			if (r_framedata.numlights > 0)
+				GL_Uniform4fvFunc (4, r_framedata.numlights * 2, (const GLfloat *)r_lightbuffer.lights);
+		}
 		GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, gl_bmodel_ibo);
 		GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_vbo);
 		GL_VertexAttribPointerFunc (0, 3, GL_FLOAT, GL_FALSE, sizeof (glvert_t), (void *) offsetof (glvert_t, pos));
@@ -281,15 +295,17 @@ static void R_FlushBModelCalls (void)
 		GL_Upload (GL_SHADER_STORAGE_BUFFER, &bmodel_calls.bound.params, sizeof (bmodel_calls.bound.params[0]) * num_bmodel_calls, &buf, &ofs);
 		GL_BindBufferRange (GL_SHADER_STORAGE_BUFFER, 1, buf, (GLintptr)ofs, sizeof (bmodel_calls.bound.params[0]) * num_bmodel_calls);
 		GL_Bind (GL_TEXTURE2, r_fullbright_cheatsafe ? greytexture : lightmap_texture);
+		while (glGetError () != GL_NO_ERROR)
+			;
 		for (i = 0; i < num_bmodel_calls; i++)
 		{
 			int src = bmodel_call_remap[i].src;
 			qboolean worldcmd = cl.worldmodel && src >= cl.worldmodel->firstcmd && src < cl.worldmodel->firstcmd + cl.worldmodel->texofs[TEXTYPE_COUNT];
-			GL_Uniform1iFunc (0, i);
 			GL_BindTextures (0, 2, bmodel_calls.bound.textures[i]);
 			if (worldcmd)
 			{
 				int surfindex;
+				GL_Uniform4fvFunc (0, 3, identity_matrix);
 				for (surfindex = 0; surfindex < cl.worldmodel->numsurfaces; surfindex++)
 				{
 					msurface_t *surf = &cl.worldmodel->surfaces[surfindex];
@@ -297,23 +313,18 @@ static void R_FlushBModelCalls (void)
 						continue;
 					glDrawElements (GL_TRIANGLES, (GLsizei)((q_max (surf->numedges, 2) - 2) * 3), GL_UNSIGNED_INT,
 						(const void *)((size_t)surf->vbo_firstindex * sizeof (GLuint)));
-					visible_world_surfaces++;
-				}
+					}
 			}
 			else
-				glDrawElements (GL_TRIANGLES, (GLsizei)commands[i].count, GL_UNSIGNED_INT,
-					(const void *)((size_t)commands[i].firstIndex * sizeof (GLuint)));
-		}
-		if (!logged_cpu_visibility)
-		{
-			Con_Printf ("GLES CPU PVS direct: visible_world_surfaces=%d\n", visible_world_surfaces);
-			logged_cpu_visibility = true;
-		}
-		if (!logged_direct_path)
-		{
-			Con_Printf ("GLES direct bmodel draw: calls=%d first_count=%u first_index=%u\n",
-				num_bmodel_calls, commands[0].count, commands[0].firstIndex);
-			logged_direct_path = true;
+			{
+				int instance_index;
+				for (instance_index = 0; instance_index < (int)commands[i].instanceCount; instance_index++)
+				{
+					GL_Uniform4fvFunc (0, 3, identity_matrix);
+					glDrawElements (GL_TRIANGLES, (GLsizei)commands[i].count, GL_UNSIGNED_INT,
+						(const void *)((size_t)commands[i].firstIndex * sizeof (GLuint)));
+				}
+			}
 		}
 		num_bmodel_calls = 0;
 		return;
@@ -348,7 +359,6 @@ static void R_FlushBModelCalls (void)
 	else
 	{
 		int i;
-		int visible_world_surfaces = 0;
 
 		GL_Upload (GL_SHADER_STORAGE_BUFFER, &bmodel_calls.bound.params, sizeof (bmodel_calls.bound.params[0]) * num_bmodel_calls, &buf, &ofs);
 		GL_BindBufferRange (GL_SHADER_STORAGE_BUFFER, 1, buf, (GLintptr)ofs, sizeof (bmodel_calls.bound.params[0]) * num_bmodel_calls);
@@ -541,6 +551,7 @@ static void R_DrawBrushModels_Real (entity_t **ents, int count, brushpass_t pass
 		state |= GLS_BLEND_OPAQUE;
 	else
 		state |= GLS_BLEND_ALPHA_OIT | GLS_NO_ZWRITE;
+
 	
 	R_ResetBModelCalls (program);
 	GL_SetState (state);

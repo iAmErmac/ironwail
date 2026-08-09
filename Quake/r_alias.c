@@ -300,6 +300,9 @@ void R_FlushAliasInstances (qboolean showtris)
 	int			totalverts;
 	int			poseverttype;
 	int			skinnum, anim, mode;
+#if defined(ANDROID_GLES3)
+	int			instance_index;
+#endif
 	unsigned	state, opaque_state, transparent_state;
 	GLuint		buf;
 	GLbyte* ofs;
@@ -310,7 +313,7 @@ void R_FlushAliasInstances (qboolean showtris)
 	gltexture_t* textures[2];
 
 	if (!ibuf.count)
-		return;
+    return;
 
 	model = ibuf.ent->model;
 	mainhdr = (aliashdr_t*)Mod_Extradata (model);
@@ -336,10 +339,14 @@ void R_FlushAliasInstances (qboolean showtris)
 	}
 	GL_UseProgram (glprogs.alias[oit][mode][alphatest][poseverttype]);
 
-	if (poseverttype == PV_IQM)
-		state = GLS_CULL_BACK | GLS_ATTRIBS (5);
-	else
-		state = GLS_CULL_BACK | GLS_ATTRIBS (1);
+	#if defined(ANDROID_GLES3)
+    state = GLS_ATTRIBS (poseverttype == PV_IQM ? 5 : 1);
+#else
+    if (poseverttype == PV_IQM)
+        state = GLS_CULL_BACK | GLS_ATTRIBS (5);
+    else
+        state = GLS_CULL_BACK | GLS_ATTRIBS (1);
+#endif
 
 	opaque_state = (state | GLS_BLEND_OPAQUE) & ~(GLS_BLEND_ALPHA_OIT | GLS_NO_ZWRITE);
 	transparent_state = (state | GLS_BLEND_ALPHA) & ~(GLS_BLEND_OPAQUE | GLS_CULL_BACK);
@@ -359,15 +366,19 @@ void R_FlushAliasInstances (qboolean showtris)
 		;
 	ibuf.global.dither = r_framedata.screendither;
 
+#if !defined(ANDROID_GLES3)
 	ibuf_size = sizeof (ibuf.global) + sizeof (ibuf.inst[0]) * ibuf.count;
 	GL_Upload (GL_SHADER_STORAGE_BUFFER, &ibuf.global, ibuf_size, &buf, &ofs);
+#endif
 
 	for (hdr = mainhdr, totalverts = 0; hdr; hdr = Mod_NextSurface (hdr))
 		totalverts += hdr->numverts_vbo;
 
+#if !defined(ANDROID_GLES3)
 	buffers[0] = buf;
 	offsets[0] = (GLintptr)ofs;
 	sizes[0] = ibuf_size;
+#endif
 	switch (poseverttype)
 	{
 	case PV_IQM:
@@ -385,7 +396,11 @@ void R_FlushAliasInstances (qboolean showtris)
 
 	GL_BindBuffer (GL_ARRAY_BUFFER, model->meshvbo);
 	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, model->meshindexesvbo);
+#if defined(ANDROID_GLES3)
+	GL_BindBufferRange (GL_SHADER_STORAGE_BUFFER, 2, buffers[1], offsets[1], sizes[1]);
+#else
 	GL_BindBuffersRange (GL_SHADER_STORAGE_BUFFER, 1, 2, buffers, offsets, sizes);
+#endif
 
 	if (poseverttype == PV_IQM)
 	{
@@ -423,7 +438,20 @@ void R_FlushAliasInstances (qboolean showtris)
 		if (showtris) { textures[0] = blacktexture; textures[1] = whitetexture; }
 
 		GL_BindTextures (0, 2, textures);
+#if defined(ANDROID_GLES3)
+		for (instance_index = 0; instance_index < ibuf.count; instance_index++)
+		{
+			aliasinstance_t *instance = &ibuf.inst[instance_index];
+			GL_Uniform4fvFunc (4, 3, instance->worldmatrix);
+			GL_Uniform4fvFunc (7, 1, instance->lightcolor);
+			GL_Uniform1iFunc (8, instance->pose1);
+			GL_Uniform1iFunc (9, instance->pose2);
+			GL_Uniform1fFunc (10, instance->blend);
+			glDrawElements (GL_TRIANGLES, hdr->numindexes, GL_UNSIGNED_SHORT, (void*)hdr->eboofs);
+		}
+#else
 		GL_DrawElementsInstancedFunc (GL_TRIANGLES, hdr->numindexes, GL_UNSIGNED_SHORT, (void*)hdr->eboofs, ibuf.count);
+#endif
 		rs_aliaspasses += hdr->numtris * ibuf.count;
 	}
 
@@ -452,7 +480,20 @@ void R_FlushAliasInstances (qboolean showtris)
 			if (showtris) { textures[0] = blacktexture; textures[1] = whitetexture; }
 
 			GL_BindTextures (0, 2, textures);
+#if defined(ANDROID_GLES3)
+			for (instance_index = 0; instance_index < ibuf.count; instance_index++)
+			{
+				aliasinstance_t *instance = &ibuf.inst[instance_index];
+				GL_Uniform4fvFunc (4, 3, instance->worldmatrix);
+				GL_Uniform4fvFunc (7, 1, instance->lightcolor);
+				GL_Uniform1iFunc (8, instance->pose1);
+				GL_Uniform1iFunc (9, instance->pose2);
+				GL_Uniform1fFunc (10, instance->blend);
+				glDrawElements (GL_TRIANGLES, hdr->numindexes, GL_UNSIGNED_SHORT, (void*)hdr->eboofs);
+			}
+#else
 			GL_DrawElementsInstancedFunc (GL_TRIANGLES, hdr->numindexes, GL_UNSIGNED_SHORT, (void*)hdr->eboofs, ibuf.count);
+#endif
 			rs_aliaspasses += hdr->numtris * ibuf.count;
 		}
 
@@ -609,7 +650,8 @@ R_DrawAliasModels
 */
 void R_DrawAliasModels (entity_t **ents, int count)
 {
-	int i;
+
+    int i;
 	for (i = 0; i < count; i++)
 		R_DrawAliasModel_Real (ents[i], false);
 	R_FlushAliasInstances (false);

@@ -1086,8 +1086,7 @@ static void GL_CheckExtensions (void)
 #endif
 	{
 #if defined(ANDROID_GLES3)
-		if (GL_FindExtension("GL_KHR_debug"))
-			GL_InitFunctions (gl_gles_debug_functions, false);
+        if (0) GL_InitFunctions (gl_gles_debug_functions, false);
 #endif
 		if (GL_DebugMessageCallbackFunc && GL_PushDebugGroupFunc && GL_PopDebugGroupFunc)
 		{

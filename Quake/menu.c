@@ -1398,9 +1398,11 @@ void M_SinglePlayer_Key (int key)
 		switch (m_singleplayer_cursor)
 		{
 		case 0:
+#if !defined(ANDROID_GLES3)
 			if (sv.active)
 				if (!SCR_ModalMessage("Are you sure you want to\nstart a new game? (y/n)\n", 0.0f))
 					break;
+#endif
 			if (quake64)
 			{
 				M_SetSkillMenuMap ("start");
@@ -5601,6 +5603,10 @@ void M_Quit_Key (int key)
 		}
 		break;
 
+#if defined(ANDROID_GLES3)
+	case K_ENTER:
+	case K_MOUSE1:
+#endif
 	case K_ABUTTON:
 		IN_DeactivateForConsole();
 		key_dest = key_console;

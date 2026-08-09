@@ -934,7 +934,7 @@ GL_NeedsPostprocess
 */
 qboolean GL_NeedsPostprocess (void)
 {
-	return vid_gamma.value != 1.f || vid_contrast.value != 1.f || softemu || R_GetEffectiveAlphaMode () == ALPHAMODE_OIT;
+    return vid_gamma.value != 1.f || vid_contrast.value != 1.f || softemu || R_GetEffectiveAlphaMode () == ALPHAMODE_OIT;
 }
 
 /*
@@ -944,6 +944,8 @@ R_SetupGL
 */
 void R_SetupGL (void)
 {
+
+
 	if (!GL_NeedsSceneEffects ())
 	{
 		GL_BindFramebufferFunc (GL_FRAMEBUFFER, GL_NeedsPostprocess () ? framebufs.composite.fbo : 0u);
@@ -1003,6 +1005,10 @@ void R_UploadFrameData (void)
 
 	GL_Upload (GL_UNIFORM_BUFFER, &r_framedata, sizeof (r_framedata), &buf, &ofs);
 	GL_BindBufferRange (GL_UNIFORM_BUFFER, 0, buf, (GLintptr)ofs, sizeof (r_framedata));
+#if defined(ANDROID_GLES3)
+	GL_Upload (GL_UNIFORM_BUFFER, &r_lightbuffer, sizeof (r_lightbuffer.lightstyles) + sizeof (r_lightbuffer.lights[0]) * r_framedata.numlights, &buf, &ofs);
+	GL_BindBufferRange (GL_UNIFORM_BUFFER, 1, buf, (GLintptr)ofs, sizeof (r_lightbuffer.lightstyles) + sizeof (r_lightbuffer.lights[0]) * r_framedata.numlights);
+#endif
 }
 
 /*

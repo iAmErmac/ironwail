@@ -135,7 +135,7 @@ static const char warpscale_fragment_shader[] =
 "#endif // WARP\n"
 "\n"
 "	out_fragcolor = texture(Tex, uv * uv_scale);\n"
-"	out_fragcolor.rgb = mix(out_fragcolor.rgb, BlendColor.rgb, BlendColor.a);\n"
+"	out_fragcolor.rgb = out_fragcolor.rgb + (BlendColor.rgb - out_fragcolor.rgb) * BlendColor.a;\n"
 "}\n";
 
 ////////////////////////////////////////////////////////////////
@@ -226,6 +226,9 @@ SOFTWARE.*/\
 "#define SCREEN_SPACE_NOISE() DITHER_NOISE(floor(gl_FragCoord.xy)+0.5)\n"\
 "#define SUPPRESS_BANDING() bayer(ivec2(gl_FragCoord.xy))\n"\
 
+
+
+
 ////////////////////////////////////////////////////////////////
 
 static const char postprocess_vertex_shader[] =
@@ -258,7 +261,7 @@ NOISE_FUNCTIONS
 "#if PALETTIZE == 1\n"
 "	vec2 noiseuv = floor(gl_FragCoord.xy * scale) + 0.5;\n"
 "	out_fragcolor.rgb = sqrt(out_fragcolor.rgb);\n"
-"	out_fragcolor.rgb += DITHER_NOISE(noiseuv) * dither;\n"
+"	out_fragcolor.rgb += tri(bayer01(ivec2(noiseuv))) * dither;\n"
 "	out_fragcolor.rgb *= out_fragcolor.rgb;\n"
 "#endif // PALETTIZE == 1\n"
 "#if PALETTIZE\n"
@@ -298,7 +301,7 @@ NOISE_FUNCTIONS
 "{\n"\
 "	float fog = exp2(-Fog.w * dot(p, p));\n"\
 "	fog = clamp(fog, 0.0, 1.0);\n"\
-"	return mix(Fog.rgb, clr, fog);\n"\
+"	return Fog.rgb + (clr - Fog.rgb) * fog;\n"\
 "}\n"\
 "\n"\
 
@@ -413,8 +416,12 @@ DRAW_ELEMENTS_INDIRECT_COMMAND \
 "\n"\
 "vec3 Transform(vec3 p, Instance instance)\n"\
 "{\n"\
+"#if IW_GL_BACKEND_GLES\n"\
+"	return vec3(dot(instance.mat[0].xyz, p) + instance.mat[0].w, dot(instance.mat[1].xyz, p) + instance.mat[1].w, dot(instance.mat[2].xyz, p) + instance.mat[2].w);\n"\
+"#else\n"\
 "	mat4x3 world = transpose(mat3x4(instance.mat[0], instance.mat[1], instance.mat[2]));\n"\
 "	return mat3(world[0], world[1], world[2]) * p + world[3];\n"\
+"#endif\n"\
 "}\n"\
 "\n"\
 
@@ -517,8 +524,8 @@ WORLD_VERTEX_BUFFER
 "	Call call = call_data[DRAW_ID];\n"
 "	int instance_id = GET_INSTANCE_ID(call);\n"
 "	Instance instance = instance_data[instance_id];\n"
-"	out_pos = Transform(in_pos, instance);\n"
-"	gl_Position = ViewProj * vec4(out_pos, 1.0);\n"
+"\tout_pos = Transform(in_pos, instance);\n"
+"\tgl_Position = ViewProj * vec4(out_pos, 1.0);\n"
 "#if REVERSED_Z\n"
 "	const float ZBIAS = -1./1024.0;\n"
 "#else\n"
@@ -581,6 +588,7 @@ NOISE_FUNCTIONS
 "layout(location=0) flat in uint in_flags;\n"
 "layout(location=1) flat in float in_alpha;\n"
 "layout(location=2) in vec3 in_pos;\n"
+
 "#if MODE == " QS_STRINGIFY (WORLDSHADER_ALPHATEST) "\n"
 "	layout(location=3) centroid in vec2 in_uv;\n"
 "#else\n"
@@ -623,7 +631,7 @@ OIT_OUTPUT (out_fragcolor)
 "#if DITHER >= 2\n"
 "	vec4 result = texture(Tex, uv, -1.0);\n"
 "#elif DITHER\n"
-"	vec4 result = texture(Tex, uv, -0.5);\n"
+"\tvec4 result = texture(Tex, uv, -0.5);\n"
 "#else\n"
 "	vec4 result = texture(Tex, uv);\n"
 "#endif\n"
@@ -639,7 +647,7 @@ OIT_OUTPUT (out_fragcolor)
 "\n"
 "	vec2 lmuv = in_lmuv;\n"
 "#if DITHER\n"
-"	vec2 lmsize = vec2(textureSize(LMTex, 0).xy) * 16.;\n"
+"	vec2 lmsize = vec2(textureSize(LMTex, 0)) * 16.;\n"
 "	lmuv = (floor(lmuv * lmsize) + 0.5) / lmsize;\n"
 "#endif // DITHER\n"
 "	vec4 lm0 = textureLod(LMTex, lmuv, 0.);\n"
@@ -720,7 +728,7 @@ OIT_OUTPUT (out_fragcolor)
 "	total_light *= 2.0;\n"
 "#endif\n"
 "#if MODE != " QS_STRINGIFY (WORLDSHADER_ALPHATEST) "\n"
-"	result.rgb = mix(result.rgb, result.rgb * total_light, result.a);\n"
+"	result.rgb = result.rgb + (result.rgb * total_light - result.rgb) * result.a;\n"
 "#else\n"
 "	result.rgb *= total_light;\n"
 "#endif\n"
@@ -737,18 +745,112 @@ OIT_OUTPUT (out_fragcolor)
 "	out_fragcolor.rgb = sqrt(out_fragcolor.rgb);\n"
 "	float luma = dot(out_fragcolor.rgb, vec3(.25, .625, .125));\n"
 "	float nearnoise = tri(whitenoise01(lmuv * lmsize)) * luma * TextureDither;\n"
-"	float farnoise = Fog.w > 0. ? SCREEN_SPACE_NOISE() * ScreenDither : 0.;\n"
-"	out_fragcolor.rgb += mix(nearnoise, farnoise, farblend);\n"
+"	float farnoise = Fog.w > 0. ? tri(bayer01(ivec2(floor(gl_FragCoord.xy)+0.5))) * ScreenDither : 0.;\n"
+"	out_fragcolor.rgb += nearnoise + (farnoise - nearnoise) * farblend;\n"
 "	out_fragcolor.rgb *= out_fragcolor.rgb;\n"
 "#endif // DITHER == 1\n"
 "#if DITHER >= 2\n"
 "	// nuke extra precision in 10-bit framebuffer\n"
 "	out_fragcolor.rgb = floor(out_fragcolor.rgb * 255. + 0.5) * (1./255.);\n"
 "#elif DITHER == 0\n"
-"	out_fragcolor.rgb += SUPPRESS_BANDING() * ScreenDither;\n"
+"	out_fragcolor.rgb += bayer(ivec2(gl_FragCoord.xy)) * ScreenDither;\n"
 "#endif\n"
 "}\n";
 
+#define GLES_LIGHTSTYLE_BUFFER \
+"layout(std140, binding=1) uniform GLESLightStyleUBO\n"\
+"{\n"\
+"\tvec4 GLESLightStyles[64];\n"\
+"\tvec4 GLESDynamicLights[64];\n"\
+"};\n"\
+"float GetGLESLightStyle(int index)\n"\
+"{\n"\
+"\treturn index < 256 ? GLESLightStyles[index >> 2][index & 3] : 1.0;\n"\
+"}\n"\
+"\n"
+
+static const char world_vertex_shader_gles[] =
+FRAMEDATA_BUFFER
+GLES_LIGHTSTYLE_BUFFER
+WORLD_VERTEX_BUFFER
+"layout(location=0) uniform vec4 WorldMatrix[3];\n"
+"layout(location=1) flat out float in_alpha;\n"
+"layout(location=2) out vec3 out_pos;\n"
+"layout(location=3) out vec2 out_uv;\n"
+"layout(location=4) out vec2 out_lmuv;\n"
+"layout(location=7) flat out vec4 out_styles;\n"
+"layout(location=8) flat out float out_lmofs;\n"
+"void main()\n"
+"{\n"
+"\tivec4 styles = ivec4(int(in_styles_packed & 255u), int((in_styles_packed >> 8u) & 255u), int((in_styles_packed >> 16u) & 255u), int((in_styles_packed >> 24u) & 255u));\n"
+"\tvec3 world_pos = vec3(dot(WorldMatrix[0].xyz, in_pos) + WorldMatrix[0].w, dot(WorldMatrix[1].xyz, in_pos) + WorldMatrix[1].w, dot(WorldMatrix[2].xyz, in_pos) + WorldMatrix[2].w);\n"
+"\tgl_Position = ViewProj * vec4(world_pos, 1.0);\n"
+"\tin_alpha = 1.0;\n"
+"\tout_pos = world_pos;\n"
+"\tout_uv = in_uv.xy;\n"
+"\tout_lmuv = in_uv.zw;\n"
+"\tout_styles.x = GetGLESLightStyle(styles.x);\n"
+"\tif (styles.y == 255) out_styles.yzw = vec3(-1.0);\n"
+"\telse if (styles.z == 255) out_styles.yzw = vec3(GetGLESLightStyle(styles.y), -1.0, -1.0);\n"
+"\telse out_styles.yzw = vec3(GetGLESLightStyle(styles.y), GetGLESLightStyle(styles.z), GetGLESLightStyle(styles.w));\n"
+"\tout_lmofs = in_lmofs;\n"
+"}\n";
+
+static const char world_fragment_shader_gles[] =
+FRAMEDATA_BUFFER
+GLES_LIGHTSTYLE_BUFFER
+"layout(binding=0) uniform sampler2D Tex;\n"
+"layout(binding=2) uniform sampler2D LMTex;\n"
+"layout(location=1) flat in float in_alpha;\n"
+"layout(location=2) in vec3 in_pos;\n"
+"layout(location=3) in vec2 in_uv;\n"
+"layout(location=4) in vec2 in_lmuv;\n"
+"layout(location=7) flat in vec4 in_styles;\n"
+"layout(location=8) flat in float in_lmofs;\n"
+"layout(location=0) out vec4 out_fragcolor;\n"
+"layout(location=3) uniform int GLESDynamicLightCount;\n"
+"layout(location=4) uniform vec4 GLESDynamicLightsDirect[128];\n"
+"void main()\n"
+"{\n"
+"\tvec4 result = texture(Tex, in_uv);\n"
+"\tvec4 lm0 = texture(LMTex, in_lmuv);\n"
+"\tvec3 light;\n"
+"\tif (in_styles.y < 0.0) light = in_styles.x * lm0.rgb;\n"
+"\telse\n"
+"\t{\n"
+"\t\tvec4 lm1 = texture(LMTex, vec2(in_lmuv.x + in_lmofs, in_lmuv.y));\n"
+"\t\tif (in_styles.z < 0.0) light = in_styles.x * lm0.rgb + in_styles.y * lm1.rgb;\n"
+"\t\telse\n"
+"\t\t{\n"
+"\t\t\tvec4 lm2 = texture(LMTex, vec2(in_lmuv.x + in_lmofs * 2.0, in_lmuv.y));\n"
+"\t\t\tlight = vec3(dot(in_styles, lm0), dot(in_styles, lm1), dot(in_styles, lm2));\n"
+"\t\t}\n"
+"\t}\n"
+"\tif (GLESDynamicLightCount > 0)\n"
+"\t{\n"
+"\t\tvec4 plane;\n"
+"\t\tplane.xyz = normalize(cross(dFdx(in_pos), dFdy(in_pos)));\n"
+"\t\tplane.w = dot(in_pos, plane.xyz);\n"
+"\t\tvec3 dynamic_light = vec3(0.0);\n"
+"\t\tfor (int i = 0; i < GLESDynamicLightCount; i++)\n"
+"\t\t{\n"
+"\t\t\tvec4 posradius = GLESDynamicLightsDirect[i * 2];\n"
+"\t\t\tvec4 colormin = GLESDynamicLightsDirect[i * 2 + 1];\n"
+"\t\t\tfloat radius = posradius.w;\n"
+"\t\t\tfloat dist = dot(posradius.xyz, plane.xyz) - plane.w;\n"
+"\t\t\tradius -= abs(dist);\n"
+"\t\t\tif (radius < colormin.w) continue;\n"
+"\t\t\tvec3 local_pos = posradius.xyz - plane.xyz * dist;\n"
+"\t\t\tfloat minlight = radius - colormin.w;\n"
+"\t\t\tdist = length(in_pos - local_pos);\n"
+"\t\t\tdynamic_light += clamp((minlight - dist) / 16.0, 0.0, 1.0) * max(0.0, radius - dist) / 256.0 * colormin.rgb;\n"
+"\t\t}\n"
+"\t\tlight += max(min(dynamic_light, 1.0 - light), 0.0);\n"
+"\t}\n"
+"\tresult.rgb *= light * 2.0;\n"
+"\tresult.a = in_alpha;\n"
+"\tout_fragcolor = clamp(result, 0.0, 1.0);\n"
+"}\n";
 ////////////////////////////////////////////////////////////////
 //
 // Water
@@ -786,7 +888,35 @@ WORLD_VERTEX_BUFFER
 
 ////////////////////////////////////////////////////////////////
 
-static const char water_fragment_shader[] =
+static const char water_vertex_shader_gles[] =
+FRAMEDATA_BUFFER
+WORLD_VERTEX_BUFFER
+"layout(location=0) flat out float out_alpha;\n"
+"layout(location=1) out vec2 out_uv;\n"
+"layout(location=2) out vec3 out_pos;\n"
+"void main()\n"
+"{\n"
+"\tgl_Position = ViewProj * vec4(in_pos, 1.0);\n"
+"\tout_uv = in_uv.xy;\n"
+"\tout_pos = in_pos - EyePos;\n"
+"\tout_alpha = 0.75;\n"
+"}\n";
+
+static const char water_fragment_shader_gles[] =
+FRAMEDATA_BUFFER
+"layout(binding=0) uniform sampler2D Tex;\n"
+"layout(location=0) flat in float in_alpha;\n"
+"layout(location=1) in vec2 in_uv;\n"
+"layout(location=2) in vec3 in_pos;\n"
+"layout(location=0) out vec4 out_fragcolor;\n"
+"void main()\n"
+"{\n"
+"\tvec2 uv = in_uv * 2.0 + 0.125 * sin(in_uv.yx * (3.14159265 * 2.0) + Time);\n"
+"\tvec4 result = texture(Tex, uv);\n"
+"\tresult.rgb = ApplyFog(result.rgb, in_pos);\n"
+"\tresult.a *= in_alpha;\n"
+"\tout_fragcolor = result;\n"
+"}\n";static const char water_fragment_shader[] =
 "#if BINDLESS\n"
 "	#extension GL_ARB_bindless_texture : require\n"
 "#else\n"
@@ -819,11 +949,11 @@ OIT_OUTPUT (out_fragcolor)
 "	if (Fog.w > 0.)\n"
 "	{\n"
 "		out_fragcolor.rgb = sqrt(out_fragcolor.rgb);\n"
-"		out_fragcolor.rgb += SCREEN_SPACE_NOISE() * ScreenDither;\n"
+"		out_fragcolor.rgb += tri(bayer01(ivec2(floor(gl_FragCoord.xy)+0.5))) * ScreenDither;\n"
 "		out_fragcolor.rgb *= out_fragcolor.rgb;\n"
 "	}\n"
 "#else\n"
-"	out_fragcolor.rgb += SUPPRESS_BANDING() * ScreenDither;\n"
+"	out_fragcolor.rgb += bayer(ivec2(gl_FragCoord.xy)) * ScreenDither;\n"
 "#endif\n"
 "}\n";
 
@@ -848,6 +978,8 @@ WORLD_VERTEX_BUFFER
 "	gl_Position = ViewProj * vec4(Transform(in_pos, instance), 1.0);\n"
 "}\n";
 
+static const char skystencil_fragment_shader_gles[] =
+"void main() { }\n";
 ////////////////////////////////////////////////////////////////
 //
 // Sky layers
@@ -883,6 +1015,17 @@ WORLD_VERTEX_BUFFER
 
 ////////////////////////////////////////////////////////////////
 
+static const char sky_layers_vertex_shader_gles[] =
+FRAMEDATA_BUFFER
+WORLD_VERTEX_BUFFER
+"layout(location=0) out vec3 out_dir;\n"\
+"void main()\n"\
+"{\n"\
+"\tvec3 pos = in_pos;\n"\
+"\tgl_Position = ViewProj * vec4(pos, 1.0);\n"\
+"\tout_dir = pos - EyePos;\n"\
+"\tout_dir.z *= 3.0;\n"\
+"}\n";
 static const char sky_layers_fragment_shader[] =
 "#if BINDLESS\n"
 "	#extension GL_ARB_bindless_texture : require\n"
@@ -910,10 +1053,10 @@ NOISE_FUNCTIONS
 "	vec2 uv = normalize(in_dir).xy * (189.0 / 64.0);\n"
 "	vec4 result = texture(SolidLayer, uv + Time / 16.0);\n"
 "	vec4 layer = texture(AlphaLayer, uv + Time / 8.0);\n"
-"	result.rgb = mix(result.rgb, layer.rgb, layer.a);\n"
-"	result.rgb = mix(result.rgb, SkyFog.rgb, SkyFog.a);\n"
+"	result.rgb = result.rgb + (layer.rgb - result.rgb) * layer.a;\n"
+"	result.rgb = result.rgb + (SkyFog.rgb - result.rgb) * SkyFog.a;\n"
 "	out_fragcolor = result;\n"
-"	out_fragcolor.rgb += SUPPRESS_BANDING() * ScreenDither;\n"
+"	out_fragcolor.rgb += bayer(ivec2(gl_FragCoord.xy)) * ScreenDither;\n"
 "}\n";
 
 ////////////////////////////////////////////////////////////////
@@ -974,13 +1117,13 @@ NOISE_FUNCTIONS
 "#else\n"
 "	out_fragcolor = texture(Skybox, in_dir);\n"
 "#endif\n"
-"	out_fragcolor.rgb = mix(out_fragcolor.rgb, SkyFog.rgb, SkyFog.a);\n"
+"	out_fragcolor.rgb = out_fragcolor.rgb + (SkyFog.rgb - out_fragcolor.rgb) * SkyFog.a;\n"
 "#if DITHER\n"
 "	out_fragcolor.rgb = sqrt(out_fragcolor.rgb);\n"
-"	out_fragcolor.rgb += SCREEN_SPACE_NOISE() * ScreenDither;\n"
+"	out_fragcolor.rgb += tri(bayer01(ivec2(floor(gl_FragCoord.xy)+0.5))) * ScreenDither;\n"
 "	out_fragcolor.rgb *= out_fragcolor.rgb;\n"
 "#else\n"
-"	out_fragcolor.rgb += SUPPRESS_BANDING() * ScreenDither;\n"
+"	out_fragcolor.rgb += bayer(ivec2(gl_FragCoord.xy)) * ScreenDither;\n"
 "#endif\n"
 "}\n";
 
@@ -1026,13 +1169,13 @@ NOISE_FUNCTIONS
 "void main()\n"
 "{\n"
 "	out_fragcolor = texture(Tex, in_uv);\n"
-"	out_fragcolor.rgb = mix(out_fragcolor.rgb, Fog.rgb, Fog.w);\n"
+"	out_fragcolor.rgb = out_fragcolor.rgb + (Fog.rgb - out_fragcolor.rgb) * Fog.w;\n"
 "#if DITHER\n"
 "	out_fragcolor.rgb = sqrt(out_fragcolor.rgb);\n"
-"	out_fragcolor.rgb += SCREEN_SPACE_NOISE() * ScreenDither;\n"
+"	out_fragcolor.rgb += tri(bayer01(ivec2(floor(gl_FragCoord.xy)+0.5))) * ScreenDither;\n"
 "	out_fragcolor.rgb *= out_fragcolor.rgb;\n"
 "#else\n"
-"	out_fragcolor.rgb += SUPPRESS_BANDING() * ScreenDither;\n"
+"	out_fragcolor.rgb += bayer(ivec2(gl_FragCoord.xy)) * ScreenDither;\n"
 "#endif\n"
 "}\n";
 
@@ -1045,23 +1188,22 @@ NOISE_FUNCTIONS
 #define ALIAS_INSTANCE_BUFFER \
 "struct InstanceData\n"\
 "{\n"\
-"	vec4	WorldMatrix[3];\n"\
-"	vec4	LightColor; // xyz=LightColor w=Alpha\n"\
-"	uint	Pose1;\n"\
-"	uint	Pose2;\n"\
-"	float	Blend;\n"\
-"	int		Padding;\n"\
+"\tvec4\tWorldMatrix[3];\n"\
+"\tvec4\tLightColor; // xyz=LightColor w=Alpha\n"\
+"\tuint\tPose1;\n"\
+"\tuint\tPose2;\n"\
+"\tfloat\tBlend;\n"\
+"\tint\tPadding;\n"\
 "};\n"\
 "\n"\
 "layout(std430, binding=1) restrict readonly buffer InstanceBuffer\n"\
 "{\n"\
-"	mat4	ViewProj;\n"\
-"	vec3	EyePos;\n"\
-"	vec4	Fog;\n"\
-"	float	ScreenDither;\n"\
-"	InstanceData instances[];\n"\
+"\tmat4\tViewProj;\n"\
+"\tvec3\tEyePos;\n"\
+"\tvec4\tFog;\n"\
+"\tfloat\tScreenDither;\n"\
+"\tInstanceData instances[];\n"\
 "};\n"\
-
 ////////////////////////////////////////////////////////////////
 
 static const char alias_vertex_shader[] =
@@ -1147,7 +1289,7 @@ ALIAS_INSTANCE_BUFFER
 "\n"
 "void main()\n"
 "{\n"
-"	InstanceData inst = instances[gl_InstanceID];\n"
+"\tInstanceData inst = instances[gl_InstanceID];\n"
 "	out_texcoord = in_uv;\n"
 "	PoseVertex pose1 = GetPoseVertex(inst.Pose1);\n"
 "	PoseVertex pose2 = GetPoseVertex(inst.Pose2);\n"
@@ -1168,6 +1310,48 @@ ALIAS_INSTANCE_BUFFER
 
 ////////////////////////////////////////////////////////////////
 
+static const char alias_vertex_shader_gles[] =
+FRAMEDATA_BUFFER
+"layout(location=4) uniform vec4 WorldMatrix[3];\n"
+"layout(location=7) uniform vec4 LightColor;\n"
+"layout(location=8) uniform int Pose1;\n"
+"layout(location=9) uniform int Pose2;\n"
+"layout(location=10) uniform float Blend;\n"
+"layout(location=0) in vec2 in_uv;\n"
+"layout(std430, binding=2) restrict readonly buffer BlendShapeBuffer\n"
+"{\n"
+"\tuvec2 PackedPosNor[];\n"
+"};\n"
+"layout(location=0) out vec2 out_texcoord;\n"
+"layout(location=1) out vec4 out_color;\n"
+"struct PoseVertex { vec3 pos; vec3 nor; };\n"
+"PoseVertex GetPoseVertex(uint pose)\n"
+"{\n"
+"\tuvec2 data = PackedPosNor[pose + uint(gl_VertexID)];\n"
+"\treturn PoseVertex(vec3((data.xxx >> uvec3(0, 8, 16)) & uvec3(255u)), unpackSnorm4x8(data.y).xyz);\n"
+"}\n"
+"float r_avertexnormal_dot(vec3 vertexnormal, vec3 dir)\n"
+"{\n"
+"\tfloat d = dot(vertexnormal, dir);\n"
+"\treturn d < 0.0 ? 1.0 + d * (13.0 / 44.0) : 1.0 + d;\n"
+"}\n"
+"void main()\n"
+"{\n"
+"\tPoseVertex pose1 = GetPoseVertex(uint(Pose1));\n"
+"\tPoseVertex pose2 = GetPoseVertex(uint(Pose2));\n"
+"\tmat4x3 worldmatrix = transpose(mat3x4(WorldMatrix[0], WorldMatrix[1], WorldMatrix[2]));\n"
+"\tvec3 lerpedVert = (worldmatrix * vec4(mix(pose1.pos, pose2.pos, Blend), 1.0)).xyz;\n"
+"\tgl_Position = ViewProj * vec4(lerpedVert, 1.0);\n"
+"\tout_texcoord = in_uv;\n"
+"\tmat3 orientation = mat3(normalize(worldmatrix[0].xyz), normalize(worldmatrix[1].xyz), normalize(worldmatrix[2].xyz));\n"
+"\torientation = transpose(orientation);\n"
+"\tvec3 shadevector = (orientation[0] + orientation[2]) / sqrt(2.0);\n"
+"\tfloat dot1 = r_avertexnormal_dot(pose1.nor, shadevector);\n"
+"\tfloat dot2 = r_avertexnormal_dot(pose2.nor, shadevector);\n"
+"\tout_color = clamp(LightColor * vec4(vec3(mix(dot1, dot2, Blend)), 1.0), 0.0, 1.0);\n"
+"}\n";
+
+////////////////////////////////////////////////////////////////
 static const char alias_fragment_shader[] =
 ALIAS_INSTANCE_BUFFER
 NOISE_FUNCTIONS
@@ -1199,12 +1383,20 @@ OIT_OUTPUT (out_fragcolor)
 "		discard;\n"
 "	result.rgb *= in_color.rgb;\n"
 "#else\n"
-"	result.rgb = mix(result.rgb, result.rgb * in_color.rgb, result.a);\n"
+"	vec3 base_color = result.rgb;\n"
+"	float inverse_alpha = 1.0 - result.a;\n"
+"	result.rgb *= in_color.rgb;\n"
+"	result.rgb *= result.a;\n"
+"	result.rgb += base_color * inverse_alpha;\n"
 "#endif\n"
-"#if POSEVERTTYPE == 2 \n"
+"#if IW_GL_BACKEND_GLES\n"
+"	result.a = in_color.a;\n"
+"#else\n"
+"#if POSEVERTTYPE == 2\n"
 "	result.a *= in_color.a;\n"
 "#else\n"
 "	result.a = in_color.a;\n"
+"#endif\n"
 "#endif\n"
 "#if MODE == " QS_STRINGIFY (ALIASSHADER_NOPERSP) "\n"
 "	result.rgb += textureLod(FullbrightTex, uv, 0.).rgb;\n"
@@ -1214,7 +1406,9 @@ OIT_OUTPUT (out_fragcolor)
 "	result.rgb = clamp(result.rgb, 0.0, 1.0);\n"
 "	float fog = exp2(abs(Fog.w) * -dot(in_pos, in_pos));\n"\
 "	fog = clamp(fog, 0.0, 1.0);\n"
-"	result.rgb = mix(Fog.rgb, result.rgb, fog);\n"
+"	float inverse_fog = 1.0 - fog;\n"
+"	result.rgb *= fog;\n"
+"	result.rgb += Fog.rgb * inverse_fog;\n"
 "	out_fragcolor = result;\n"
 "#if MODE == " QS_STRINGIFY (ALIASSHADER_DITHER) " || MODE == " QS_STRINGIFY (ALIASSHADER_NOPERSP) "\n"
 "	// Note: sign bit is used as overbright flag\n"
@@ -1229,6 +1423,23 @@ OIT_OUTPUT (out_fragcolor)
 "#endif\n"
 "}\n";
 
+static const char alias_fragment_shader_gles[] =
+"layout(binding=0) uniform sampler2D Tex;\n"
+"layout(binding=1) uniform sampler2D FullbrightTex;\n"
+"layout(location=0) in vec2 in_texcoord;\n"
+"layout(location=1) in vec4 in_color;\n"
+"layout(location=0) out vec4 out_fragcolor;\n"
+"void main()\n"
+"{\n"
+"\tvec4 result = texture(Tex, in_texcoord);\n"
+"#if ALPHATEST\n"
+"\tif (result.a < 0.666) discard;\n"
+"#endif\n"
+"\tresult.rgb *= in_color.rgb;\n"
+"\tresult.rgb += texture(FullbrightTex, in_texcoord).rgb;\n"
+"\tresult.a = in_color.a;\n"
+"\tout_fragcolor = result;\n"
+"}\n";
 ////////////////////////////////////////////////////////////////
 //
 // Sprites
@@ -1275,11 +1486,11 @@ NOISE_FUNCTIONS
 "	if (Fog.w > 0.)\n"
 "	{\n"
 "		out_fragcolor.rgb = sqrt(out_fragcolor.rgb);\n"
-"		out_fragcolor.rgb += SCREEN_SPACE_NOISE() * ScreenDither;\n"
+"		out_fragcolor.rgb += tri(bayer01(ivec2(floor(gl_FragCoord.xy)+0.5))) * ScreenDither;\n"
 "		out_fragcolor.rgb *= out_fragcolor.rgb;\n"
 "	}\n"
 "#else\n"
-"	out_fragcolor.rgb += SUPPRESS_BANDING() * ScreenDither;\n"
+"	out_fragcolor.rgb += bayer(ivec2(gl_FragCoord.xy)) * ScreenDither;\n"
 "#endif\n"
 "}\n";
 
@@ -1349,11 +1560,11 @@ OIT_OUTPUT (out_fragcolor)
 "	if (Fog.w > 0.)\n"
 "	{\n"
 "		out_fragcolor.rgb = sqrt(out_fragcolor.rgb);\n"
-"		out_fragcolor.rgb += SCREEN_SPACE_NOISE() * ScreenDither;\n"
+"		out_fragcolor.rgb += tri(bayer01(ivec2(floor(gl_FragCoord.xy)+0.5))) * ScreenDither;\n"
 "		out_fragcolor.rgb *= out_fragcolor.rgb;\n"
 "	}\n"
 "#else\n"
-"	out_fragcolor.rgb += SUPPRESS_BANDING() * ScreenDither;\n"
+"	out_fragcolor.rgb += bayer(ivec2(gl_FragCoord.xy)) * ScreenDither;\n"
 "#endif\n"
 "}\n";
 
@@ -1920,7 +2131,7 @@ PALETTE_BUFFER
 "	if (idx >= 256u)\n"
 "		return;\n"
 "	vec3 color = vec3(UnpackRGB8(Palette[idx])) * (1./255.);\n"
-"	color = mix(color, BlendColor.rgb, BlendColor.a);\n"
+"	color = color + (BlendColor.rgb - color) * BlendColor.a;\n"
 "	color *= contrast;\n"
 "	color = pow(color, vec3(gamma));\n"
 "	uvec3 dst = uvec3(clamp(color, 0., 1.) * 255. + .5);\n"
