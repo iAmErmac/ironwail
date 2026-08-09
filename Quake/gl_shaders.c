@@ -31,7 +31,7 @@ static GLuint gl_current_program;
 static int gl_num_programs;
 
 #if defined(ANDROID_GLES3)
-static cvar_t gl_gles_shader_dump = {"gl_gles_shader_dump", "1", CVAR_NONE};
+static cvar_t gl_gles_shader_dump = {"gl_gles_shader_dump", "0", CVAR_NONE};
 static qboolean gl_gles_shader_dump_registered;
 static unsigned gl_shader_dump_sequence;
 static int gl_shader_programs_linked;
@@ -83,15 +83,12 @@ static void GL_InitError (const char *message, ...)
 		"(Note: you can press Ctrl+C to copy this text to clipboard)"
 #endif
 	;
-
-	Sys_Error (
-		fmt,
-		buf,
-		(int) sizeof (void *) * 8,
-		gl_version,
-		gl_renderer,
-		gl_vendor
-	);
+#if defined(ANDROID_GLES3)
+    Con_Printf("GLES shader initialization error: %s\\n", buf);
+    return;
+#else
+    Sys_Error (fmt, buf, (int) sizeof (void *) * 8, gl_version, gl_renderer, gl_vendor);
+#endif
 }
 
 #if defined(ANDROID_GLES3)
@@ -234,6 +231,7 @@ static GLuint GL_CreateShader (GLenum type, const char *source, const char *extr
 		"#define USE_BINDLESS 0\n"
 		"#define USE_DRAW_ID 0\n"
 		"#define USE_OIT 0\n"
+        "#define IW_MIX(a,b,t) ((a) + ((b) - (a)) * (t))\n"
 		"#define USE_MULTISAMPLE 0\n"
 		"#define REVERSED_Z 0\n"
 	);
@@ -278,7 +276,7 @@ static GLuint GL_CreateShader (GLenum type, const char *source, const char *extr
 	strcat(final_source, source);
 #endif
 
-	shader = GL_CreateShaderFunc (type);
+	    shader = GL_CreateShaderFunc (type);
 	if (GL_ObjectLabelFunc)
 		GL_ObjectLabelFunc (GL_SHADER, shader, -1, name);
 	GL_ShaderSourceFunc (shader, numstrings, strings, NULL);
@@ -530,30 +528,49 @@ void GL_CreateShaders (void)
 	for (oit = 0; oit < oit_count; oit++)
 		for (dither = 0; dither < dither_count; dither++)
 			for (mode = 0; mode < 3; mode++)
+				#if defined(ANDROID_GLES3)
+				glprogs.world[oit][dither][mode] = GL_CreateProgram (world_vertex_shader_gles, world_fragment_shader_gles, "world|OIT %d; DITHER %d; MODE %d", oit, dither, mode);
+#else
 				glprogs.world[oit][dither][mode] = GL_CreateProgram (world_vertex_shader, world_fragment_shader, "world|OIT %d; DITHER %d; MODE %d", oit, dither, mode);
+#endif
 
 	for (dither = 0; dither < 2; dither++)
 	{
 		for (oit = 0; oit < oit_count; oit++)
 		{
+			#if defined(ANDROID_GLES3)
+			glprogs.water[oit][dither] = GL_CreateProgram (water_vertex_shader_gles, water_fragment_shader_gles, "water|OIT %d; DITHER %d", oit, dither);
+#else
 			glprogs.water[oit][dither] = GL_CreateProgram (water_vertex_shader, water_fragment_shader, "water|OIT %d; DITHER %d", oit, dither);
+#endif
 			glprogs.particles[oit][dither] = GL_CreateProgram (particles_vertex_shader, particles_fragment_shader, "particles|OIT %d; DITHER %d", oit, dither);
 		}
 		for (mode = 0; mode < 2; mode++)
 			glprogs.skycubemap[mode][dither] = GL_CreateProgram (sky_cubemap_vertex_shader, sky_cubemap_fragment_shader, "sky cubemap|ANIM %d; DITHER %d", mode, dither);
+		#if defined(ANDROID_GLES3)
+		glprogs.skylayers[dither] = GL_CreateProgram (sky_layers_vertex_shader_gles, sky_layers_fragment_shader, "sky layers|DITHER %d", dither);
+#else
 		glprogs.skylayers[dither] = GL_CreateProgram (sky_layers_vertex_shader, sky_layers_fragment_shader, "sky layers|DITHER %d", dither);
+#endif
 		glprogs.skyboxside[dither] = GL_CreateProgram (sky_boxside_vertex_shader, sky_boxside_fragment_shader, "skybox side|DITHER %d", dither);
 		glprogs.sprites[dither] = GL_CreateProgram (sprites_vertex_shader, sprites_fragment_shader, "sprites|DITHER %d", dither);
 	}
+	#if defined(ANDROID_GLES3)
+	glprogs.skystencil = GL_CreateProgram (skystencil_vertex_shader, skystencil_fragment_shader_gles, "sky stencil");
+#else
 	glprogs.skystencil = GL_CreateProgram (skystencil_vertex_shader, NULL, "sky stencil");
+#endif
 
 	for (oit = 0; oit < oit_count; oit++)
 		for (mode = 0; mode < 3; mode++)
 			for (alphatest = 0; alphatest < 2; alphatest++)
 				for (poseverttype = 0; poseverttype < poseverttype_count; poseverttype++)
 					glprogs.alias[oit][mode][alphatest][poseverttype] =
+#if defined(ANDROID_GLES3)
+					GL_CreateProgram (alias_vertex_shader_gles, alias_fragment_shader_gles, "alias|OIT %d; MODE %d; ALPHATEST %d; POSEVERTTYPE %d", oit, mode, alphatest, poseverttype);
+#else
 					GL_CreateProgram (alias_vertex_shader, alias_fragment_shader, "alias|OIT %d; MODE %d; ALPHATEST %d; POSEVERTTYPE %d", oit, mode, alphatest, poseverttype);
-
+#endif
 	glprogs.debug3d = GL_CreateProgram (debug3d_vertex_shader, debug3d_fragment_shader, "debug3d");
 
 #if !defined(ANDROID_GLES3)

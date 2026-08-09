@@ -70,10 +70,15 @@ qboolean IW_GLES_Probe(iw_gles_limits_t *limits, iw_gles_features_t *features)
     glGetIntegerv(GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &limits->uniform_buffer_offset_alignment);
     glGetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &limits->shader_storage_buffer_offset_alignment);
     glGetIntegerv(GL_MAX_IMAGE_UNITS, &limits->max_image_units);
+#if defined(ANDROID_GLES3)
+    limits->max_compute_work_groups[0] = 0;
+    limits->max_compute_work_groups[1] = 0;
+    limits->max_compute_work_groups[2] = 0;
+#else
     glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 0, &limits->max_compute_work_groups[0]);
     glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 1, &limits->max_compute_work_groups[1]);
     glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 2, &limits->max_compute_work_groups[2]);
-
+#endif
     features->anisotropy = IW_GLES_HasExtension("GL_EXT_texture_filter_anisotropic");
     features->float_targets = IW_GLES_HasExtension("GL_EXT_color_buffer_float");
     features->msaa = limits->max_samples > 1;

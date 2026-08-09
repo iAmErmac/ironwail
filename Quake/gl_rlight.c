@@ -107,7 +107,8 @@ void GLLight_CreateResources (void)
 {
 	glGenTextures (1, &gl_lightclustertexture);
 	GL_BindNative (GL_TEXTURE0, GL_TEXTURE_3D, gl_lightclustertexture);
-	GL_ObjectLabelFunc (GL_TEXTURE, gl_lightclustertexture, -1, "light clusters");
+	if (GL_ObjectLabelFunc)
+		GL_ObjectLabelFunc (GL_TEXTURE, gl_lightclustertexture, -1, "light clusters");
 	GL_TexImage3DFunc (GL_TEXTURE_3D, 0, GL_RG32UI, LIGHT_TILES_X, LIGHT_TILES_Y, LIGHT_TILES_Z, 0, GL_RG_INTEGER, GL_UNSIGNED_INT, NULL);
 	glTexParameteri (GL_TEXTURE_3D, GL_TEXTURE_BASE_LEVEL, 0);
 	glTexParameteri (GL_TEXTURE_3D, GL_TEXTURE_MAX_LEVEL, 0);
@@ -184,6 +185,10 @@ void R_PushDlights (void)
 	GL_BeginGroup ("Light clustering");
 
 	R_UploadFrameData ();
+#if defined(ANDROID_GLES3)
+	GL_EndGroup ();
+	return;
+#endif
 
 	for (i = 0; i < 16; i++)
 		cluster_inputs.transposed_proj[i] = r_matproj[((i & 3) << 2) | (i >> 2)];
