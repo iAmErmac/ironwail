@@ -21,6 +21,9 @@ static qboolean iw_context_ready;
 static qboolean iw_paused;
 static qboolean iw_audio_focus = true;
 static qboolean iw_touch_active;
+static qboolean iw_attack_as_mouse;
+static qboolean iw_attack_active;
+extern kbutton_t in_attack, in_jump, in_down;
 static uint64_t iw_last_frame_ns;
 #define IW_ANDROID_LOOK_SCALE 2.5f
 static int IW_Android_ScaledLook(int delta) { return (int)(delta * IW_ANDROID_LOOK_SCALE); }
@@ -101,9 +104,7 @@ qboolean IW_Android_Init(const char *base_dir, int argc, const char *const *argv
     Cvar_SetValueQuick(&scr_menuscale, 4.0f);
     Cvar_SetValueQuick(&scr_sbarscale, 4.0f);
     Cvar_SetValueQuick(&scr_crosshairscale, 4.0f);
-    Cvar_SetValueQuick(&vid_gamma, 1.0f);
-    Cvar_SetValueQuick(&vid_contrast, 1.0f);
-    IW_LOG("Android defaults: scr_conscale=4 scr_menuscale=4 scr_sbarscale=4 scr_crosshairscale=4 gamma=1 contrast=1");
+    IW_LOG("Android defaults: scr_conscale=4 scr_menuscale=4 scr_sbarscale=4 scr_crosshairscale=4 desktop cvars preserved");
 #endif
     Con_Printf("Android launch arguments:");
     for (i = 0; i < argc; ++i)
@@ -116,8 +117,6 @@ qboolean IW_Android_Init(const char *base_dir, int argc, const char *const *argv
     Cvar_SetValueQuick(&scr_menuscale, 4.0f);
     Cvar_SetValueQuick(&scr_sbarscale, 4.0f);
     Cvar_SetValueQuick(&scr_crosshairscale, 4.0f);
-    Cvar_SetValueQuick(&vid_gamma, 1.0f);
-    Cvar_SetValueQuick(&vid_contrast, 1.0f);
 #endif
     iw_initialized = true;
     return true;
@@ -131,7 +130,14 @@ void IW_Android_SurfaceCreated(void)
     IW_LOG("surface created");
 }
 
-void IW_Android_ContextRestored(void) { iw_surface = true; iw_context_ready = true; iw_last_frame_ns = 0; IW_LOG("GLES context restored"); }
+void IW_Android_ContextRestored(void)
+{
+    GL_RestoreContextResources();
+    iw_surface = true;
+    iw_context_ready = true;
+    iw_last_frame_ns = 0;
+    IW_LOG("GLES context restored");
+}
 
 void IW_Android_SurfaceDestroyed(void)
 {
@@ -141,6 +147,7 @@ void IW_Android_SurfaceDestroyed(void)
     Key_ClearStates();
     IN_ClearStates();
     iw_touch_active = false;
+    IW_Android_ClearActions();
     IW_LOG("surface destroyed; simulation suspended");
 }
 
@@ -169,6 +176,12 @@ void IW_Android_Frame(uint64_t frame_time_ns)
         dt = (double)(frame_time_ns - iw_last_frame_ns) * 1e-9;
     iw_last_frame_ns = frame_time_ns;
     dt = CLAMP(0.0001, dt, 0.1);
+#if defined(ANDROID_GLES3)
+    if (iw_attack_active &&
+        (cls.state != ca_connected || cls.signon != SIGNONS ||
+         (iw_attack_as_mouse ? key_dest != key_menu : key_dest != key_game)))
+        IW_Android_ClearActions();
+#endif
     Host_Frame(dt);
 }
 
@@ -276,21 +289,56 @@ void IW_Android_Command(const char *command)
 {
     if (command && *command) { Cbuf_AddText(command); Cbuf_AddText("\n"); }
 }
+static void IW_Android_ButtonDown(kbutton_t *button)
+{
+    button->state |= 1 + 2;
+}
+
+static void IW_Android_ButtonUp(kbutton_t *button)
+{
+    button->down[0] = button->down[1] = 0;
+    button->state = 4;
+}
+
+void IW_Android_ClearActions(void)
+{
+    if (iw_attack_active)
+    {
+        if (iw_attack_as_mouse) Key_Event(K_MOUSE1, false);
+        else IW_Android_ButtonUp(&in_attack);
+    }
+    iw_attack_as_mouse = false;
+    iw_attack_active = false;
+}
+
 void IW_Android_Action(int action, qboolean down)
 {
     switch (action)
     {
 #if defined(ANDROID_GLES3)
     case 0:
-        if (key_dest == key_menu) Key_Event(K_MOUSE1, down);
-        else if (down) IN_AttackDown(); else IN_AttackUp();
+        if (down)
+        {
+            IW_Android_ClearActions();
+            iw_attack_as_mouse = key_dest == key_menu;
+            iw_attack_active = true;
+            if (iw_attack_as_mouse) Key_Event(K_MOUSE1, true);
+            else IW_Android_ButtonDown(&in_attack);
+        }
+        else
+            IW_Android_ClearActions();
         break;
 #else
     case 0: down ? IN_AttackDown() : IN_AttackUp(); break;
 #endif
     case 1: down ? IN_UseDown() : IN_UseUp(); break;
+#if defined(ANDROID_GLES3)
+    case 2: down ? IW_Android_ButtonDown(&in_jump) : IW_Android_ButtonUp(&in_jump); break;
+    case 3: down ? IW_Android_ButtonDown(&in_down) : IW_Android_ButtonUp(&in_down); break;
+#else
     case 2: down ? IN_JumpDown() : IN_JumpUp(); break;
     case 3: down ? IN_DownDown() : IN_DownUp(); break;
+#endif
     case 4: if (down) Cvar_SetValue("cl_alwaysrun", cl_alwaysrun.value ? 0 : 1); break;
     default: break;
     }
@@ -306,6 +354,7 @@ void IW_Android_Pause(qboolean paused)
         Key_ClearStates ();
         IN_ClearStates ();
         iw_touch_active = false;
+        IW_Android_ClearActions();
     }
     IW_LOG("lifecycle %s", paused ? "paused" : "resumed");
 }
@@ -319,6 +368,7 @@ void IW_Android_AudioFocus(qboolean focused)
         Key_ClearStates();
         IN_ClearStates();
         iw_touch_active = false;
+        IW_Android_ClearActions();
     }
     else if (!iw_paused)
         S_UnblockSound();
@@ -353,6 +403,7 @@ void IW_Android_Touch(int action, float x, float y) { (void)action; (void)x; (vo
 void IW_Android_TouchPointer(int action, int pointer_id, float x, float y) { (void)action; (void)pointer_id; (void)x; (void)y; }
 void IW_Android_Command(const char *command) { (void)command; }
 void IW_Android_Action(int action, qboolean down) { (void)action; (void)down; }
+void IW_Android_ClearActions(void) {}
 void IW_Android_Look(int delta_x, int delta_y) { (void)delta_x; (void)delta_y; }
 int IW_Android_ScreenMode(void) { return 3; }
 void IW_Android_Pause(qboolean paused) { (void)paused; }

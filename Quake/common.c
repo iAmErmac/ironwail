@@ -1615,7 +1615,11 @@ static void COM_CheckRegistered (void)
 	{
 		Cvar_SetROM ("registered", "0");
 		Con_Printf ("Playing shareware version.\n");
-		if (com_modified)
+#if defined(ANDROID_GLES3)
+        if (com_modified && (COM_CheckParm ("-game") || COM_CheckParm ("-basegame") || COM_CheckParm ("-rogue") || COM_CheckParm ("-hipnotic") || COM_CheckParm ("-quoth")))
+#else
+        if (com_modified)
+#endif
 			Sys_Error ("You must have the registered version to use modified games.\n\n"
 				   "Basedir is: %s\n\n"
 				   "Check that this has an " GAMENAME " subdirectory containing pak0.pak and pak1.pak, "

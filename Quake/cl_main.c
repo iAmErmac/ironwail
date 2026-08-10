@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "bgmusic.h"
+#include "android_lifecycle.h"
 
 // we need to declare some mouse variables here, because the menu system
 // references them even when on a unix system.
@@ -89,6 +90,9 @@ CL_ClearState
 */
 void CL_ClearState (void)
 {
+#if defined(ANDROID_GLES3)
+    IW_Android_ClearActions ();
+#endif
 	if (cl.qcvm.extfuncs.CSQC_Shutdown)
 	{
 		PR_SwitchQCVM(&cl.qcvm);

@@ -872,6 +872,24 @@ void GL_CreateFrameResources (void)
 	GL_AllocFrameResources (FRAMERES_ALL_BITS);
 }
 
+void GL_InvalidateFrameResources (void)
+{
+	int i;
+
+	for (i = 0; i < countof (frameres); i++)
+	{
+		frameres[i].fence = NULL;
+		frameres[i].host_buffer = 0;
+		frameres[i].device_buffer = 0;
+		frameres[i].host_ptr = NULL;
+		VEC_CLEAR (frameres[i].garbage);
+	}
+
+	frameres_idx = 0;
+	frameres_host_offset = 0;
+	frameres_device_offset = 0;
+}
+
 /*
 ====================
 GL_DeleteFrameResources

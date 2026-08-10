@@ -318,8 +318,17 @@ void R_FlushAliasInstances (qboolean showtris)
     return;
 
 	model = ibuf.ent->model;
-	mainhdr = (aliashdr_t*)Mod_Extradata (model);
-	anim = (int)(cl.time * 10) & 3;
+mainhdr = (aliashdr_t*)Mod_Extradata (model);
+#if defined(ANDROID_GLES3)
+	if (!model->meshvbo || !model->meshindexesvbo)
+		GLMesh_LoadVertexBuffer (model, mainhdr);
+	if (!model->meshvbo || !model->meshindexesvbo)
+	{
+		ibuf.count = 0;
+		return;
+	}
+#endif
+anim = (int)(cl.time * 10) & 3;
 
 	GL_BeginGroup (model->name);
 	poseverttype = mainhdr->poseverttype;
@@ -449,6 +458,7 @@ void R_FlushAliasInstances (qboolean showtris)
 			GL_Uniform1iFunc (8, instance->pose1);
 			GL_Uniform1iFunc (9, instance->pose2);
 			GL_Uniform1fFunc (10, instance->blend);
+			GL_PerfCountDraws (1);
 			glDrawElements (GL_TRIANGLES, hdr->numindexes, GL_UNSIGNED_SHORT, (void*)hdr->eboofs);
 		}
 #else
@@ -491,6 +501,7 @@ void R_FlushAliasInstances (qboolean showtris)
 				GL_Uniform1iFunc (8, instance->pose1);
 				GL_Uniform1iFunc (9, instance->pose2);
 				GL_Uniform1fFunc (10, instance->blend);
+				GL_PerfCountDraws (1);
 				glDrawElements (GL_TRIANGLES, hdr->numindexes, GL_UNSIGNED_SHORT, (void*)hdr->eboofs);
 			}
 #else
