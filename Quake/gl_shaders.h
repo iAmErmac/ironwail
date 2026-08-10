@@ -773,6 +773,7 @@ static const char world_vertex_shader_gles[] =
 FRAMEDATA_BUFFER
 GLES_LIGHTSTYLE_BUFFER
 WORLD_VERTEX_BUFFER
+"layout(location=132) uniform float EntityAlpha;\n"
 "layout(location=0) uniform vec4 WorldMatrix[3];\n"
 "layout(location=1) flat out float in_alpha;\n"
 "layout(location=2) out vec3 out_pos;\n"
@@ -785,7 +786,7 @@ WORLD_VERTEX_BUFFER
 "\tivec4 styles = ivec4(int(in_styles_packed & 255u), int((in_styles_packed >> 8u) & 255u), int((in_styles_packed >> 16u) & 255u), int((in_styles_packed >> 24u) & 255u));\n"
 "\tvec3 world_pos = vec3(dot(WorldMatrix[0].xyz, in_pos) + WorldMatrix[0].w, dot(WorldMatrix[1].xyz, in_pos) + WorldMatrix[1].w, dot(WorldMatrix[2].xyz, in_pos) + WorldMatrix[2].w);\n"
 "\tgl_Position = ViewProj * vec4(world_pos, 1.0);\n"
-"\tin_alpha = 1.0;\n"
+"\tin_alpha = EntityAlpha;\n"
 "\tout_pos = world_pos;\n"
 "\tout_uv = in_uv.xy;\n"
 "\tout_lmuv = in_uv.zw;\n"
@@ -800,6 +801,7 @@ static const char world_fragment_shader_gles[] =
 FRAMEDATA_BUFFER
 GLES_LIGHTSTYLE_BUFFER
 "layout(binding=0) uniform sampler2D Tex;\n"
+"layout(binding=1) uniform sampler2D FullbrightTex;\n"
 "layout(binding=2) uniform sampler2D LMTex;\n"
 "layout(location=1) flat in float in_alpha;\n"
 "layout(location=2) in vec3 in_pos;\n"
@@ -847,7 +849,8 @@ GLES_LIGHTSTYLE_BUFFER
 "\t\t}\n"
 "\t\tlight += max(min(dynamic_light, 1.0 - light), 0.0);\n"
 "\t}\n"
-"\tresult.rgb *= light * 2.0;\n"
+"\tresult.rgb = result.rgb + (result.rgb * light * 2.0 - result.rgb) * result.a;\n"
+"\tresult.rgb += texture(FullbrightTex, in_uv).rgb;\n"
 "\tresult.a = in_alpha;\n"
 "\tout_fragcolor = clamp(result, 0.0, 1.0);\n"
 "}\n";
@@ -891,14 +894,18 @@ WORLD_VERTEX_BUFFER
 static const char water_vertex_shader_gles[] =
 FRAMEDATA_BUFFER
 WORLD_VERTEX_BUFFER
+"layout(location=0) uniform vec4 WorldMatrix[3];\n"
 "layout(location=0) flat out float out_alpha;\n"
 "layout(location=1) out vec2 out_uv;\n"
 "layout(location=2) out vec3 out_pos;\n"
 "void main()\n"
 "{\n"
-"\tgl_Position = ViewProj * vec4(in_pos, 1.0);\n"
+"\tvec3 world_pos = vec3(dot(WorldMatrix[0].xyz, in_pos) + WorldMatrix[0].w,\n"
+"\t\tdot(WorldMatrix[1].xyz, in_pos) + WorldMatrix[1].w,\n"
+"\t\tdot(WorldMatrix[2].xyz, in_pos) + WorldMatrix[2].w);\n"
+"\tgl_Position = ViewProj * vec4(world_pos, 1.0);\n"
 "\tout_uv = in_uv.xy;\n"
-"\tout_pos = in_pos - EyePos;\n"
+"\tout_pos = world_pos - EyePos;\n"
 "\tout_alpha = 0.75;\n"
 "}\n";
 
@@ -1088,6 +1095,21 @@ WORLD_VERTEX_BUFFER
 
 ////////////////////////////////////////////////////////////////
 
+static const char sky_cubemap_vertex_shader_gles[] =
+FRAMEDATA_BUFFER
+WORLD_VERTEX_BUFFER
+"layout(location=0) uniform vec4 WorldMatrix[3];\n"
+"layout(location=0) out vec3 out_dir;\n"
+"void main()\n"
+"{\n"
+"\tvec3 pos = vec3(dot(WorldMatrix[0].xyz, in_pos) + WorldMatrix[0].w,\n"
+"\t\tdot(WorldMatrix[1].xyz, in_pos) + WorldMatrix[1].w,\n"
+"\t\tdot(WorldMatrix[2].xyz, in_pos) + WorldMatrix[2].w);\n"
+"\tgl_Position = ViewProj * vec4(pos, 1.0);\n"
+"\tout_dir = vec3(-(pos.y - EyePos.y), pos.z - EyePos.z, pos.x - EyePos.x);\n"
+"}\n";
+
+////////////////////////////////////////////////////////////////
 static const char sky_cubemap_fragment_shader[] =
 FRAMEDATA_BUFFER
 NOISE_FUNCTIONS
@@ -1317,18 +1339,55 @@ FRAMEDATA_BUFFER
 "layout(location=8) uniform int Pose1;\n"
 "layout(location=9) uniform int Pose2;\n"
 "layout(location=10) uniform float Blend;\n"
+"#if POSEVERTTYPE == 1 // PV_IQM (skeletal)\n"
+"layout(location=0) in vec3 in_pos;\n"
+"layout(location=1) in vec4 in_nor;\n"
+"layout(location=2) in vec2 in_uv;\n"
+"layout(location=3) in vec4 in_weights;\n"
+"layout(location=4) in ivec4 in_indices;\n"
+"layout(std430, binding=2) restrict readonly buffer PoseBuffer\n"
+"{\n"
+"\tmat3x4 BonePoses[];\n"
+"};\n"
+"#else\n"
 "layout(location=0) in vec2 in_uv;\n"
 "layout(std430, binding=2) restrict readonly buffer BlendShapeBuffer\n"
 "{\n"
 "\tuvec2 PackedPosNor[];\n"
 "};\n"
+"#endif\n"
 "layout(location=0) out vec2 out_texcoord;\n"
 "layout(location=1) out vec4 out_color;\n"
+"layout(location=2) out vec3 out_pos;\n"
 "struct PoseVertex { vec3 pos; vec3 nor; };\n"
 "PoseVertex GetPoseVertex(uint pose)\n"
 "{\n"
+"#if POSEVERTTYPE == 1 // PV_IQM\n"
+"\tmat3x4 blendmat = BonePoses[pose + uint(in_indices.x)] * in_weights.x;\n"
+"\tblendmat += BonePoses[pose + uint(in_indices.y)] * in_weights.y;\n"
+"\tif (in_weights.z + in_weights.w > 0.0)\n"
+"\t{\n"
+"\t\tblendmat += BonePoses[pose + uint(in_indices.z)] * in_weights.z;\n"
+"\t\tblendmat += BonePoses[pose + uint(in_indices.w)] * in_weights.w;\n"
+"\t}\n"
+"\tmat4x3 anim = transpose(blendmat);\n"
+"\treturn PoseVertex((anim * vec4(in_pos, 1.0)).xyz, (anim * vec4(in_nor.xyz, 0.0)).xyz);\n"
+"#else\n"
 "\tuvec2 data = PackedPosNor[pose + uint(gl_VertexID)];\n"
+"#if POSEVERTTYPE == 2 // PV_MD3\n"
+"\tPoseVertex ret;\n"
+"\tret.pos = vec3(ivec3((data.xxy >> uvec3(0, 16, 0)) & uvec3(65535u)) - ivec3(32768));\n"
+"\tvec2 spherical = vec2((data.yy >> uvec2(16, 24)) & uvec2(255u)) * (2.0 * 3.14159265 / 255.0);\n"
+"\tfloat sinlat = sin(spherical.x);\n"
+"\tfloat coslat = cos(spherical.x);\n"
+"\tfloat sinlng = sin(spherical.y);\n"
+"\tfloat coslng = cos(spherical.y);\n"
+"\tret.nor = vec3(coslng * sinlat, sinlng * sinlat, coslat);\n"
+"\treturn ret;\n"
+"#else // PV_QUAKE1\n"
 "\treturn PoseVertex(vec3((data.xxx >> uvec3(0, 8, 16)) & uvec3(255u)), unpackSnorm4x8(data.y).xyz);\n"
+"#endif\n"
+"#endif\n"
 "}\n"
 "float r_avertexnormal_dot(vec3 vertexnormal, vec3 dir)\n"
 "{\n"
@@ -1342,6 +1401,7 @@ FRAMEDATA_BUFFER
 "\tmat4x3 worldmatrix = transpose(mat3x4(WorldMatrix[0], WorldMatrix[1], WorldMatrix[2]));\n"
 "\tvec3 lerpedVert = (worldmatrix * vec4(mix(pose1.pos, pose2.pos, Blend), 1.0)).xyz;\n"
 "\tgl_Position = ViewProj * vec4(lerpedVert, 1.0);\n"
+"\tout_pos = lerpedVert - EyePos;\n"
 "\tout_texcoord = in_uv;\n"
 "\tmat3 orientation = mat3(normalize(worldmatrix[0].xyz), normalize(worldmatrix[1].xyz), normalize(worldmatrix[2].xyz));\n"
 "\torientation = transpose(orientation);\n"

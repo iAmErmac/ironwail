@@ -265,6 +265,7 @@ static void R_FlushBModelCalls (void)
 		GLbyte *ofs;
 		int i, oit, dither, mode;
 		qboolean gles_world_program = false;
+		qboolean gles_skycubemap_program = false;
 
 		for (i = 0; i < num_bmodel_calls; i++)
 		{
@@ -280,6 +281,10 @@ static void R_FlushBModelCalls (void)
 				for (mode = 0; mode < countof (glprogs.world[oit][dither]); mode++)
 					if (bmodel_batch_program == glprogs.world[oit][dither][mode])
 						gles_world_program = true;
+		for (oit = 0; oit < countof (glprogs.skycubemap); oit++)
+			for (dither = 0; dither < countof (glprogs.skycubemap[oit]); dither++)
+				if (bmodel_batch_program == glprogs.skycubemap[oit][dither])
+					gles_skycubemap_program = true;
 		if (gles_world_program)
 		{
 			GL_Uniform1iFunc (3, r_framedata.numlights);
@@ -294,7 +299,8 @@ static void R_FlushBModelCalls (void)
 		GL_VertexAttribIPointerFunc (3, 1, GL_UNSIGNED_INT, sizeof (glvert_t), (void *) offsetof (glvert_t, styles));
 		GL_Upload (GL_SHADER_STORAGE_BUFFER, &bmodel_calls.bound.params, sizeof (bmodel_calls.bound.params[0]) * num_bmodel_calls, &buf, &ofs);
 		GL_BindBufferRange (GL_SHADER_STORAGE_BUFFER, 1, buf, (GLintptr)ofs, sizeof (bmodel_calls.bound.params[0]) * num_bmodel_calls);
-		GL_Bind (GL_TEXTURE2, r_fullbright_cheatsafe ? greytexture : lightmap_texture);
+		if (!gles_skycubemap_program)
+			GL_Bind (GL_TEXTURE2, r_fullbright_cheatsafe ? greytexture : lightmap_texture);
 		while (glGetError () != GL_NO_ERROR)
 			;
 		for (i = 0; i < num_bmodel_calls; i++)
@@ -306,11 +312,14 @@ static void R_FlushBModelCalls (void)
 			{
 				int surfindex;
 				GL_Uniform4fvFunc (0, 3, identity_matrix);
+				if (gles_world_program)
+					GL_Uniform1fFunc (132, bmodel_calls.bound.params[i].alpha);
 				for (surfindex = 0; surfindex < cl.worldmodel->numsurfaces; surfindex++)
 				{
 					msurface_t *surf = &cl.worldmodel->surfaces[surfindex];
 					if (surf->vbo_cmd != src || surf->visframe != r_visframecount)
 						continue;
+					GL_PerfCountDraws (1);
 					glDrawElements (GL_TRIANGLES, (GLsizei)((q_max (surf->numedges, 2) - 2) * 3), GL_UNSIGNED_INT,
 						(const void *)((size_t)surf->vbo_firstindex * sizeof (GLuint)));
 					}
@@ -320,9 +329,16 @@ static void R_FlushBModelCalls (void)
 				int instance_index;
 				for (instance_index = 0; instance_index < (int)commands[i].instanceCount; instance_index++)
 				{
-					GL_Uniform4fvFunc (0, 3, identity_matrix);
-					glDrawElements (GL_TRIANGLES, (GLsizei)commands[i].count, GL_UNSIGNED_INT,
-						(const void *)((size_t)commands[i].firstIndex * sizeof (GLuint)));
+                GL_Uniform4fvFunc (0, 3,
+                    bmodel_instances[commands[i].baseInstance + instance_index].world);
+                if (gles_world_program)
+                {
+                    float alpha = bmodel_instances[commands[i].baseInstance + instance_index].alpha;
+                    GL_Uniform1fFunc (132, alpha < 0.f ? bmodel_calls.bound.params[i].alpha : alpha);
+                }
+                GL_PerfCountDraws (1);
+                glDrawElements (GL_TRIANGLES, (GLsizei)commands[i].count, GL_UNSIGNED_INT,
+                    (const void *)((size_t)commands[i].firstIndex * sizeof (GLuint)));
 				}
 			}
 		}
@@ -354,6 +370,7 @@ static void R_FlushBModelCalls (void)
 	{
 		GL_Upload (GL_SHADER_STORAGE_BUFFER, bmodel_calls.bindless.params, sizeof (bmodel_calls.bindless.params[0]) * num_bmodel_calls, &buf, &ofs);
 		GL_BindBufferRange (GL_SHADER_STORAGE_BUFFER, 1, buf, (GLintptr)ofs, sizeof (bmodel_calls.bindless.params[0]) * num_bmodel_calls);
+		GL_PerfCountDraws (num_bmodel_calls);
 		GL_MultiDrawElementsIndirectFunc (GL_TRIANGLES, GL_UNSIGNED_INT, (const void *)dstcmdofs, num_bmodel_calls, sizeof (bmodel_draw_indirect_t));
 	}
 	else
@@ -367,6 +384,7 @@ static void R_FlushBModelCalls (void)
 		{
 			GL_Uniform1iFunc (0, i);
 			GL_BindTextures (0, 2, bmodel_calls.bound.textures[i]);
+			GL_PerfCountDraws (1);
 			GL_DrawElementsIndirectFunc (GL_TRIANGLES, GL_UNSIGNED_INT, (const byte *)(dstcmdofs + i * sizeof (bmodel_draw_indirect_t)));
 		}
 	}
@@ -649,10 +667,14 @@ void R_DrawBrushModels_Water (entity_t **ents, int count, qboolean translucent)
 		state |= GLS_BLEND_OPAQUE;
 
 	oit = translucent && R_GetEffectiveAlphaMode () == ALPHAMODE_OIT;
+#if defined(ANDROID_GLES3)
+	program = glprogs.water[oit][softemu == SOFTEMU_COARSE];
+#else
 	if (cl.worldmodel->haslitwater && r_litwater.value)
 		program = glprogs.world[oit][q_max(0, (int)softemu - 1)][WORLDSHADER_WATER];
 	else
 		program = glprogs.water[oit][softemu == SOFTEMU_COARSE];
+#endif
 
 	R_ResetBModelCalls (program);
 	GL_SetState (state);

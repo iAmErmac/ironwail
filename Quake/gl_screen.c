@@ -1001,6 +1001,21 @@ static void SCR_DrawDevStats (void)
 	int		y = 25-11; //11=number of lines to print
 	int		x = 0; //margin
 
+	if (r_speeds.value == 3)
+	{
+		char perf[64];
+		double fps = glperf_stats.frame_ms > 0.0 ? 1000.0 / glperf_stats.frame_ms : 0.0;
+		double gpu = glperf_stats.gpu_frame_ms;
+		snprintf (perf, sizeof (perf), "Perf %4.1f fps CPU %4.1f GPU %4.1f", fps, glperf_stats.frame_ms, gpu);
+ GL_SetCanvas (CANVAS_BOTTOMLEFT);
+		x = 0;
+		y = 8;
+		Draw_String (x, (y++) * 8 - x, perf);
+		snprintf (perf, sizeof (perf), "Draws %4i stalls %3i tex %4.1fM %s", glperf_stats.draws, glperf_stats.gpu_stalls, glperf_stats.texture_memory / (1024.0 * 1024.0), GL_PerfRendererTier ());
+		Draw_String (x, (y++) * 8 - x, perf);
+		return;
+	}
+
 	if (!devstats.value)
 		return;
 
@@ -1639,7 +1654,7 @@ static void SCR_GetCleanMapTitle (char *buf, size_t maxchars)
 		case '"':
 			c = '\'';
 			break;
-		case '\t':
+		case '	':
 			c = ' ';
 			break;
 		case '\\':
@@ -2098,6 +2113,7 @@ needs almost the entire 256k of stack space!
 */
 void SCR_UpdateScreen (void)
 {
+	GL_PerfBeginFrame ();
 	vid.numpages = (gl_triplebuffer.value) ? 3 : 2;
 
 	if (scr_disabled_for_loading)
@@ -2189,6 +2205,7 @@ void SCR_UpdateScreen (void)
 
 	GL_EndGroup ();
 
+	GL_PerfEndFrame ();
 	GL_EndRendering ();
 }
 

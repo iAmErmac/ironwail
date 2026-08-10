@@ -751,6 +751,7 @@ void Sky_DrawSkyBox (void)
 		GL_VertexAttribPointerFunc (1, 2, GL_FLOAT, GL_FALSE, sizeof(verts[0]), ofs + offsetof(struct skyboxvert_s, uv));
 
 		GL_Bind (GL_TEXTURE0, skybox->textures[skytexorder[i]]);
+		GL_PerfCountDraws (1);
 		glDrawArrays (GL_TRIANGLE_FAN, 0, 4);
 	}
 }

@@ -547,6 +547,22 @@ float TexMgr_FrameUsage (void)
 	return mb;
 }
 
+size_t TexMgr_TotalUsage (void)
+{
+	size_t bytes = 0;
+	gltexture_t *glt;
+
+	for (glt = active_gltextures; glt; glt = glt->next)
+	{
+		int faces = glt->flags & TEXPREF_CUBEMAP ? 6 : 1;
+		size_t texels = (size_t) glt->width * glt->height * glt->depth * faces;
+		if (glt->flags & TEXPREF_MIPMAP)
+			texels = texels * 4 / 3;
+		bytes += texels * 4 / q_max (1, glt->compression);
+	}
+	return bytes;
+}
+
 /*
 ===============
 TexMgr_CanCompress
