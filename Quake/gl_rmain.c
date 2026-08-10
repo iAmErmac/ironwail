@@ -384,6 +384,8 @@ void GL_PostProcess (void)
 	if (variant != 2) // some AMD drivers optimize out the uniform in variant #2
 		GL_Uniform4fFunc (0, vid_gamma.value, q_min(2.0f, q_max(1.0f, vid_contrast.value)), 1.f/r_refdef.scale, dither);
 
+	GL_PerfCountDraws (1);
+
 	glDrawArrays (GL_TRIANGLES, 0, 3);
 
 	GL_EndGroup ();
@@ -1261,6 +1263,7 @@ void R_FlushDebugGeometry (void)
 
 		GL_Upload (GL_ELEMENT_ARRAY_BUFFER, debugidx, sizeof (debugidx[0]) * numdebugidx, &buf, &ofs);
 		GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, buf);
+		GL_PerfCountDraws (1);
 		glDrawElements (GL_LINES, numdebugidx, GL_UNSIGNED_SHORT, ofs);
 	}
 
@@ -1959,6 +1962,8 @@ static void R_EndTranslucency (void)
 		GL_BindNative (GL_TEXTURE0, framebufs.scene.samples > 1 ? GL_TEXTURE_2D_MULTISAMPLE : GL_TEXTURE_2D, framebufs.oit.accum_tex);
 		GL_BindNative (GL_TEXTURE1, framebufs.scene.samples > 1 ? GL_TEXTURE_2D_MULTISAMPLE : GL_TEXTURE_2D, framebufs.oit.revealage_tex);
 
+		GL_PerfCountDraws (1);
+
 		glDrawArrays (GL_TRIANGLES, 0, 3);
 
 		glDisable (GL_STENCIL_TEST);
@@ -2085,6 +2090,8 @@ void R_WarpScaleView (void)
 	GL_BindNative (GL_TEXTURE0, GL_TEXTURE_2D, msaa ? framebufs.resolved_scene.color_tex : framebufs.scene.color_tex);
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, water_warp && msaa ? GL_LINEAR : GL_NEAREST);
 	glTexParameteri (GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, water_warp && msaa ? GL_LINEAR : GL_NEAREST);
+
+	GL_PerfCountDraws (1);
 
 	glDrawArrays (GL_TRIANGLES, 0, 3);
 

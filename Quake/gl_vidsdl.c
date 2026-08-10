@@ -105,6 +105,7 @@ qboolean gl_buffer_storage_able = false;
 qboolean gl_multi_bind_able = false;
 qboolean gl_bindless_able = false;
 qboolean gl_clipcontrol_able = false;
+qboolean gl_timer_query_able = false;
 float gl_max_anisotropy; //johnfitz
 int gl_stencilbits;
 
@@ -139,6 +140,12 @@ static const glfunc_t gl_timer_query_functions[] =
 {
 	QGL_TIMER_QUERY_FUNCTIONS(QGL_REGISTER_NAMED_FUNC)
 	{NULL, NULL}
+};
+
+static const glfunc_t gl_gles_timer_query_functions[] =
+{
+ QGL_GLES_TIMER_QUERY_FUNCTIONS(QGL_REGISTER_NAMED_FUNC)
+ {NULL, NULL}
 };
 
 static const glfunc_t gl_gles_debug_functions[] =
@@ -1076,6 +1083,8 @@ static void GL_CheckExtensions (void)
 #if !defined(ANDROID_GLES3)
 	GL_InitFunctions (gl_gles_optional_functions, true);
 	GL_InitFunctions (gl_timer_query_functions, true);
+#else
+ gl_timer_query_able = GL_FindExtension ("GL_EXT_disjoint_timer_query") && GL_InitFunctions (gl_gles_timer_query_functions, false);
 #endif
 
 	if (COM_CheckParm ("-glmarkers"))
@@ -1434,6 +1443,32 @@ static void GL_Init (void)
 GL_BeginRendering -- sets values of glx, gly, glwidth, glheight
 =================
 */
+#if defined(ANDROID_GLES3)
+void GL_RestoreContextResources (void)
+{
+	GL_InvalidateFrameResources ();
+	GL_InvalidateShaders ();
+	GLMesh_DeleteVertexBuffers ();
+	GL_DeleteBModelBuffers ();
+
+
+	GL_Init ();
+	GL_SetupState ();
+	TexMgr_ReloadImages ();
+
+	if (cl.worldmodel)
+	{
+		GL_BuildLightmaps ();
+		GL_BuildBModelVertexBuffer ();
+		GL_BuildBModelMarkBuffers ();
+	}
+	GLMesh_LoadVertexBuffers ();
+	GL_ClearBufferBindings ();
+	GL_ClearCachedProgram ();
+	Con_SafePrintf ("GLES context resources restored\\n");
+}
+#endif
+
 void GL_BeginRendering (int *x, int *y, int *width, int *height)
 {
 	if (vid.resized)

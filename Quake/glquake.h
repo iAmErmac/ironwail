@@ -92,6 +92,7 @@ extern	cvar_t	r_drawentities;
 extern	cvar_t	r_drawworld;
 extern	cvar_t	r_drawviewmodel;
 extern	cvar_t	r_speeds;
+extern	cvar_t	gl_texture_anisotropy;
 extern	cvar_t	r_pos;
 extern	cvar_t	r_waterwarp;
 extern	cvar_t	r_fullbright;
@@ -120,6 +121,7 @@ extern	qboolean	gl_buffer_storage_able;
 extern	qboolean	gl_multi_bind_able;
 extern	qboolean	gl_bindless_able;
 extern	qboolean	gl_clipcontrol_able;
+extern qboolean gl_timer_query_able;
 
 extern	const char	*gl_vendor;
 extern	const char	*gl_renderer;
@@ -219,6 +221,14 @@ extern	const char	*gl_version;
 	x(void,			PopDebugGroup, (void))\
 	x(void,			MinSampleShading, (GLfloat value))
 
+#define QGL_GLES_TIMER_QUERY_FUNCTIONS(x)\
+ x(void, GenQueriesEXT, (GLsizei n, GLuint *ids))\
+ x(void, DeleteQueriesEXT, (GLsizei n, const GLuint *ids))\
+ x(void, BeginQueryEXT, (GLenum target, GLuint id))\
+ x(void, EndQueryEXT, (GLenum target))\
+ x(void, GetQueryObjectivEXT, (GLuint id, GLenum pname, GLint *params))\
+ x(void, GetQueryObjectui64vEXT, (GLuint id, GLenum pname, GLuint64 *params))\
+
 #define QGL_TIMER_QUERY_FUNCTIONS(x)\
 	x(void,			QueryCounter, (GLuint id, GLenum target))\
 	x(void,			GetQueryObjecti64v, (GLuint id, GLenum pname, GLint64 *params))\
@@ -248,6 +258,7 @@ extern	const char	*gl_version;
 	QGL_CORE_FUNCTIONS(x)\
 	QGL_GLES_OPTIONAL_FUNCTIONS(x)\
 	QGL_TIMER_QUERY_FUNCTIONS(x)\
+ QGL_GLES_TIMER_QUERY_FUNCTIONS(x)\
 	QGL_ARB_buffer_storage_FUNCTIONS(x)\
 	QGL_ARB_multi_bind_FUNCTIONS(x)\
 	QGL_ARB_bindless_texture_FUNCTIONS(x)\
@@ -361,6 +372,20 @@ typedef struct {
 	int		gpu_stalls;
 } devstats_t;
 extern devstats_t dev_stats, dev_peakstats;
+
+typedef struct glperf_stats_s {
+ double frame_ms;
+ double gpu_frame_ms;
+ int draws;
+ int gpu_stalls;
+ size_t texture_memory;
+} glperf_stats_t;
+extern glperf_stats_t glperf_stats;
+void GL_PerfBeginFrame (void);
+void GL_PerfEndFrame (void);
+void GL_PerfCountDraws (int count);
+void GL_PerfSetTextureMemory (size_t bytes);
+const char *GL_PerfRendererTier (void);
 
 //ohnfitz -- reduce overflow warning spam
 typedef struct {
@@ -571,6 +596,7 @@ extern glprogs_t glprogs;
 void GL_UseProgram (GLuint program);
 void GL_ClearCachedProgram (void);
 void GL_CreateShaders (void);
+void GL_InvalidateShaders (void);
 void GL_DeleteShaders (void);
 
 typedef struct glframebufs_s {
@@ -657,6 +683,10 @@ void GL_DeleteBuffer (GLuint buffer);
 void GL_ClearBufferBindings (void);
 
 void GL_CreateFrameResources (void);
+void GL_InvalidateFrameResources (void);
+#if defined(ANDROID_GLES3)
+void GL_RestoreContextResources (void);
+#endif
 void GL_DeleteFrameResources (void);
 void GL_Upload (GLenum target, const void *data, size_t numbytes, GLuint *outbuf, GLbyte **outofs);
 void GL_ReserveDeviceMemory (GLenum target, size_t numbytes, GLuint *outbuf, size_t *outofs);

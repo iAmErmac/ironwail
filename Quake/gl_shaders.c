@@ -504,7 +504,7 @@ void GL_CreateShaders (void)
 	}
 	gl_shader_programs_linked = 0;
 	Con_Printf ("GLES shader validation: base direct permutations begin\n");
-	const int poseverttype_count = 1;
+	const int poseverttype_count = 3;
 	const int oit_count = 1;
 	const int dither_count = 3;
 #else
@@ -546,7 +546,11 @@ void GL_CreateShaders (void)
 			glprogs.particles[oit][dither] = GL_CreateProgram (particles_vertex_shader, particles_fragment_shader, "particles|OIT %d; DITHER %d", oit, dither);
 		}
 		for (mode = 0; mode < 2; mode++)
+			#if defined(ANDROID_GLES3)
+			glprogs.skycubemap[mode][dither] = GL_CreateProgram (sky_cubemap_vertex_shader_gles, sky_cubemap_fragment_shader, "sky cubemap|ANIM %d; DITHER %d", mode, dither);
+#else
 			glprogs.skycubemap[mode][dither] = GL_CreateProgram (sky_cubemap_vertex_shader, sky_cubemap_fragment_shader, "sky cubemap|ANIM %d; DITHER %d", mode, dither);
+#endif
 		#if defined(ANDROID_GLES3)
 		glprogs.skylayers[dither] = GL_CreateProgram (sky_layers_vertex_shader_gles, sky_layers_fragment_shader, "sky layers|DITHER %d", dither);
 #else
@@ -583,7 +587,7 @@ void GL_CreateShaders (void)
 	glprogs.palette_postprocess = GL_CreateComputeProgram (palette_postprocess_compute_shader, "palette postprocess");
 #endif
 #if defined(ANDROID_GLES3)
-	Con_Printf ("GLES shader validation: linked=%d expected=38; skipped=OIT-resolve, compute/indirect, clustered-light, palette-compute, bindless, multisample\n", gl_shader_programs_linked);
+	Con_Printf ("GLES shader validation: linked=%d expected=50; skipped=OIT-resolve, compute/indirect, clustered-light, palette-compute, bindless, multisample\n", gl_shader_programs_linked);
 #endif
 }
 /*
@@ -591,6 +595,21 @@ void GL_CreateShaders (void)
 GL_DeleteShaders
 =============
 */
+void GL_InvalidateShaders (void)
+{
+#if defined(ANDROID_GLES3)
+	int i;
+	for (i = 0; i < countof (gl_shader_sources); i++)
+	{
+		free (gl_shader_sources[i].source);
+		memset (&gl_shader_sources[i], 0, sizeof (gl_shader_sources[i]));
+	}
+#endif
+	gl_num_programs = 0;
+	gl_current_program = 0;
+	memset (&glprogs, 0, sizeof (glprogs));
+}
+
 void GL_DeleteShaders (void)
 {
 	int i;

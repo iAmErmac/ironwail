@@ -138,6 +138,7 @@ extern texfilter_t gl_texfilter;
 // TEXTURE MANAGER
 
 float TexMgr_FrameUsage (void);
+size_t TexMgr_TotalUsage (void);
 gltexture_t *TexMgr_FindTexture (qmodel_t *owner, const char *name);
 gltexture_t *TexMgr_NewTexture (void);
 void TexMgr_FreeTexture (gltexture_t *kill);
