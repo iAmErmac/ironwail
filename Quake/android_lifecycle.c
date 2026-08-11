@@ -25,7 +25,8 @@ static qboolean iw_attack_as_mouse;
 static qboolean iw_attack_active;
 extern kbutton_t in_attack, in_jump, in_down;
 static uint64_t iw_last_frame_ns;
-#define IW_ANDROID_LOOK_SCALE 2.5f
+static cvar_t iw_android_defaults_version = {"iw_android_defaults_version", "0", CVAR_ARCHIVE};
+#define IW_ANDROID_LOOK_SCALE 3.5f
 static int IW_Android_ScaledLook(int delta) { return (int)(delta * IW_ANDROID_LOOK_SCALE); }
 
 
@@ -100,6 +101,7 @@ qboolean IW_Android_Init(const char *base_dir, int argc, const char *const *argv
            IW_GLES_FeatureTier(), iw_parms.basedir);
     Host_Init();
 #if defined(ANDROID_GLES3)
+    Cvar_RegisterVariable(&iw_android_defaults_version);
     Cvar_SetValueQuick(&scr_conscale, 4.0f);
     Cvar_SetValueQuick(&scr_menuscale, 4.0f);
     Cvar_SetValueQuick(&scr_sbarscale, 4.0f);
@@ -113,6 +115,15 @@ qboolean IW_Android_Init(const char *base_dir, int argc, const char *const *argv
     IW_Android_QueueLaunchArgs(argc, argv);
     Cbuf_Execute();
 #if defined(ANDROID_GLES3)
+    if (iw_android_defaults_version.value < 1.0f)
+    {
+        if (vid_gamma.value == 1.0f && vid_contrast.value == 1.0f)
+        {
+            Cvar_SetValueQuick(&vid_gamma, 0.95f);
+            Cvar_SetValueQuick(&vid_contrast, 1.2f);
+        }
+        Cvar_SetValueQuick(&iw_android_defaults_version, 1.0f);
+    }
     Cvar_SetValueQuick(&scr_conscale, 4.0f);
     Cvar_SetValueQuick(&scr_menuscale, 4.0f);
     Cvar_SetValueQuick(&scr_sbarscale, 4.0f);
@@ -356,6 +367,8 @@ void IW_Android_Pause(qboolean paused)
         iw_touch_active = false;
         IW_Android_ClearActions();
     }
+    else if (iw_audio_focus)
+        S_UnblockSound();
     IW_LOG("lifecycle %s", paused ? "paused" : "resumed");
 }
 
