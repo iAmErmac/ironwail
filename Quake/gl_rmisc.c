@@ -59,7 +59,7 @@ extern cvar_t r_dither;
 
 #if defined(ANDROID_GLES3)
 extern cvar_t r_gles_vao_validate, r_gles_static_vao;
-extern cvar_t r_gles_ubo_validate;
+extern cvar_t r_gles_ubo_validate, r_gles_world_batch;
 #endif
 
 #if defined(USE_SIMD)
@@ -324,6 +324,7 @@ void R_Init (void)
 	Cvar_RegisterVariable (&r_gles_vao_validate);
 	Cvar_RegisterVariable (&r_gles_static_vao);
 	Cvar_RegisterVariable (&r_gles_ubo_validate);
+	Cvar_RegisterVariable (&r_gles_world_batch);
 #endif
 	Cvar_RegisterVariable (&r_pos);
 	Cvar_RegisterVariable (&r_alphasort);

@@ -170,7 +170,11 @@ void IN_ShowCursor (void)
 	if (!SDL_GetRelativeMouseMode ())
 		return;
 	if (SDL_SetRelativeMouseMode (SDL_FALSE) != 0)
+	{
+#if !defined(ANDROID_GLES3)
 		Con_Printf ("WARNING: could not disable relative mouse mode (%s).\n", SDL_GetError ());
+#endif
+	}
 
 	if (!ui_mouse.value)
 	{
@@ -192,7 +196,11 @@ void IN_HideCursor (void)
 	}
 #endif
 	if (SDL_SetRelativeMouseMode(SDL_TRUE) != 0)
+	{
+#if !defined(ANDROID_GLES3)
 		Con_Printf("WARNING: could not enable relative mouse mode (%s).\n", SDL_GetError());
+#endif
+	}
 }
 
 static void IN_BeginIgnoringMouseEvents(void)
