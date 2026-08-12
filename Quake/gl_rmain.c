@@ -23,6 +23,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #if defined(ANDROID_GLES3)
+#include "gl_gles_vao.h"
+#endif
+#if defined(ANDROID_GLES3)
 #define glDepthRange glDepthRangef
 #endif
 
@@ -73,6 +76,10 @@ cvar_t	r_norefresh = {"r_norefresh","0",CVAR_NONE};
 cvar_t	r_drawentities = {"r_drawentities","1",CVAR_NONE};
 cvar_t	r_drawviewmodel = {"r_drawviewmodel","1",CVAR_NONE};
 cvar_t	r_speeds = {"r_speeds","0",CVAR_NONE};
+#if defined(ANDROID_GLES3)
+cvar_t	r_gles_vao_validate = {"r_gles_vao_validate","0",CVAR_NONE};
+cvar_t	r_gles_static_vao = {"r_gles_static_vao","1",CVAR_NONE};
+#endif
 cvar_t	r_pos = {"r_pos","0",CVAR_NONE};
 cvar_t	r_fullbright = {"r_fullbright","0",CVAR_NONE};
 cvar_t	r_lightmap = {"r_lightmap","0",CVAR_NONE};
@@ -1258,8 +1265,14 @@ void R_FlushDebugGeometry (void)
 
 		GL_Upload (GL_ARRAY_BUFFER, debugverts, sizeof (debugverts[0]) * numdebugverts, &buf, &ofs);
 		GL_BindBuffer (GL_ARRAY_BUFFER, buf);
-		GL_VertexAttribPointerFunc (0, 3, GL_FLOAT, GL_FALSE, sizeof (debugverts[0]), ofs + offsetof (debugvert_t, pos));
+		#if defined(ANDROID_GLES3)
+GLESVAO_BindDynamic ();
+#endif
+GL_VertexAttribPointerFunc (0, 3, GL_FLOAT, GL_FALSE, sizeof (debugverts[0]), ofs + offsetof (debugvert_t, pos));
 		GL_VertexAttribPointerFunc (1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof (debugverts[0]), ofs + offsetof (debugvert_t, color));
+#if defined(ANDROID_GLES3)
+		GLESVAO_UseLayout (GLES_LAYOUT_DEBUG, "debug", buf, buf, GL_UNSIGNED_SHORT);
+#endif
 
 		GL_Upload (GL_ELEMENT_ARRAY_BUFFER, debugidx, sizeof (debugidx[0]) * numdebugidx, &buf, &ofs);
 		GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, buf);

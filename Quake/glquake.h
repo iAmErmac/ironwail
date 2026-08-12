@@ -376,8 +376,22 @@ extern devstats_t dev_stats, dev_peakstats;
 typedef struct glperf_stats_s {
  double frame_ms;
  double gpu_frame_ms;
+ int gpu_frame_valid;
  int draws;
  int gpu_stalls;
+ int program_binds;
+ int buffer_binds;
+ int buffer_range_binds;
+ int texture_binds;
+ int texture_unit_changes;
+ int vao_binds;
+ int layout_changes;
+ int stream_reallocs;
+ size_t upload_array;
+ size_t upload_element;
+ size_t upload_uniform;
+ size_t upload_storage;
+ size_t upload_indirect;
  size_t texture_memory;
 } glperf_stats_t;
 extern glperf_stats_t glperf_stats;
@@ -385,6 +399,13 @@ void GL_PerfBeginFrame (void);
 void GL_PerfEndFrame (void);
 void GL_PerfCountDraws (int count);
 void GL_PerfSetTextureMemory (size_t bytes);
+void GL_PerfCountProgramBind (void);
+void GL_PerfCountBufferBind (void);
+void GL_PerfCountBufferRangeBind (void);
+void GL_PerfCountTextureBind (void);
+void GL_PerfCountTextureUnitChange (void);
+void GL_PerfCountUpload (GLenum target, size_t bytes);
+void GL_PerfCountStreamRealloc (void);
 const char *GL_PerfRendererTier (void);
 
 //ohnfitz -- reduce overflow warning spam
@@ -681,6 +702,8 @@ void GL_BindBuffersRange (GLenum target, GLuint first, GLsizei count, const GLui
 GLuint GL_CreateBuffer (GLenum target, GLenum usage, const char *name, size_t size, const void *data);
 void GL_DeleteBuffer (GLuint buffer);
 void GL_ClearBufferBindings (void);
+void GL_InvalidateBufferBinding (GLenum target);
+void GL_ForceVertexAttribCount (int count);
 
 void GL_CreateFrameResources (void);
 void GL_InvalidateFrameResources (void);

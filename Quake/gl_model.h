@@ -512,6 +512,9 @@ typedef struct qmodel_s
 
 	GLuint		meshvbo;
 	GLuint		meshindexesvbo;
+#if defined(ANDROID_GLES3)
+	GLuint		meshvao;
+#endif
 
 //
 // additional model data

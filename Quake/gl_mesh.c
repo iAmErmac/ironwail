@@ -22,7 +22,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // gl_mesh.c: triangle model functions
 
 #include "quakedef.h"
-
+#if defined(ANDROID_GLES3)
+#include "gl_gles_vao.h"
+#endif
 
 /*
 =================================================================
@@ -295,11 +297,32 @@ void GLMesh_LoadVertexBuffer (qmodel_t *m, aliashdr_t *mainhdr)
 
 	// upload indexes buffer
 	GL_DeleteBuffer (m->meshindexesvbo);
+#if defined(ANDROID_GLES3)
+GLESVAO_DeleteStatic (&m->meshvao);
+#endif
 	m->meshindexesvbo = GL_CreateBuffer (GL_ELEMENT_ARRAY_BUFFER, GL_STATIC_DRAW, va ("%s indices", m->name), numindexes * sizeof (unsigned short), ebodata);
 
 	// upload vertexes buffer
 	GL_DeleteBuffer (m->meshvbo);
 	m->meshvbo = GL_CreateBuffer (GL_ARRAY_BUFFER, GL_STATIC_DRAW, va ("%s vertices", m->name), totalvbosize, vbodata);
+#if defined(ANDROID_GLES3)
+if (mainhdr->poseverttype == PV_IQM)
+{
+gles_vao_attribute_t attrs[] = {
+{ 0, 3, GL_FLOAT, GL_FALSE, GL_FALSE, sizeof (iqmvert_t), mainhdr->vbovertofs + offsetof (iqmvert_t, xyz) },
+{ 1, 4, GL_BYTE, GL_TRUE, GL_FALSE, sizeof (iqmvert_t), mainhdr->vbovertofs + offsetof (iqmvert_t, norm) },
+{ 2, 2, GL_FLOAT, GL_FALSE, GL_FALSE, sizeof (iqmvert_t), mainhdr->vbovertofs + offsetof (iqmvert_t, st) },
+{ 3, 4, GL_UNSIGNED_BYTE, GL_TRUE, GL_FALSE, sizeof (iqmvert_t), mainhdr->vbovertofs + offsetof (iqmvert_t, weight) },
+{ 4, 4, GL_UNSIGNED_BYTE, GL_FALSE, GL_TRUE, sizeof (iqmvert_t), mainhdr->vbovertofs + offsetof (iqmvert_t, idx) }
+};
+m->meshvao = GLESVAO_CreateStatic (m->meshvbo, m->meshindexesvbo, attrs, countof (attrs));
+}
+else
+{
+gles_vao_attribute_t attrs[] = { { 0, 2, GL_FLOAT, GL_FALSE, GL_FALSE, sizeof (meshst_t), mainhdr->vbostofs } };
+m->meshvao = GLESVAO_CreateStatic (m->meshvbo, m->meshindexesvbo, attrs, countof (attrs));
+}
+#endif
 
 	free (vbodata);
 	free (ebodata);
@@ -324,7 +347,7 @@ void GLMesh_LoadVertexBuffers (void)
 		if (m->type != mod_alias) continue;
 
 		hdr = (aliashdr_t *) Mod_Extradata (m);
-		
+
 		GLMesh_LoadVertexBuffer (m, hdr);
 	}
 }
@@ -340,7 +363,6 @@ void GLMesh_DeleteVertexBuffers (void)
 {
 	int j;
 	qmodel_t *m;
-	
 	if (isDedicated)
 		return;
 
@@ -348,13 +370,15 @@ void GLMesh_DeleteVertexBuffers (void)
 	{
 		if (!(m = cl.model_precache[j])) continue;
 		if (m->type != mod_alias) continue;
-		
+
+#if defined(ANDROID_GLES3)
+		GLESVAO_DeleteStatic (&m->meshvao);
+#endif
 		GL_DeleteBuffersFunc (1, &m->meshvbo);
 		m->meshvbo = 0;
 
 		GL_DeleteBuffersFunc (1, &m->meshindexesvbo);
 		m->meshindexesvbo = 0;
 	}
-	
 	GL_ClearBufferBindings ();
 }

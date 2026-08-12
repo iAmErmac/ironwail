@@ -22,6 +22,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 //r_sprite.c -- sprite model rendering
 
 #include "quakedef.h"
+#if defined(ANDROID_GLES3)
+#include "gl_gles_vao.h"
+#endif
 
 typedef struct spritevert_t {
 	vec3_t		pos;
@@ -164,8 +167,14 @@ static void R_FlushSpriteInstances (void)
 
 	GL_Upload (GL_ARRAY_BUFFER, batchverts, sizeof(batchverts[0]) * 4 * numbatchquads, &buf, &ofs);
 	GL_BindBuffer (GL_ARRAY_BUFFER, buf);
-	GL_VertexAttribPointerFunc (0, 3, GL_FLOAT, GL_FALSE, sizeof(batchverts[0]), ofs + offsetof(spritevert_t, pos));
+	#if defined(ANDROID_GLES3)
+GLESVAO_BindDynamic ();
+#endif
+GL_VertexAttribPointerFunc (0, 3, GL_FLOAT, GL_FALSE, sizeof(batchverts[0]), ofs + offsetof(spritevert_t, pos));
 	GL_VertexAttribPointerFunc (1, 2, GL_FLOAT, GL_FALSE, sizeof(batchverts[0]), ofs + offsetof(spritevert_t, uv));
+#if defined(ANDROID_GLES3)
+	GLESVAO_UseLayout (GLES_LAYOUT_SPRITE, "sprite", buf, buf, GL_UNSIGNED_SHORT);
+#endif
 
 	GL_Upload (GL_ELEMENT_ARRAY_BUFFER, batchindices, sizeof(batchindices[0]) * 6 * numbatchquads, &buf, &ofs);
 	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, buf);
