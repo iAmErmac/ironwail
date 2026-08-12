@@ -413,8 +413,9 @@ static GLuint GL_CreateProgramFromSources (int count, const GLchar **sources, co
 	{
 		GLuint program = GL_CreateProgramFromShaders (shaders, realcount, name);
 #if defined(ANDROID_GLES3)
-		Con_Printf ("GLES shader link ok: %s stages=%d macros=%s\n",
-			name, realcount, macros[0] ? macros : "(none)");
+		if (developer.value)
+			Con_Printf ("GLES shader link ok: %s stages=%d macros=%s\n",
+				name, realcount, macros[0] ? macros : "(none)");
 #endif
 		return program;
 	}

@@ -121,6 +121,11 @@ void GL_PerfBeginFrame (void)
 	glperf_stats.stream_overflows = 0;
 	glperf_stats.alias_draws = 0;
 	glperf_stats.viewmodel_draws = 0;
+	glperf_stats.world_batch_source_draws = 0;
+	glperf_stats.world_batch_emitted_draws = 0;
+	glperf_stats.world_batch_batches = 0;
+	glperf_stats.world_batch_fallbacks = 0;
+	glperf_stats.world_batch_indices = 0;
 	glperf_stats.upload_array = 0;
 	glperf_stats.upload_element = 0;
 	glperf_stats.upload_uniform = 0;
@@ -161,7 +166,7 @@ void GL_PerfEndFrame (void)
 		if (++report_frames >= 120 && r_speeds.value == 3)
 		{
 			size_t uploads = glperf_stats.upload_array + glperf_stats.upload_element + glperf_stats.upload_uniform + glperf_stats.upload_storage + glperf_stats.upload_indirect;
-			Con_Printf ("GLES perf: cpu=%.3f gpu=%.3f valid=%d draws=%d stalls=%d binds=%d/%d/%d vao=%d layouts=%d tex=%d units=%d uploads=%zu realloc=%d streams=%zu/%zu peak=%zu/%zu(%d/%d) overflow=%d ubo=%zu peak=%zu uploads=%d ranges=%d/%d overflow=%d models=%d/%d tier=%s\n", glperf_stats.frame_ms, glperf_stats.gpu_frame_ms, glperf_stats.gpu_frame_valid, glperf_stats.draws, glperf_stats.gpu_stalls, glperf_stats.program_binds, glperf_stats.buffer_binds, glperf_stats.buffer_range_binds, glperf_stats.vao_binds, glperf_stats.layout_changes, glperf_stats.texture_binds, glperf_stats.texture_unit_changes, uploads, glperf_stats.stream_reallocs, glperf_stats.stream_vbo_bytes, glperf_stats.stream_ebo_bytes, glperf_stats.stream_vbo_peak, glperf_stats.stream_ebo_peak, glperf_stats.stream_vbo_uploads, glperf_stats.stream_ebo_uploads, glperf_stats.stream_overflows, glperf_stats.ubo_bytes, glperf_stats.ubo_peak, glperf_stats.ubo_uploads, glperf_stats.ubo_range_binds, glperf_stats.ubo_range_skips, glperf_stats.ubo_overflows, glperf_stats.alias_draws, glperf_stats.viewmodel_draws, GL_PerfRendererTier ());
+			Con_Printf ("GLES perf: cpu=%.3f gpu=%.3f valid=%d draws=%d stalls=%d binds=%d/%d/%d vao=%d layouts=%d tex=%d units=%d uploads=%zu realloc=%d streams=%zu/%zu peak=%zu/%zu(%d/%d) overflow=%d ubo=%zu peak=%zu uploads=%d ranges=%d/%d overflow=%d models=%d/%d batch=%d/%d/%d/%d idx=%zu tier=%s\n", glperf_stats.frame_ms, glperf_stats.gpu_frame_ms, glperf_stats.gpu_frame_valid, glperf_stats.draws, glperf_stats.gpu_stalls, glperf_stats.program_binds, glperf_stats.buffer_binds, glperf_stats.buffer_range_binds, glperf_stats.vao_binds, glperf_stats.layout_changes, glperf_stats.texture_binds, glperf_stats.texture_unit_changes, uploads, glperf_stats.stream_reallocs, glperf_stats.stream_vbo_bytes, glperf_stats.stream_ebo_bytes, glperf_stats.stream_vbo_peak, glperf_stats.stream_ebo_peak, glperf_stats.stream_vbo_uploads, glperf_stats.stream_ebo_uploads, glperf_stats.stream_overflows, glperf_stats.ubo_bytes, glperf_stats.ubo_peak, glperf_stats.ubo_uploads, glperf_stats.ubo_range_binds, glperf_stats.ubo_range_skips, glperf_stats.ubo_overflows, glperf_stats.alias_draws, glperf_stats.viewmodel_draws, glperf_stats.world_batch_source_draws, glperf_stats.world_batch_emitted_draws, glperf_stats.world_batch_batches, glperf_stats.world_batch_fallbacks, glperf_stats.world_batch_indices, GL_PerfRendererTier ());
 			report_frames = 0;
 		}
 	}

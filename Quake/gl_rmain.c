@@ -81,6 +81,7 @@ cvar_t	r_speeds = {"r_speeds","0",CVAR_NONE};
 cvar_t	r_gles_vao_validate = {"r_gles_vao_validate","0",CVAR_NONE};
 cvar_t	r_gles_static_vao = {"r_gles_static_vao","1",CVAR_NONE};
 cvar_t	r_gles_ubo_validate = {"r_gles_ubo_validate","0",CVAR_NONE};
+cvar_t	r_gles_world_batch = {"r_gles_world_batch","1",CVAR_NONE};
 #endif
 cvar_t	r_pos = {"r_pos","0",CVAR_NONE};
 cvar_t	r_fullbright = {"r_fullbright","0",CVAR_NONE};
