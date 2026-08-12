@@ -41,6 +41,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "android_render_target.h"
 #include "gl_gles_vao.h"
 #include "gl_gles_stream.h"
+#include "gl_gles_ubo.h"
 #endif
 
 //ericw -- for putting the driver into multithreaded mode
@@ -1456,6 +1457,7 @@ static void GL_Init (void)
 	GL_CreateFrameResources ();
 #if defined(ANDROID_GLES3)
 	GLESStream_Create ();
+	GLESUBO_Create ();
 #endif
 }
 
@@ -1527,6 +1529,7 @@ void GL_BeginRendering (int *x, int *y, int *width, int *height)
 	GL_AcquireFrameResources ();
 #if defined(ANDROID_GLES3)
 	GLESStream_Acquire ();
+	GLESUBO_Acquire ();
 #endif
 	GLPalette_UpdateLookupTable ();
 	TexMgr_ApplySettings ();

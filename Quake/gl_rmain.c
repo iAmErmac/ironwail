@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #if defined(ANDROID_GLES3)
+#include "gl_gles_ubo.h"
 #include "gl_gles_vao.h"
 #endif
 #if defined(ANDROID_GLES3)
@@ -79,6 +80,7 @@ cvar_t	r_speeds = {"r_speeds","0",CVAR_NONE};
 #if defined(ANDROID_GLES3)
 cvar_t	r_gles_vao_validate = {"r_gles_vao_validate","0",CVAR_NONE};
 cvar_t	r_gles_static_vao = {"r_gles_static_vao","1",CVAR_NONE};
+cvar_t	r_gles_ubo_validate = {"r_gles_ubo_validate","0",CVAR_NONE};
 #endif
 cvar_t	r_pos = {"r_pos","0",CVAR_NONE};
 cvar_t	r_fullbright = {"r_fullbright","0",CVAR_NONE};

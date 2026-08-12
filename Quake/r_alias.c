@@ -28,6 +28,7 @@ extern cvar_t r_gles_static_vao;
 #endif
 #if defined(ANDROID_GLES3)
 #include "gl_gles_vao.h"
+#include "gl_gles_ubo.h"
 #endif
 
 extern cvar_t gl_overbright_models, gl_fullbrights, r_lerpmodels, r_lerpmove; //johnfitz
@@ -482,11 +483,15 @@ anim = (int)(cl.time * 10) & 3;
 		for (instance_index = 0; instance_index < ibuf.count; instance_index++)
 		{
 			aliasinstance_t *instance = &ibuf.inst[instance_index];
-			GL_Uniform4fvFunc (4, 3, instance->worldmatrix);
-			GL_Uniform4fvFunc (7, 1, instance->lightcolor);
-			GL_Uniform1iFunc (8, instance->pose1);
-			GL_Uniform1iFunc (9, instance->pose2);
-			GL_Uniform1fFunc (10, instance->blend);
+			gles_object_ubo_t object;
+            GLuint object_buffer;
+            GLbyte *object_offset;
+            memcpy (object.worldmatrix, instance->worldmatrix, sizeof (object.worldmatrix));
+            memcpy (object.lightcolor, instance->lightcolor, sizeof (object.lightcolor));
+            object.pose1 = instance->pose1; object.pose2 = instance->pose2;
+            object.blend_bits = (int)(instance->blend * 65536.0f); object.alpha_bits = 0;
+            object_buffer = GLESUBO_Upload (&object, sizeof (object), &object_offset, "alias-object");
+            GLESUBO_BindRange (2, object_buffer, (GLintptr)object_offset, sizeof (object), "alias-object");
 			GL_PerfCountAliasDraw (ibuf.ent == &cl.viewent);
 			GL_PerfCountDraws (1);
 			glDrawElements (GL_TRIANGLES, hdr->numindexes, GL_UNSIGNED_SHORT, (void*)hdr->eboofs);
@@ -526,11 +531,15 @@ anim = (int)(cl.time * 10) & 3;
 			for (instance_index = 0; instance_index < ibuf.count; instance_index++)
 			{
 				aliasinstance_t *instance = &ibuf.inst[instance_index];
-				GL_Uniform4fvFunc (4, 3, instance->worldmatrix);
-				GL_Uniform4fvFunc (7, 1, instance->lightcolor);
-				GL_Uniform1iFunc (8, instance->pose1);
-				GL_Uniform1iFunc (9, instance->pose2);
-				GL_Uniform1fFunc (10, instance->blend);
+				gles_object_ubo_t object;
+            GLuint object_buffer;
+            GLbyte *object_offset;
+            memcpy (object.worldmatrix, instance->worldmatrix, sizeof (object.worldmatrix));
+            memcpy (object.lightcolor, instance->lightcolor, sizeof (object.lightcolor));
+            object.pose1 = instance->pose1; object.pose2 = instance->pose2;
+            object.blend_bits = (int)(instance->blend * 65536.0f); object.alpha_bits = 0;
+            object_buffer = GLESUBO_Upload (&object, sizeof (object), &object_offset, "alias-object");
+            GLESUBO_BindRange (2, object_buffer, (GLintptr)object_offset, sizeof (object), "alias-object");
 				GL_PerfCountAliasDraw (ibuf.ent == &cl.viewent);
 			GL_PerfCountDraws (1);
 				glDrawElements (GL_TRIANGLES, hdr->numindexes, GL_UNSIGNED_SHORT, (void*)hdr->eboofs);
