@@ -599,7 +599,7 @@ void Draw_Flush (void)
 	GL_SetState (glcanvas.blendmode | GLS_NO_ZTEST | GLS_NO_ZWRITE | GLS_CULL_NONE | GLS_ATTRIBS(3));
 	GL_Bind (GL_TEXTURE0, glcanvas.texture);
 
-	GL_Upload (GL_ARRAY_BUFFER, batchverts, sizeof(batchverts[0]) * 4 * numbatchquads, &buf, &ofs);
+	GL_UploadTransient (GL_ARRAY_BUFFER, batchverts, sizeof(batchverts[0]) * 4 * numbatchquads, buf, ofs, "gui");
 	GL_BindBuffer (GL_ARRAY_BUFFER, buf);
 	#if defined(ANDROID_GLES3)
 GLESVAO_BindDynamic ();
@@ -611,7 +611,7 @@ GL_VertexAttribPointerFunc (0, 2, GL_FLOAT, GL_FALSE, sizeof(batchverts[0]), ofs
 	GLESVAO_UseLayout (GLES_LAYOUT_GUI, "gui", buf, buf, GL_UNSIGNED_SHORT);
 #endif
 
-	GL_Upload (GL_ELEMENT_ARRAY_BUFFER, batchindices, sizeof(batchindices[0]) * 6 * numbatchquads, &buf, &ofs);
+	GL_UploadTransient (GL_ELEMENT_ARRAY_BUFFER, batchindices, sizeof(batchindices[0]) * 6 * numbatchquads, buf, ofs, "gui");
 	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, buf);
 	GL_PerfCountDraws (1);
 	glDrawElements (GL_TRIANGLES, numbatchquads * 6, GL_UNSIGNED_SHORT, ofs);

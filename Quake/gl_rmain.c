@@ -1263,7 +1263,7 @@ void R_FlushDebugGeometry (void)
 			state |= GLS_NO_ZTEST;
 		GL_SetState (state);
 
-		GL_Upload (GL_ARRAY_BUFFER, debugverts, sizeof (debugverts[0]) * numdebugverts, &buf, &ofs);
+		GL_UploadTransient (GL_ARRAY_BUFFER, debugverts, sizeof (debugverts[0]) * numdebugverts, buf, ofs, "debug");
 		GL_BindBuffer (GL_ARRAY_BUFFER, buf);
 		#if defined(ANDROID_GLES3)
 GLESVAO_BindDynamic ();
@@ -1274,7 +1274,7 @@ GL_VertexAttribPointerFunc (0, 3, GL_FLOAT, GL_FALSE, sizeof (debugverts[0]), of
 		GLESVAO_UseLayout (GLES_LAYOUT_DEBUG, "debug", buf, buf, GL_UNSIGNED_SHORT);
 #endif
 
-		GL_Upload (GL_ELEMENT_ARRAY_BUFFER, debugidx, sizeof (debugidx[0]) * numdebugidx, &buf, &ofs);
+		GL_UploadTransient (GL_ELEMENT_ARRAY_BUFFER, debugidx, sizeof (debugidx[0]) * numdebugidx, buf, ofs, "debug");
 		GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, buf);
 		GL_PerfCountDraws (1);
 		glDrawElements (GL_LINES, numdebugidx, GL_UNSIGNED_SHORT, ofs);

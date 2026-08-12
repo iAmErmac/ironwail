@@ -387,6 +387,15 @@ typedef struct glperf_stats_s {
  int vao_binds;
  int layout_changes;
  int stream_reallocs;
+ size_t stream_vbo_bytes;
+ size_t stream_vbo_peak;
+ size_t stream_ebo_bytes;
+ size_t stream_ebo_peak;
+ int stream_vbo_uploads;
+ int stream_ebo_uploads;
+ int stream_overflows;
+ int alias_draws;
+ int viewmodel_draws;
  size_t upload_array;
  size_t upload_element;
  size_t upload_uniform;
@@ -398,6 +407,7 @@ extern glperf_stats_t glperf_stats;
 void GL_PerfBeginFrame (void);
 void GL_PerfEndFrame (void);
 void GL_PerfCountDraws (int count);
+void GL_PerfCountAliasDraw (qboolean viewmodel);
 void GL_PerfSetTextureMemory (size_t bytes);
 void GL_PerfCountProgramBind (void);
 void GL_PerfCountBufferBind (void);
@@ -703,7 +713,8 @@ GLuint GL_CreateBuffer (GLenum target, GLenum usage, const char *name, size_t si
 void GL_DeleteBuffer (GLuint buffer);
 void GL_ClearBufferBindings (void);
 void GL_InvalidateBufferBinding (GLenum target);
-void GL_ForceVertexAttribCount (int count);
+void GL_ForceVertexAttribState (int count, int instanced_count);
+void GL_ReapplyVertexAttribState (void);
 
 void GL_CreateFrameResources (void);
 void GL_InvalidateFrameResources (void);
@@ -712,6 +723,12 @@ void GL_RestoreContextResources (void);
 #endif
 void GL_DeleteFrameResources (void);
 void GL_Upload (GLenum target, const void *data, size_t numbytes, GLuint *outbuf, GLbyte **outofs);
+#if defined(ANDROID_GLES3)
+GLuint GLESStream_Upload (GLenum target, const void *data, size_t numbytes, GLbyte **outofs, const char *owner);
+#define GL_UploadTransient(target, data, numbytes, outbuf, outofs, owner) ((outbuf) = GLESStream_Upload ((target), (data), (numbytes), &(outofs), (owner)))
+#else
+#define GL_UploadTransient(target, data, numbytes, outbuf, outofs, owner) GL_Upload ((target), (data), (numbytes), &(outbuf), &(outofs))
+#endif
 void GL_ReserveDeviceMemory (GLenum target, size_t numbytes, GLuint *outbuf, size_t *outofs);
 void GL_AcquireFrameResources (void);
 void GL_ReleaseFrameResources (void);

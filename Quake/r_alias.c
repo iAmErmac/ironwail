@@ -412,6 +412,10 @@ anim = (int)(cl.time * 10) & 3;
 	}
 
 	#if defined(ANDROID_GLES3)
+	GL_BindBufferRange (GL_SHADER_STORAGE_BUFFER, 2, buffers[1], offsets[1], sizes[1]);
+#endif
+
+	#if defined(ANDROID_GLES3)
 	if (r_gles_static_vao.value)
 		GLESVAO_BindStatic (model->meshvao, poseverttype == PV_IQM ? GLES_LAYOUT_ALIAS_IQM : GLES_LAYOUT_ALIAS_MESH, poseverttype == PV_IQM ? 5 : 1);
 	else
@@ -432,6 +436,7 @@ anim = (int)(cl.time * 10) & 3;
 #else
 	GL_BindBuffer (GL_ARRAY_BUFFER, model->meshvbo);
 	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, model->meshindexesvbo);
+	GL_BindBuffersRange (GL_SHADER_STORAGE_BUFFER, 1, 2, buffers, offsets, sizes);
 	if (poseverttype == PV_IQM)
 	{
 		GL_VertexAttribPointerFunc (0, 3, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), (void*)(mainhdr->vbovertofs + offsetof (iqmvert_t, xyz)));
@@ -482,6 +487,7 @@ anim = (int)(cl.time * 10) & 3;
 			GL_Uniform1iFunc (8, instance->pose1);
 			GL_Uniform1iFunc (9, instance->pose2);
 			GL_Uniform1fFunc (10, instance->blend);
+			GL_PerfCountAliasDraw (ibuf.ent == &cl.viewent);
 			GL_PerfCountDraws (1);
 			glDrawElements (GL_TRIANGLES, hdr->numindexes, GL_UNSIGNED_SHORT, (void*)hdr->eboofs);
 		}
@@ -525,7 +531,8 @@ anim = (int)(cl.time * 10) & 3;
 				GL_Uniform1iFunc (8, instance->pose1);
 				GL_Uniform1iFunc (9, instance->pose2);
 				GL_Uniform1fFunc (10, instance->blend);
-				GL_PerfCountDraws (1);
+				GL_PerfCountAliasDraw (ibuf.ent == &cl.viewent);
+			GL_PerfCountDraws (1);
 				glDrawElements (GL_TRIANGLES, hdr->numindexes, GL_UNSIGNED_SHORT, (void*)hdr->eboofs);
 			}
 #else
