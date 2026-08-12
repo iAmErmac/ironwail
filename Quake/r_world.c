@@ -37,6 +37,7 @@ extern GLuint gl_bmodel_vbo;
 #if defined(ANDROID_GLES3)
 extern GLuint gl_bmodel_vao;
 extern cvar_t r_gles_static_vao;
+extern cvar_t r_gles_world_batch;
 #endif
 extern size_t gl_bmodel_vbo_size;
 extern GLuint gl_bmodel_ibo;
@@ -336,15 +337,50 @@ static void R_FlushBModelCalls (void)
 				GL_Uniform4fvFunc (0, 3, identity_matrix);
 				if (gles_world_program)
 					GL_Uniform1fFunc (132, bmodel_calls.bound.params[i].alpha);
-				for (surfindex = 0; surfindex < cl.worldmodel->numsurfaces; surfindex++)
-				{
-					msurface_t *surf = &cl.worldmodel->surfaces[surfindex];
-					if (surf->vbo_cmd != src || surf->visframe != r_visframecount)
-						continue;
-					GL_PerfCountDraws (1);
-					glDrawElements (GL_TRIANGLES, (GLsizei)((q_max (surf->numedges, 2) - 2) * 3), GL_UNSIGNED_INT,
-						(const void *)((size_t)surf->vbo_firstindex * sizeof (GLuint)));
-					}
+                for (surfindex = 0; surfindex < cl.worldmodel->numsurfaces; surfindex++)
+                {
+                    msurface_t *surf = &cl.worldmodel->surfaces[surfindex];
+                    int draw_indices;
+                    int first_index;
+                    int draw_surfaces = 1;
+                    if (surf->vbo_cmd != src || surf->visframe != r_visframecount)
+                        continue;
+                    draw_indices = (q_max (surf->numedges, 2) - 2) * 3;
+                    first_index = surf->vbo_firstindex;
+#if defined(ANDROID_GLES3)
+                    if (r_gles_world_batch.value)
+                    {
+                        int next = surfindex + 1;
+                        while (draw_surfaces < 256 && next < cl.worldmodel->numsurfaces)
+                        {
+                            msurface_t *adjacent = &cl.worldmodel->surfaces[next];
+                            int adjacent_indices;
+                            if (adjacent->vbo_cmd != src || adjacent->visframe != r_visframecount ||
+                                adjacent->vbo_firstindex != first_index + draw_indices)
+                                break;
+                            adjacent_indices = (q_max (adjacent->numedges, 2) - 2) * 3;
+                            if (draw_indices + adjacent_indices > 65535)
+                                break;
+                            draw_indices += adjacent_indices;
+                            draw_surfaces++;
+                            next++;
+                        }
+                        glperf_stats.world_batch_source_draws += draw_surfaces;
+                        glperf_stats.world_batch_indices += draw_indices;
+                        if (draw_surfaces > 1)
+                            glperf_stats.world_batch_batches++;
+                        else
+                            glperf_stats.world_batch_fallbacks++;
+                        surfindex += draw_surfaces - 1;
+                    }
+#endif
+                    GL_PerfCountDraws (1);
+#if defined(ANDROID_GLES3)
+                    glperf_stats.world_batch_emitted_draws++;
+#endif
+                    glDrawElements (GL_TRIANGLES, draw_indices, GL_UNSIGNED_INT,
+                        (const void *)((size_t)first_index * sizeof (GLuint)));
+                }
 			}
 			else
 			{

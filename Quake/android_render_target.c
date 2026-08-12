@@ -7,6 +7,7 @@
 
 #define IW_TARGET_LOG(...) __android_log_print(ANDROID_LOG_INFO, "IronwailGLES", __VA_ARGS__)
 #define IW_TARGET_WARN(...) __android_log_print(ANDROID_LOG_WARN, "IronwailGLES", __VA_ARGS__)
+#define IW_TARGET_DEBUG(...) __android_log_print(ANDROID_LOG_DEBUG, "IronwailGLES", __VA_ARGS__)
 
 static void IW_ClearErrors(void)
 {
@@ -78,7 +79,7 @@ static qboolean IW_ProbeTarget(const char *label, GLenum color_format, int width
     error = glGetError();
     result = status == GL_FRAMEBUFFER_COMPLETE && error == GL_NO_ERROR;
     if (result)
-        IW_TARGET_LOG("format probe %s passed status=0x%04x gl_error=0x%04x", label, status, error);
+        IW_TARGET_DEBUG("format probe %s passed status=0x%04x gl_error=0x%04x", label, status, error);
     else
         IW_TARGET_WARN("format probe %s failed status=0x%04x gl_error=0x%04x fallback=base-direct-draw", label, status, error);
 
@@ -116,9 +117,9 @@ static qboolean IW_ProbeIntegerImage(void)
     glBindImageTexture(0, texture, 0, GL_TRUE, 0, GL_READ_WRITE, GL_RG32UI);
     error = glGetError();
     if (error != GL_NO_ERROR)
-        IW_TARGET_WARN("format probe integer-image failed status=0x0000 gl_error=0x%04x fallback=disabled", error);
+        IW_TARGET_DEBUG("format probe integer-image unavailable status=0x0000 gl_error=0x%04x fallback=disabled", error);
     else
-        IW_TARGET_LOG("format probe integer-image passed status=0x0000 gl_error=0x0000");
+        IW_TARGET_DEBUG("format probe integer-image passed status=0x0000 gl_error=0x0000");
     glBindImageTexture(0, 0, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RG32UI);
     glDeleteTextures(1, &texture);
     glActiveTexture((GLenum)old_active);

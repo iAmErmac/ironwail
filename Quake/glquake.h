@@ -402,6 +402,11 @@ typedef struct glperf_stats_s {
  int stream_overflows;
  int alias_draws;
  int viewmodel_draws;
+ int world_batch_source_draws;
+ int world_batch_emitted_draws;
+ int world_batch_batches;
+ int world_batch_fallbacks;
+ size_t world_batch_indices;
  size_t upload_array;
  size_t upload_element;
  size_t upload_uniform;
