@@ -296,10 +296,10 @@ void GLMesh_LoadVertexBuffer (qmodel_t *m, aliashdr_t *mainhdr)
 	}
 
 	// upload indexes buffer
-	GL_DeleteBuffer (m->meshindexesvbo);
 #if defined(ANDROID_GLES3)
-GLESVAO_DeleteStatic (&m->meshvao);
+	GLESVAO_DeleteStatic (&m->meshvao);
 #endif
+	GL_DeleteBuffer (m->meshindexesvbo);
 	m->meshindexesvbo = GL_CreateBuffer (GL_ELEMENT_ARRAY_BUFFER, GL_STATIC_DRAW, va ("%s indices", m->name), numindexes * sizeof (unsigned short), ebodata);
 
 	// upload vertexes buffer

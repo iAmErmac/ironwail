@@ -165,7 +165,7 @@ static void R_FlushSpriteInstances (void)
 
 	GL_Bind (GL_TEXTURE0, showtris ? whitetexture : batchtexture);
 
-	GL_Upload (GL_ARRAY_BUFFER, batchverts, sizeof(batchverts[0]) * 4 * numbatchquads, &buf, &ofs);
+	GL_UploadTransient (GL_ARRAY_BUFFER, batchverts, sizeof(batchverts[0]) * 4 * numbatchquads, buf, ofs, "sprite");
 	GL_BindBuffer (GL_ARRAY_BUFFER, buf);
 	#if defined(ANDROID_GLES3)
 GLESVAO_BindDynamic ();
@@ -176,7 +176,7 @@ GL_VertexAttribPointerFunc (0, 3, GL_FLOAT, GL_FALSE, sizeof(batchverts[0]), ofs
 	GLESVAO_UseLayout (GLES_LAYOUT_SPRITE, "sprite", buf, buf, GL_UNSIGNED_SHORT);
 #endif
 
-	GL_Upload (GL_ELEMENT_ARRAY_BUFFER, batchindices, sizeof(batchindices[0]) * 6 * numbatchquads, &buf, &ofs);
+	GL_UploadTransient (GL_ELEMENT_ARRAY_BUFFER, batchindices, sizeof(batchindices[0]) * 6 * numbatchquads, buf, ofs, "sprite");
 	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, buf);
 	GL_PerfCountDraws (1);
 	glDrawElements (GL_TRIANGLES, 6 * numbatchquads, GL_UNSIGNED_SHORT, ofs);

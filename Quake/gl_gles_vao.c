@@ -72,7 +72,9 @@ void GLESVAO_BindGlobal (GLuint vao)
         GLESVAO_RecordBind ();
     }
     GL_BindVertexArrayFunc (vao);
+    GL_InvalidateBufferBinding (GL_ARRAY_BUFFER);
     GL_InvalidateBufferBinding (GL_ELEMENT_ARRAY_BUFFER);
+    GL_ReapplyVertexAttribState ();
 }
 
 void GLESVAO_BindDynamic (void)
@@ -125,13 +127,14 @@ void GLESVAO_BindStatic (GLuint vao, gles_layout_id_t layout, int attribute_coun
     {
         gles_bound_vao = vao;
         GL_BindVertexArrayFunc (vao);
+        GL_InvalidateBufferBinding (GL_ARRAY_BUFFER);
         GL_InvalidateBufferBinding (GL_ELEMENT_ARRAY_BUFFER);
         GLESVAO_RecordBind ();
     }
     if (gles_current_layout != layout)
         GLESVAO_RecordLayoutChange ();
     gles_current_layout = layout;
-    GL_ForceVertexAttribCount (attribute_count);
+    GL_ForceVertexAttribState (attribute_count, 0);
 }
 
 void GLESVAO_RecordLayoutChange (void)
