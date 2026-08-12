@@ -23,6 +23,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 //r_alias.c -- alias model rendering
 
 #include "quakedef.h"
+#if defined(ANDROID_GLES3)
+extern cvar_t r_gles_static_vao;
+#endif
+#if defined(ANDROID_GLES3)
+#include "gl_gles_vao.h"
+#endif
 
 extern cvar_t gl_overbright_models, gl_fullbrights, r_lerpmodels, r_lerpmove; //johnfitz
 extern cvar_t scr_fov, cl_gun_fovscale, cl_gun_x, cl_gun_y, cl_gun_z;
@@ -405,14 +411,27 @@ anim = (int)(cl.time * 10) & 3;
 		return;
 	}
 
+	#if defined(ANDROID_GLES3)
+	if (r_gles_static_vao.value)
+		GLESVAO_BindStatic (model->meshvao, poseverttype == PV_IQM ? GLES_LAYOUT_ALIAS_IQM : GLES_LAYOUT_ALIAS_MESH, poseverttype == PV_IQM ? 5 : 1);
+	else
+	{
+		GL_BindBuffer (GL_ARRAY_BUFFER, model->meshvbo);
+		GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, model->meshindexesvbo);
+		if (poseverttype == PV_IQM)
+		{
+			GL_VertexAttribPointerFunc (0, 3, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), (void*)(mainhdr->vbovertofs + offsetof (iqmvert_t, xyz)));
+			GL_VertexAttribPointerFunc (1, 4, GL_BYTE, GL_TRUE, sizeof (iqmvert_t), (void*)(mainhdr->vbovertofs + offsetof (iqmvert_t, norm)));
+			GL_VertexAttribPointerFunc (2, 2, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), (void*)(mainhdr->vbovertofs + offsetof (iqmvert_t, st)));
+			GL_VertexAttribPointerFunc (3, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof (iqmvert_t), (void*)(mainhdr->vbovertofs + offsetof (iqmvert_t, weight)));
+			GL_VertexAttribIPointerFunc (4, 4, GL_UNSIGNED_BYTE, sizeof (iqmvert_t), (void*)(mainhdr->vbovertofs + offsetof (iqmvert_t, idx)));
+		}
+		else
+			GL_VertexAttribPointerFunc (0, 2, GL_FLOAT, GL_FALSE, sizeof (meshst_t), (void*)mainhdr->vbostofs);
+	}
+#else
 	GL_BindBuffer (GL_ARRAY_BUFFER, model->meshvbo);
 	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, model->meshindexesvbo);
-#if defined(ANDROID_GLES3)
-	GL_BindBufferRange (GL_SHADER_STORAGE_BUFFER, 2, buffers[1], offsets[1], sizes[1]);
-#else
-	GL_BindBuffersRange (GL_SHADER_STORAGE_BUFFER, 1, 2, buffers, offsets, sizes);
-#endif
-
 	if (poseverttype == PV_IQM)
 	{
 		GL_VertexAttribPointerFunc (0, 3, GL_FLOAT, GL_FALSE, sizeof (iqmvert_t), (void*)(mainhdr->vbovertofs + offsetof (iqmvert_t, xyz)));
@@ -421,11 +440,16 @@ anim = (int)(cl.time * 10) & 3;
 		GL_VertexAttribPointerFunc (3, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof (iqmvert_t), (void*)(mainhdr->vbovertofs + offsetof (iqmvert_t, weight)));
 		GL_VertexAttribIPointerFunc (4, 4, GL_UNSIGNED_BYTE, sizeof (iqmvert_t), (void*)(mainhdr->vbovertofs + offsetof (iqmvert_t, idx)));
 	}
-	else // PV_QUAKE1 || PV_MD3
-	{
+	else
 		GL_VertexAttribPointerFunc (0, 2, GL_FLOAT, GL_FALSE, sizeof (meshst_t), (void*)mainhdr->vbostofs);
-	}
+#endif
 
+#if defined(ANDROID_GLES3)
+	if (poseverttype == PV_IQM)
+		GLESVAO_UseLayout (GLES_LAYOUT_ALIAS_IQM, "alias-iqm", model->meshvbo, model->meshindexesvbo, GL_UNSIGNED_SHORT);
+	else
+		GLESVAO_UseLayout (GLES_LAYOUT_ALIAS_MESH, "alias-mesh", model->meshvbo, model->meshindexesvbo, GL_UNSIGNED_SHORT);
+#endif
 	if (!translucent)
 		GL_SetState (opaque_state);
 

@@ -471,6 +471,7 @@ void GL_UseProgram (GLuint program)
 	if (program == gl_current_program)
 		return;
 	gl_current_program = program;
+	GL_PerfCountProgramBind ();
 	GL_UseProgramFunc (program);
 }
 

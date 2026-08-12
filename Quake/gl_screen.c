@@ -1022,15 +1022,15 @@ static void SCR_DrawDevStats (void)
 
 	if (r_speeds.value == 3)
 	{
-		char perf[64];
+		char perf[192];
 		double fps = glperf_stats.frame_ms > 0.0 ? 1000.0 / glperf_stats.frame_ms : 0.0;
 		double gpu = glperf_stats.gpu_frame_ms;
-		snprintf (perf, sizeof (perf), "Perf %4.1f fps CPU %4.1f GPU %4.1f", fps, glperf_stats.frame_ms, gpu);
+		snprintf (perf, sizeof (perf), "Perf %4.1f fps CPU %4.1f GPU %4.1f%s", fps, glperf_stats.frame_ms, gpu, glperf_stats.gpu_frame_valid ? "" : "*" );
  GL_SetCanvas (CANVAS_BOTTOMLEFT);
 		x = 0;
 		y = 8;
 		Draw_String (x, (y++) * 8 - x, perf);
-		snprintf (perf, sizeof (perf), "Draws %4i stalls %3i tex %4.1fM %s", glperf_stats.draws, glperf_stats.gpu_stalls, glperf_stats.texture_memory / (1024.0 * 1024.0), GL_PerfRendererTier ());
+		snprintf (perf, sizeof (perf), "Draws %4i stalls %3i tex %4.1fM P/B/R/V/L %d/%d/%d/%d/%d T/U %d/%d up %zu/%zu/%zu/%zu/%zu", glperf_stats.draws, glperf_stats.gpu_stalls, glperf_stats.texture_memory / (1024.0 * 1024.0), glperf_stats.program_binds, glperf_stats.buffer_binds, glperf_stats.buffer_range_binds, glperf_stats.vao_binds, glperf_stats.layout_changes, glperf_stats.texture_binds, glperf_stats.texture_unit_changes, glperf_stats.upload_array, glperf_stats.upload_element, glperf_stats.upload_uniform, glperf_stats.upload_storage, glperf_stats.upload_indirect);
 		Draw_String (x, (y++) * 8 - x, perf);
 		return;
 	}

@@ -23,6 +23,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // r_world.c: world model rendering
 
 #include "quakedef.h"
+#if defined(ANDROID_GLES3)
+#include "gl_gles_vao.h"
+#endif
 
 extern cvar_t gl_fullbrights, r_oldskyleaf, r_showtris; //johnfitz
 extern cvar_t gl_zfix; // QuakeSpasm z-fighting fix
@@ -31,6 +34,10 @@ extern cvar_t r_oit;
 extern gltexture_t *lightmap_texture;
 
 extern GLuint gl_bmodel_vbo;
+#if defined(ANDROID_GLES3)
+extern GLuint gl_bmodel_vao;
+extern cvar_t r_gles_static_vao;
+#endif
 extern size_t gl_bmodel_vbo_size;
 extern GLuint gl_bmodel_ibo;
 extern size_t gl_bmodel_ibo_size;
@@ -291,12 +298,27 @@ static void R_FlushBModelCalls (void)
 			if (r_framedata.numlights > 0)
 				GL_Uniform4fvFunc (4, r_framedata.numlights * 2, (const GLfloat *)r_lightbuffer.lights);
 		}
+		#if defined(ANDROID_GLES3)
+		if (r_gles_static_vao.value)
+			GLESVAO_BindStatic (gl_bmodel_vao, GLES_LAYOUT_WORLD, 4);
+		else
+		{
+			GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, gl_bmodel_ibo);
+			GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_vbo);
+			GL_VertexAttribPointerFunc (0, 3, GL_FLOAT, GL_FALSE, sizeof (glvert_t), (void *) offsetof (glvert_t, pos));
+			GL_VertexAttribPointerFunc (1, 4, GL_FLOAT, GL_FALSE, sizeof (glvert_t), (void *) offsetof (glvert_t, st));
+			GL_VertexAttribPointerFunc (2, 1, GL_FLOAT, GL_FALSE, sizeof (glvert_t), (void *) offsetof (glvert_t, lmofs));
+			GL_VertexAttribIPointerFunc (3, 1, GL_UNSIGNED_INT, sizeof (glvert_t), (void *) offsetof (glvert_t, styles));
+		}
+		GLESVAO_UseLayout (GLES_LAYOUT_WORLD, "world", gl_bmodel_vbo, gl_bmodel_ibo, GL_UNSIGNED_INT);
+#else
 		GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, gl_bmodel_ibo);
 		GL_BindBuffer (GL_ARRAY_BUFFER, gl_bmodel_vbo);
 		GL_VertexAttribPointerFunc (0, 3, GL_FLOAT, GL_FALSE, sizeof (glvert_t), (void *) offsetof (glvert_t, pos));
 		GL_VertexAttribPointerFunc (1, 4, GL_FLOAT, GL_FALSE, sizeof (glvert_t), (void *) offsetof (glvert_t, st));
 		GL_VertexAttribPointerFunc (2, 1, GL_FLOAT, GL_FALSE, sizeof (glvert_t), (void *) offsetof (glvert_t, lmofs));
 		GL_VertexAttribIPointerFunc (3, 1, GL_UNSIGNED_INT, sizeof (glvert_t), (void *) offsetof (glvert_t, styles));
+#endif
 		GL_Upload (GL_SHADER_STORAGE_BUFFER, &bmodel_calls.bound.params, sizeof (bmodel_calls.bound.params[0]) * num_bmodel_calls, &buf, &ofs);
 		GL_BindBufferRange (GL_SHADER_STORAGE_BUFFER, 1, buf, (GLintptr)ofs, sizeof (bmodel_calls.bound.params[0]) * num_bmodel_calls);
 		if (!gles_skycubemap_program)

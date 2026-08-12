@@ -53,6 +53,11 @@ extern cvar_t r_alphasort;
 extern cvar_t r_oit;
 extern cvar_t r_dither;
 
+#if defined(ANDROID_GLES3)
+extern cvar_t r_gles_vao_validate;
+extern cvar_t r_gles_static_vao;
+#endif
+
 #if defined(USE_SIMD)
 extern cvar_t r_simd;
 #endif
@@ -311,6 +316,10 @@ void R_Init (void)
 	R_SIMD_f(&r_simd);
 #endif
 	Cvar_RegisterVariable (&r_speeds);
+#if defined(ANDROID_GLES3)
+	Cvar_RegisterVariable (&r_gles_vao_validate);
+Cvar_RegisterVariable (&r_gles_static_vao);
+#endif
 	Cvar_RegisterVariable (&r_pos);
 	Cvar_RegisterVariable (&r_alphasort);
 	Cvar_RegisterVariable (&r_oit);
@@ -623,6 +632,7 @@ void GL_BindBuffer (GLenum target, GLuint buffer)
 	if (*cache != buffer)
 	{
 		*cache = buffer;
+		GL_PerfCountBufferBind ();
 	apply:
 		GL_BindBufferFunc (target, buffer);
 	}
@@ -657,6 +667,7 @@ void GL_BindBufferRange (GLenum target, GLuint index, GLuint buffer, GLintptr of
 			range->buffer = buffer;
 			range->offset = offset;
 			range->size   = size;
+			GL_PerfCountBufferRangeBind ();
 		}
 		current_shader_storage_buffer = buffer;
 	}
@@ -729,6 +740,18 @@ This must be called if you do anything that could make the cached bindings
 invalid (e.g. manually binding, destroying the context).
 ====================
 */
+void GL_InvalidateBufferBinding (GLenum target)
+{
+	switch (target)
+	{
+	case GL_ARRAY_BUFFER: current_array_buffer = 0; break;
+	case GL_ELEMENT_ARRAY_BUFFER: current_element_array_buffer = 0; break;
+	case GL_DRAW_INDIRECT_BUFFER: current_draw_indirect_buffer = 0; break;
+	case GL_SHADER_STORAGE_BUFFER: current_shader_storage_buffer = 0; break;
+	default: break;
+	}
+}
+
 void GL_ClearBufferBindings (void)
 {
 	int i;
@@ -1034,6 +1057,7 @@ void GL_Upload (GLenum target, const void *data, size_t numbytes, GLuint *outbuf
 	{
 		frameres_host_buffer_size = frameres_host_offset + ((numbytes + align) & ~align);
 		frameres_host_buffer_size += frameres_host_buffer_size >> 1;
+		GL_PerfCountStreamRealloc ();
 		GL_AllocFrameResources (FRAMERES_HOST_BUFFER_BIT);
 	}
 
@@ -1050,6 +1074,7 @@ void GL_Upload (GLenum target, const void *data, size_t numbytes, GLuint *outbuf
 	*outofs = (GLbyte*) frameres_host_offset;
 
 	frameres_host_offset += numbytes;
+	GL_PerfCountUpload (target, numbytes);
 }
 
 /*

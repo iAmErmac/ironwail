@@ -23,6 +23,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 //gl_sky.c
 
 #include "quakedef.h"
+#if defined(ANDROID_GLES3)
+#include "gl_gles_vao.h"
+#endif
 
 extern	int	rs_skypolys; //for r_speeds readout
 extern	int rs_skypasses; //for r_speeds readout
@@ -747,8 +750,14 @@ void Sky_DrawSkyBox (void)
 
 		GL_Upload (GL_ARRAY_BUFFER, verts, sizeof(verts), &buf, &ofs);
 		GL_BindBuffer (GL_ARRAY_BUFFER, buf);
-		GL_VertexAttribPointerFunc (0, 3, GL_FLOAT, GL_FALSE, sizeof(verts[0]), ofs + offsetof(struct skyboxvert_s, pos));
+		#if defined(ANDROID_GLES3)
+GLESVAO_BindDynamic ();
+#endif
+GL_VertexAttribPointerFunc (0, 3, GL_FLOAT, GL_FALSE, sizeof(verts[0]), ofs + offsetof(struct skyboxvert_s, pos));
 		GL_VertexAttribPointerFunc (1, 2, GL_FLOAT, GL_FALSE, sizeof(verts[0]), ofs + offsetof(struct skyboxvert_s, uv));
+#if defined(ANDROID_GLES3)
+		GLESVAO_UseLayout (GLES_LAYOUT_SKY, "sky", buf, (GLuint)-1, GL_NONE);
+#endif
 
 		GL_Bind (GL_TEXTURE0, skybox->textures[skytexorder[i]]);
 		GL_PerfCountDraws (1);
