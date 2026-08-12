@@ -1847,6 +1847,7 @@ static void GL_SelectTexture (GLenum texunit)
 
 	GL_ActiveTextureFunc(texunit);
 	currenttexunit = texunit;
+	GL_PerfCountTextureUnitChange ();
 }
 
 /*
@@ -1917,6 +1918,7 @@ qboolean GL_BindNative (GLenum texunit, GLenum type, GLuint handle)
 
 	GL_SelectTexture (texunit);
 	glBindTexture (type, handle);
+	GL_PerfCountTextureBind ();
 
 	return true;
 }

@@ -23,6 +23,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // r_brush.c: brush model rendering. renamed from r_surf.c
 
 #include "quakedef.h"
+#if defined(ANDROID_GLES3)
+#include "gl_gles_vao.h"
+#endif
 
 extern cvar_t gl_fullbrights, gl_overbright; //johnfitz
 
@@ -535,6 +538,9 @@ void GL_BuildLightmaps (void)
 */
 
 GLuint gl_bmodel_vbo = 0;
+#if defined(ANDROID_GLES3)
+GLuint gl_bmodel_vao = 0;
+#endif
 size_t gl_bmodel_vbo_size = 0;
 
 GLuint gl_bmodel_ibo = 0;
@@ -554,6 +560,9 @@ GL_DeleteBModelBuffers
 */
 void GL_DeleteBModelBuffers (void)
 {
+#if defined(ANDROID_GLES3)
+GLESVAO_DeleteStatic (&gl_bmodel_vao);
+#endif
 	GL_DeleteBuffer (gl_bmodel_vbo);
 	GL_DeleteBuffer (gl_bmodel_ibo);
 	GL_DeleteBuffer (gl_bmodel_indirect_buffer);
@@ -913,6 +922,17 @@ void GL_BuildBModelMarkBuffers (void)
 	gl_bmodel_ibo = GL_CreateBuffer (GL_ELEMENT_ARRAY_BUFFER, GL_DYNAMIC_DRAW, "bmodel indices",
 		sizeof (idx[0]) * numtris * 3, idx
 	);
+#if defined(ANDROID_GLES3)
+{
+gles_vao_attribute_t attrs[] = {
+{ 0, 3, GL_FLOAT, GL_FALSE, GL_FALSE, sizeof (glvert_t), offsetof (glvert_t, pos) },
+{ 1, 4, GL_FLOAT, GL_FALSE, GL_FALSE, sizeof (glvert_t), offsetof (glvert_t, st) },
+{ 2, 1, GL_FLOAT, GL_FALSE, GL_FALSE, sizeof (glvert_t), offsetof (glvert_t, lmofs) },
+{ 3, 1, GL_UNSIGNED_INT, GL_FALSE, GL_TRUE, sizeof (glvert_t), offsetof (glvert_t, styles) }
+};
+gl_bmodel_vao = GLESVAO_CreateStatic (gl_bmodel_vbo, gl_bmodel_ibo, attrs, countof (attrs));
+}
+#endif
 	gl_bmodel_surf_buffer = GL_CreateBuffer (GL_SHADER_STORAGE_BUFFER, GL_STATIC_DRAW, "bmodel surfs",
 		sizeof (surfs[0]) * cl.worldmodel->numsurfaces, surfs
 	);

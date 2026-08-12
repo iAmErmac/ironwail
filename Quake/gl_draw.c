@@ -24,6 +24,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // draw.c -- 2d drawing
 
 #include "quakedef.h"
+#if defined(ANDROID_GLES3)
+#include "gl_gles_vao.h"
+#endif
 
 const vec3_t	rgb_black = {0.f, 0.f, 0.f};
 const vec3_t	rgb_white = {1.f, 1.f, 1.f};
@@ -598,9 +601,15 @@ void Draw_Flush (void)
 
 	GL_Upload (GL_ARRAY_BUFFER, batchverts, sizeof(batchverts[0]) * 4 * numbatchquads, &buf, &ofs);
 	GL_BindBuffer (GL_ARRAY_BUFFER, buf);
-	GL_VertexAttribPointerFunc (0, 2, GL_FLOAT, GL_FALSE, sizeof(batchverts[0]), ofs + offsetof(guivertex_t, pos));
+	#if defined(ANDROID_GLES3)
+GLESVAO_BindDynamic ();
+#endif
+GL_VertexAttribPointerFunc (0, 2, GL_FLOAT, GL_FALSE, sizeof(batchverts[0]), ofs + offsetof(guivertex_t, pos));
 	GL_VertexAttribPointerFunc (1, 2, GL_FLOAT, GL_FALSE, sizeof(batchverts[0]), ofs + offsetof(guivertex_t, uv));
 	GL_VertexAttribPointerFunc (2, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(batchverts[0]), ofs + offsetof(guivertex_t, color));
+#if defined(ANDROID_GLES3)
+	GLESVAO_UseLayout (GLES_LAYOUT_GUI, "gui", buf, buf, GL_UNSIGNED_SHORT);
+#endif
 
 	GL_Upload (GL_ELEMENT_ARRAY_BUFFER, batchindices, sizeof(batchindices[0]) * 6 * numbatchquads, &buf, &ofs);
 	GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, buf);

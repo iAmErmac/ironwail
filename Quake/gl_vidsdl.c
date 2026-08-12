@@ -39,6 +39,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <dlfcn.h>
 #include "android_gles.h"
 #include "android_render_target.h"
+#include "gl_gles_vao.h"
 #endif
 
 //ericw -- for putting the driver into multithreaded mode
@@ -1303,6 +1304,13 @@ void GL_SetState (unsigned mask)
 	GL_SetStateEx (mask, 0);
 }
 
+void GL_ForceVertexAttribCount (int count)
+{
+	glstate = (glstate & ~GLS_MASK_ATTRIBS) | GLS_ATTRIBS (count);
+GL_SetStateEx (glstate, GLS_MASK_ATTRIBS);
+}
+
+
 /*
 =============
 GL_ResetState
@@ -1398,6 +1406,10 @@ static void GL_Init (void)
 
 	GL_GenVertexArraysFunc (1, &globalvao);
 	GL_BindVertexArrayFunc (globalvao);
+#if defined(ANDROID_GLES3)
+	GLESVAO_Init ();
+	GLESVAO_BindGlobal (globalvao);
+#endif
 
 	glGetIntegerv (GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &ssbo_align);
 	glGetIntegerv (GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT, &ubo_align);
@@ -1446,6 +1458,7 @@ GL_BeginRendering -- sets values of glx, gly, glwidth, glheight
 #if defined(ANDROID_GLES3)
 void GL_RestoreContextResources (void)
 {
+	GLESVAO_Invalidate ();
 	GL_InvalidateFrameResources ();
 	GL_InvalidateShaders ();
 	GLMesh_DeleteVertexBuffers ();

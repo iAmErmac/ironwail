@@ -41,6 +41,27 @@ void GL_PerfSetTextureMemory (size_t bytes)
 	glperf_stats.texture_memory = bytes;
 }
 
+void GL_PerfCountProgramBind (void) { glperf_stats.program_binds++; }
+void GL_PerfCountBufferBind (void) { glperf_stats.buffer_binds++; }
+void GL_PerfCountBufferRangeBind (void) { glperf_stats.buffer_range_binds++; }
+void GL_PerfCountTextureBind (void) { glperf_stats.texture_binds++; }
+void GL_PerfCountTextureUnitChange (void) { glperf_stats.texture_unit_changes++; }
+
+void GL_PerfCountUpload (GLenum target, size_t bytes)
+{
+	switch (target)
+	{
+		case GL_ARRAY_BUFFER: glperf_stats.upload_array += bytes; break;
+		case GL_ELEMENT_ARRAY_BUFFER: glperf_stats.upload_element += bytes; break;
+		case GL_UNIFORM_BUFFER: glperf_stats.upload_uniform += bytes; break;
+		case GL_SHADER_STORAGE_BUFFER: glperf_stats.upload_storage += bytes; break;
+		case GL_DRAW_INDIRECT_BUFFER: glperf_stats.upload_indirect += bytes; break;
+		default: break;
+	}
+}
+
+void GL_PerfCountStreamRealloc (void) { glperf_stats.stream_reallocs++; }
+
 #if defined(ANDROID_GLES3)
 static void GL_PerfPollGpuQuery (GLuint query)
 {
@@ -56,7 +77,10 @@ static void GL_PerfPollGpuQuery (GLuint query)
 	glGetIntegerv (GL_GPU_DISJOINT_EXT, &disjoint);
 	GL_GetQueryObjectui64vEXTFunc (query, GL_QUERY_RESULT_EXT, &elapsed);
 	if (!disjoint)
+	{
 		glperf_stats.gpu_frame_ms = (double) elapsed * 1e-6;
+		glperf_stats.gpu_frame_valid = 1;
+	}
 }
 #endif
 
@@ -65,6 +89,21 @@ void GL_PerfBeginFrame (void)
 	glperf_frame_start = Sys_DoubleTime ();
 	glperf_stats.draws = 0;
 	glperf_stats.gpu_stalls = dev_stats.gpu_stalls;
+	glperf_stats.gpu_frame_ms = 0.0;
+	glperf_stats.gpu_frame_valid = 0;
+	glperf_stats.program_binds = 0;
+	glperf_stats.buffer_binds = 0;
+	glperf_stats.buffer_range_binds = 0;
+	glperf_stats.texture_binds = 0;
+	glperf_stats.texture_unit_changes = 0;
+	glperf_stats.vao_binds = 0;
+	glperf_stats.layout_changes = 0;
+	glperf_stats.stream_reallocs = 0;
+	glperf_stats.upload_array = 0;
+	glperf_stats.upload_element = 0;
+	glperf_stats.upload_uniform = 0;
+	glperf_stats.upload_storage = 0;
+	glperf_stats.upload_indirect = 0;
 	GL_PerfSetTextureMemory (TexMgr_TotalUsage ());
 #if defined(ANDROID_GLES3)
 	if (gl_timer_query_able)
@@ -93,4 +132,16 @@ void GL_PerfEndFrame (void)
 #endif
 	glperf_stats.frame_ms = (Sys_DoubleTime () - glperf_frame_start) * 1000.0;
 	glperf_stats.gpu_stalls = dev_stats.gpu_stalls;
+
+#if defined(ANDROID_GLES3)
+	{
+		static int report_frames;
+		if (++report_frames >= 120 && r_speeds.value == 3)
+		{
+			size_t uploads = glperf_stats.upload_array + glperf_stats.upload_element + glperf_stats.upload_uniform + glperf_stats.upload_storage + glperf_stats.upload_indirect;
+			Con_Printf ("GLES perf: cpu=%.3f gpu=%.3f valid=%d draws=%d stalls=%d binds=%d/%d/%d vao=%d layouts=%d tex=%d units=%d uploads=%zu realloc=%d tier=%s\n", glperf_stats.frame_ms, glperf_stats.gpu_frame_ms, glperf_stats.gpu_frame_valid, glperf_stats.draws, glperf_stats.gpu_stalls, glperf_stats.program_binds, glperf_stats.buffer_binds, glperf_stats.buffer_range_binds, glperf_stats.vao_binds, glperf_stats.layout_changes, glperf_stats.texture_binds, glperf_stats.texture_unit_changes, uploads, glperf_stats.stream_reallocs, GL_PerfRendererTier ());
+			report_frames = 0;
+		}
+	}
+#endif
 }

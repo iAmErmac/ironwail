@@ -22,6 +22,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #include "quakedef.h"
+#if defined(ANDROID_GLES3)
+#include "gl_gles_vao.h"
+#endif
 
 #define MAX_PARTICLES			16384	// default max # of particles at one
 										//  time
@@ -662,8 +665,14 @@ static void R_FlushParticleBatch (void)
 
 	GL_Upload (GL_ARRAY_BUFFER, partverts, sizeof(partverts[0]) * numpartverts, &buf, &ofs);
 	GL_BindBuffer (GL_ARRAY_BUFFER, buf);
-	GL_VertexAttribPointerFunc (0, 3, GL_FLOAT, GL_FALSE, sizeof(partverts[0]), ofs + offsetof(particlevert_t, pos));
+	#if defined(ANDROID_GLES3)
+GLESVAO_BindDynamic ();
+#endif
+GL_VertexAttribPointerFunc (0, 3, GL_FLOAT, GL_FALSE, sizeof(partverts[0]), ofs + offsetof(particlevert_t, pos));
 	GL_VertexAttribPointerFunc (1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(partverts[0]), ofs + offsetof(particlevert_t, color));
+#if defined(ANDROID_GLES3)
+	GLESVAO_UseLayout (GLES_LAYOUT_PARTICLE, "particles", buf, (GLuint)-1, GL_NONE);
+#endif
 
 	GL_DrawArraysInstancedFunc (GL_TRIANGLE_STRIP, 0, 4, numpartverts);
 
