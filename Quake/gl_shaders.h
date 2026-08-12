@@ -1334,11 +1334,13 @@ ALIAS_INSTANCE_BUFFER
 
 static const char alias_vertex_shader_gles[] =
 FRAMEDATA_BUFFER
-"layout(location=4) uniform vec4 WorldMatrix[3];\n"
-"layout(location=7) uniform vec4 LightColor;\n"
-"layout(location=8) uniform int Pose1;\n"
-"layout(location=9) uniform int Pose2;\n"
-"layout(location=10) uniform float Blend;\n"
+"layout(std140, binding=2) uniform ObjectDataUBO\n"
+"{\n"
+"\tvec4 WorldMatrix[3];\n"
+"\tvec4 LightColor;\n"
+"\tivec4 PoseBlend;\n"
+"};\n"
+
 "#if POSEVERTTYPE == 1 // PV_IQM (skeletal)\n"
 "layout(location=0) in vec3 in_pos;\n"
 "layout(location=1) in vec4 in_nor;\n"
@@ -1396,10 +1398,10 @@ FRAMEDATA_BUFFER
 "}\n"
 "void main()\n"
 "{\n"
-"\tPoseVertex pose1 = GetPoseVertex(uint(Pose1));\n"
-"\tPoseVertex pose2 = GetPoseVertex(uint(Pose2));\n"
+"\tPoseVertex pose1 = GetPoseVertex(uint(PoseBlend.x));\n"
+"\tPoseVertex pose2 = GetPoseVertex(uint(PoseBlend.y));\n"
 "\tmat4x3 worldmatrix = transpose(mat3x4(WorldMatrix[0], WorldMatrix[1], WorldMatrix[2]));\n"
-"\tvec3 lerpedVert = (worldmatrix * vec4(mix(pose1.pos, pose2.pos, Blend), 1.0)).xyz;\n"
+"\tvec3 lerpedVert = (worldmatrix * vec4(mix(pose1.pos, pose2.pos, float(PoseBlend.z) / 65536.0), 1.0)).xyz;\n"
 "\tgl_Position = ViewProj * vec4(lerpedVert, 1.0);\n"
 "\tout_pos = lerpedVert - EyePos;\n"
 "\tout_texcoord = in_uv;\n"
@@ -1408,7 +1410,7 @@ FRAMEDATA_BUFFER
 "\tvec3 shadevector = (orientation[0] + orientation[2]) / sqrt(2.0);\n"
 "\tfloat dot1 = r_avertexnormal_dot(pose1.nor, shadevector);\n"
 "\tfloat dot2 = r_avertexnormal_dot(pose2.nor, shadevector);\n"
-"\tout_color = clamp(LightColor * vec4(vec3(mix(dot1, dot2, Blend)), 1.0), 0.0, 1.0);\n"
+"\tout_color = clamp(LightColor * vec4(vec3(mix(dot1, dot2, float(PoseBlend.z) / 65536.0)), 1.0), 0.0, 1.0);\n"
 "}\n";
 
 ////////////////////////////////////////////////////////////////

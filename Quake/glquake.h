@@ -387,6 +387,12 @@ typedef struct glperf_stats_s {
  int vao_binds;
  int layout_changes;
  int stream_reallocs;
+ size_t ubo_bytes;
+ size_t ubo_peak;
+ int ubo_uploads;
+ int ubo_range_binds;
+ int ubo_range_skips;
+ int ubo_overflows;
  size_t stream_vbo_bytes;
  size_t stream_vbo_peak;
  size_t stream_ebo_bytes;
@@ -500,6 +506,12 @@ typedef struct gpuframedata_s {
 } gpuframedata_t;
 
 extern gpulightbuffer_t r_lightbuffer;
+typedef struct gles_object_ubo_s {
+	float worldmatrix[3][4];
+	float lightcolor[4];
+	int pose1, pose2, blend_bits, alpha_bits;
+} gles_object_ubo_t;
+
 extern gpuframedata_t r_framedata;
 
 void R_AnimateLight (void);

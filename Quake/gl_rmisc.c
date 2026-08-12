@@ -25,6 +25,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #if defined(ANDROID_GLES3)
 #include "gl_gles_stream.h"
+#include "gl_gles_ubo.h"
 #endif
 
 //johnfitz -- new cvars
@@ -57,8 +58,8 @@ extern cvar_t r_oit;
 extern cvar_t r_dither;
 
 #if defined(ANDROID_GLES3)
-extern cvar_t r_gles_vao_validate;
-extern cvar_t r_gles_static_vao;
+extern cvar_t r_gles_vao_validate, r_gles_static_vao;
+extern cvar_t r_gles_ubo_validate;
 #endif
 
 #if defined(USE_SIMD)
@@ -321,7 +322,8 @@ void R_Init (void)
 	Cvar_RegisterVariable (&r_speeds);
 #if defined(ANDROID_GLES3)
 	Cvar_RegisterVariable (&r_gles_vao_validate);
-Cvar_RegisterVariable (&r_gles_static_vao);
+	Cvar_RegisterVariable (&r_gles_static_vao);
+	Cvar_RegisterVariable (&r_gles_ubo_validate);
 #endif
 	Cvar_RegisterVariable (&r_pos);
 	Cvar_RegisterVariable (&r_alphasort);
@@ -800,6 +802,9 @@ typedef struct frameres_t
 
 static frameres_t	frameres[FRAMES_IN_FLIGHT];
 static int			frameres_idx = 0;
+#if defined(ANDROID_GLES3)
+static int			frameres_depth = 0;
+#endif
 static size_t		frameres_host_offset = 0;
 static size_t		frameres_device_offset = 0;
 static size_t		frameres_host_buffer_size = 1 * 1024 * 1024;
@@ -902,6 +907,7 @@ void GL_InvalidateFrameResources (void)
 {
 #if defined(ANDROID_GLES3)
 	GLESStream_Invalidate ();
+		GLESUBO_Invalidate ();
 #endif
 	int i;
 
@@ -915,6 +921,9 @@ void GL_InvalidateFrameResources (void)
 	}
 
 	frameres_idx = 0;
+#if defined(ANDROID_GLES3)
+	frameres_depth = 0;
+#endif
 	frameres_host_offset = 0;
 	frameres_device_offset = 0;
 }
@@ -930,7 +939,9 @@ void GL_DeleteFrameResources (void)
 
 	glFinish ();
 #if defined(ANDROID_GLES3)
+	frameres_depth = 0;
 	GLESStream_Delete ();
+		GLESUBO_Delete ();
 #endif
 
 	for (i = 0; i < countof (frameres); i++)
@@ -980,6 +991,14 @@ void GL_AcquireFrameResources (void)
 	size_t i, num_garbage_bufs;
 	dev_stats.gpu_stalls = 0;
 
+#if defined(ANDROID_GLES3)
+	if (frameres_depth++)
+	{
+		Con_Warning ("GLES frame resource acquire nested at slot %d depth %d\n", frameres_idx, frameres_depth);
+		return;
+	}
+#endif
+
 	if (prev_frame->fence)
 		GL_WaitSyncFunc (prev_frame->fence, 0, GL_TIMEOUT_IGNORED);
 
@@ -1025,7 +1044,25 @@ void GL_ReleaseFrameResources (void)
 {
 	frameres_t *frame = &frameres[frameres_idx];
 
+#if defined(ANDROID_GLES3)
+	if (frameres_depth <= 0)
+	{
+		Con_Warning ("GLES frame resource release without acquire at slot %d\n", frameres_idx);
+		return;
+	}
+	if (--frameres_depth)
+		return;
+
+	if (frame->fence)
+	{
+		Con_Warning ("GLES frame resource fence was still active at slot %d; waiting before reuse\n", frameres_idx);
+		GL_WaitSyncFunc (frame->fence, 0, GL_TIMEOUT_IGNORED);
+		GL_DeleteSyncFunc (frame->fence);
+		frame->fence = NULL;
+	}
+#else
 	SDL_assert (!frame->fence);
+#endif
 	frame->fence = GL_FenceSyncFunc (GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
 
 	if (!frame->fence)
