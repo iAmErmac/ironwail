@@ -23,6 +23,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // r_misc.c
 
 #include "quakedef.h"
+#if defined(ANDROID_GLES3)
+#include "gl_gles_stream.h"
+#endif
 
 //johnfitz -- new cvars
 extern cvar_t r_clearcolor;
@@ -897,6 +900,9 @@ void GL_CreateFrameResources (void)
 
 void GL_InvalidateFrameResources (void)
 {
+#if defined(ANDROID_GLES3)
+	GLESStream_Invalidate ();
+#endif
 	int i;
 
 	for (i = 0; i < countof (frameres); i++)
@@ -923,6 +929,9 @@ void GL_DeleteFrameResources (void)
 	size_t i, j, num_garbage_bufs;
 
 	glFinish ();
+#if defined(ANDROID_GLES3)
+	GLESStream_Delete ();
+#endif
 
 	for (i = 0; i < countof (frameres); i++)
 	{

@@ -748,7 +748,7 @@ void Sky_DrawSkyBox (void)
 			st[j & 1] *= -1.f;
 		}
 
-		GL_Upload (GL_ARRAY_BUFFER, verts, sizeof(verts), &buf, &ofs);
+		GL_UploadTransient (GL_ARRAY_BUFFER, verts, sizeof(verts), buf, ofs, "sky");
 		GL_BindBuffer (GL_ARRAY_BUFFER, buf);
 		#if defined(ANDROID_GLES3)
 GLESVAO_BindDynamic ();

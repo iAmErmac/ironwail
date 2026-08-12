@@ -40,6 +40,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "android_gles.h"
 #include "android_render_target.h"
 #include "gl_gles_vao.h"
+#include "gl_gles_stream.h"
 #endif
 
 //ericw -- for putting the driver into multithreaded mode
@@ -1304,12 +1305,17 @@ void GL_SetState (unsigned mask)
 	GL_SetStateEx (mask, 0);
 }
 
-void GL_ForceVertexAttribCount (int count)
+void GL_ForceVertexAttribState (int count, int instanced_count)
 {
-	glstate = (glstate & ~GLS_MASK_ATTRIBS) | GLS_ATTRIBS (count);
-GL_SetStateEx (glstate, GLS_MASK_ATTRIBS);
+	glstate = (glstate & ~(GLS_MASK_ATTRIBS | GLS_MASK_INSTANCED_ATTRIBS)) |
+		GLS_ATTRIBS (count) | GLS_INSTANCED_ATTRIBS (instanced_count);
+	GL_SetStateEx (glstate, GLS_MASK_ATTRIBS | GLS_MASK_INSTANCED_ATTRIBS);
 }
 
+void GL_ReapplyVertexAttribState (void)
+{
+	GL_SetStateEx (glstate, GLS_MASK_ATTRIBS | GLS_MASK_INSTANCED_ATTRIBS);
+}
 
 /*
 =============
@@ -1448,6 +1454,9 @@ static void GL_Init (void)
 
 	GL_ClearBufferBindings ();
 	GL_CreateFrameResources ();
+#if defined(ANDROID_GLES3)
+	GLESStream_Create ();
+#endif
 }
 
 /*
@@ -1507,12 +1516,18 @@ void GL_BeginRendering (int *x, int *y, int *width, int *height)
 
 	// reset state/bindings, just in case some other process
 	// injects code that makes changes without cleaning up
+#if defined(ANDROID_GLES3)
+	GLESVAO_BindDynamic ();
+#endif
 	GL_ResetState ();
 	GL_ClearBindings ();
 	GL_ClearBufferBindings ();
 	GL_ClearCachedProgram ();
 
 	GL_AcquireFrameResources ();
+#if defined(ANDROID_GLES3)
+	GLESStream_Acquire ();
+#endif
 	GLPalette_UpdateLookupTable ();
 	TexMgr_ApplySettings ();
 

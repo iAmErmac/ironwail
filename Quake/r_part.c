@@ -663,7 +663,7 @@ static void R_FlushParticleBatch (void)
 	if (!numpartverts)
 		return;
 
-	GL_Upload (GL_ARRAY_BUFFER, partverts, sizeof(partverts[0]) * numpartverts, &buf, &ofs);
+	GL_UploadTransient (GL_ARRAY_BUFFER, partverts, sizeof(partverts[0]) * numpartverts, buf, ofs, "particles");
 	GL_BindBuffer (GL_ARRAY_BUFFER, buf);
 	#if defined(ANDROID_GLES3)
 GLESVAO_BindDynamic ();
