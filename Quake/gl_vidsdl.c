@@ -26,6 +26,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "cfgfile.h"
 #include "bgmusic.h"
 #include "resource.h"
+#include "xr_bridge.h"
+#include "xr_desktop.h"
 #if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
 #if defined(ANDROID_GLES3)
 #include <SDL.h>
@@ -92,12 +94,84 @@ static SDL_Cursor		*cursor_ibeam;
 
 static qboolean	vid_locked = false; //johnfitz
 static qboolean vid_changed = false;
+static iw_xr_bridge_t *vid_xr_bridge;
+static iw_xr_win_t *vid_xr_backend;
+static qboolean vid_xr_frame_active;
+static qboolean vid_xr_frame_should_render;
+
+cvar_t vr_mode = {"vr_mode", "1", CVAR_ARCHIVE};
+cvar_t vr_curved_screen = {"vr_curved_screen", "1", CVAR_ARCHIVE};
+cvar_t vr_curve_radius = {"vr_curve_radius", "6.0", CVAR_ARCHIVE};
+cvar_t vr_screen_scale = {"vr_screen_scale", "2.2", CVAR_ARCHIVE};
+cvar_t vr_screen_distance = {"vr_screen_distance", "2.5", CVAR_ARCHIVE};
+cvar_t vr_desktop_mirror = {"vr_desktop_mirror", "1", CVAR_ARCHIVE};
 
 void VID_Menu_Init (void); //johnfitz
 
 static void ClearAllStates (void);
 static void GL_Init (void);
 static void GL_SetupState (void); //johnfitz
+
+static uint64_t VID_XRMonotonicTimeNs (void *userdata)
+{
+    (void)userdata;
+    return (uint64_t)(Sys_DoubleTime () * 1000000000.0);
+}
+
+static void VID_XRLog (void *userdata, const char *message)
+{
+    (void)userdata;
+    if (message)
+        Con_SafePrintf ("[OpenXR] %s\n", message);
+}
+
+static iw_xr_result_t VID_XRNullProbe (iw_xr_bridge_t *bridge, uint64_t deadline_ns, const char **reason)
+{
+    if (!vid_xr_backend)
+    {
+        if (reason)
+            *reason = "OpenXR backend is unavailable";
+        return IW_XR_RESULT_UNAVAILABLE;
+    }
+    return IW_XRWin_Probe (vid_xr_backend, bridge, deadline_ns, reason);
+}
+
+static void VID_VRMode_f (cvar_t *var)
+{
+    if (var->value == 0 && vid_xr_backend)
+        IW_XRWin_Shutdown (vid_xr_backend);
+    if (vid_xr_bridge)
+        IW_XRBridge_SetDisabled (vid_xr_bridge, var->value == 0);
+}
+
+static void VID_VRRecenter_f (void)
+{
+    if (vid_xr_backend)
+        IW_XRWin_RequestRecenter (vid_xr_backend);
+}
+
+static void VID_XRRetry_f (void)
+{
+    iw_xr_result_t result;
+    if (!vid_xr_bridge)
+        return;
+    result = IW_XRBridge_RequestRetry (vid_xr_bridge);
+    Con_SafePrintf ("[OpenXR] retry result=%d state=%d reason=%s\n", result,
+        IW_XRBridge_State (vid_xr_bridge), IW_XRBridge_FailureReason (vid_xr_bridge));
+}
+
+void VID_XR_Pump (void)
+{
+    iw_xr_result_t result;
+    if (vid_xr_backend && vid_xr_bridge)
+    {
+        result = IW_XRWin_Pump (vid_xr_backend, vid_xr_bridge);
+        if (result != IW_XR_RESULT_OK && result != IW_XR_RESULT_UNAVAILABLE)
+            IW_XRBridge_SetFailure (vid_xr_bridge, result, "OpenXR lifecycle pump failed");
+    }
+    if (vid_xr_bridge)
+        IW_XRBridge_Pump (vid_xr_bridge);
+}
 
 viddef_t	vid;				// global video state
 modestate_t	modestate = MS_UNINIT;
@@ -1489,7 +1563,7 @@ void GL_RestoreContextResources (void)
 	GLMesh_LoadVertexBuffers ();
 	GL_ClearBufferBindings ();
 	GL_ClearCachedProgram ();
-	Con_SafePrintf ("GLES context resources restored\\n");
+	Con_SafePrintf ("GLES context resources restored\n");
 }
 #endif
 
@@ -1526,6 +1600,24 @@ void GL_BeginRendering (int *x, int *y, int *width, int *height)
 	GL_ClearBufferBindings ();
 	GL_ClearCachedProgram ();
 
+	vid_xr_frame_active = false;
+	vid_xr_frame_should_render = false;
+    if (vid_xr_backend)
+        IW_XRWin_SetScreenCurve (vid_xr_backend, vr_curved_screen.value != 0, vr_curve_radius.value);
+    if (vid_xr_backend)
+        IW_XRWin_SetScreenGeometry (vid_xr_backend, vr_screen_scale.value, vr_screen_distance.value);
+    if (vid_xr_backend && vid_xr_bridge && IW_XRBridge_OwnsPresentation (vid_xr_bridge))
+	{
+		iw_xr_frame_snapshot_t snapshot;
+		if (IW_XRWin_BeginFrame (vid_xr_backend, &snapshot))
+		{
+			vid_xr_frame_active = true;
+			vid_xr_frame_should_render = snapshot.should_render;
+			if (snapshot.should_render)
+			IW_XRWin_BindFrameTarget (vid_xr_backend);
+		}
+	}
+
 	GL_AcquireFrameResources ();
 #if defined(ANDROID_GLES3)
 	GLESStream_Acquire ();
@@ -1545,14 +1637,23 @@ GL_EndRendering
 void GL_EndRendering (void)
 {
 	GL_PostProcess ();
-	GL_ReleaseFrameResources ();
-
+	if (vid_xr_frame_active && vid_xr_frame_should_render)
+		IW_XRWin_ResolveDefaultFramebuffer (vid_xr_backend, vid.width, vid.height);
 	if (!scr_skipupdate)
 	{
 #if !defined(ANDROID_GLES3)
-		SDL_GL_SwapWindow(draw_context);
+		if (!vid_xr_frame_active || vr_desktop_mirror.value != 0)
+			SDL_GL_SwapWindow (draw_context);
 #endif
 	}
+	if (vid_xr_frame_active)
+	{
+		iw_xr_result_t xr_result = IW_XRWin_EndFrame (vid_xr_backend, true);
+		if (xr_result != IW_XR_RESULT_OK)
+			IW_XRBridge_SetFailure (vid_xr_bridge, xr_result, "OpenXR frame submission failed");
+	}
+	GL_ReleaseFrameResources ();
+
 }
 
 
@@ -1560,6 +1661,18 @@ void	VID_Shutdown (void)
 {
 	if (vid_initialized)
 	{
+		if (vid_xr_backend)
+		{
+			IW_XRWin_Shutdown (vid_xr_backend);
+			IW_XRWin_Destroy (vid_xr_backend);
+			vid_xr_backend = NULL;
+		}
+		if (vid_xr_bridge)
+		{
+			IW_XRBridge_Shutdown (vid_xr_bridge);
+			IW_XRBridge_Destroy (vid_xr_bridge);
+			vid_xr_bridge = NULL;
+		}
 		VID_FreeMouseCursors();
 		SDL_GL_DeleteContext(gl_context);
 		gl_context = NULL;
@@ -1755,6 +1868,7 @@ void	VID_Init (void)
 		"gl_compress_textures",
 		"r_softemu_metric",
 		"scr_pixelaspect",
+		"vr_mode",
 	};
 #define num_readvars	Q_COUNTOF(read_vars)
 
@@ -1770,6 +1884,13 @@ void	VID_Init (void)
 	Cvar_RegisterVariable (&vid_desktopfullscreen); //QuakeSpasm
 	Cvar_RegisterVariable (&vid_borderless); //QuakeSpasm
 	Cvar_RegisterVariable (&vid_saveresize);
+    Cvar_RegisterVariable (&vr_mode);
+    Cvar_RegisterVariable (&vr_curved_screen);
+    Cvar_RegisterVariable (&vr_curve_radius);
+    Cvar_RegisterVariable (&vr_screen_scale);
+    Cvar_RegisterVariable (&vr_screen_distance);
+    Cvar_RegisterVariable (&vr_desktop_mirror);
+    Cvar_SetCallback (&vr_mode, VID_VRMode_f);
 	Cvar_SetCallback (&vid_fullscreen, VID_Changed_f);
 	Cvar_SetCallback (&vid_width, VID_Changed_f);
 	Cvar_SetCallback (&vid_height, VID_Changed_f);
@@ -1919,6 +2040,26 @@ Cvar_SetValueQuick (&vid_width, (float)display_width);
 
 	GL_Init ();
 	GL_SetupState ();
+	vid_xr_backend = IW_XRWin_Create (draw_context, VID_XRLog, NULL);
+	{
+		iw_xr_bridge_config_t xr_config;
+		memset (&xr_config, 0, sizeof (xr_config));
+		xr_config.monotonic_time_ns = VID_XRMonotonicTimeNs;
+		xr_config.log = VID_XRLog;
+		xr_config.probe_budget_ms = 250;
+		xr_config.disabled = vr_mode.value == 0;
+		vid_xr_bridge = IW_XRBridge_Create (&xr_config);
+		if (vid_xr_bridge)
+		{
+			iw_xr_result_t xr_result = IW_XRBridge_Initialize (vid_xr_bridge, VID_XRNullProbe);
+			Con_SafePrintf ("[OpenXR] probe result=%d state=%d duration=%.2f ms reason=%s\n",
+				xr_result, IW_XRBridge_State (vid_xr_bridge),
+				IW_XRBridge_ProbeDurationNs (vid_xr_bridge) / 1000000.0,
+				IW_XRBridge_FailureReason (vid_xr_bridge));
+		}
+	}
+	Cmd_AddCommand ("vr_retry", VID_XRRetry_f);
+	Cmd_AddCommand ("vr_recenter", VID_VRRecenter_f);
 	cmd = Cmd_AddCommand ("gl_info", GL_Info_f); //johnfitz
 	if (cmd)
 		cmd->completion = GL_Info_Completion_f;
