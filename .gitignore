@@ -7,8 +7,10 @@ Quake/*.res
 Quake/*.exe
 Quake/ironwail
 build/
+/build-*/
 /.vs
 /out/
+qconsole.log
 
 # docs
 AGENTS.md

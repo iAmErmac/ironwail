@@ -1,4 +1,4 @@
-/*
+﻿/*
 Copyright (C) 1996-2001 Id Software, Inc.
 Copyright (C) 2002-2005 John Fitzgibbons and others
 Copyright (C) 2007-2008 Kristian Duske
@@ -28,12 +28,106 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "SDL.h"
 #endif
 #include <stdio.h>
+#include <ctype.h>
 
 static void Sys_AtExit (void)
 {
 	SDL_Quit();
 }
 
+static int Sys_LoadCommandLineFile (int argc, char **argv, char **merged)
+{
+    char *basepath, *path, *text, *cursor, *token;
+    FILE *file;
+    long length;
+    int count = 0;
+    qboolean first_file_token = true;
+
+    while (count < argc && count < MAX_NUM_ARGVS)
+        merged[count] = argv[count], count++;
+
+    basepath = SDL_GetBasePath ();
+    if (!basepath)
+        return count;
+    path = (char *) malloc (strlen (basepath) + sizeof ("commandline.txt"));
+    if (!path)
+    {
+        SDL_free (basepath);
+        return count;
+    }
+    q_snprintf (path, strlen (basepath) + sizeof ("commandline.txt"), "%scommandline.txt", basepath);
+    SDL_free (basepath);
+
+    file = fopen (path, "rb");
+    free (path);
+    if (!file)
+        return count;
+    fseek (file, 0, SEEK_END);
+    length = ftell (file);
+    fseek (file, 0, SEEK_SET);
+    if (length <= 0 || length > 32768)
+    {
+        fclose (file);
+        return count;
+    }
+    text = (char *) malloc ((size_t) length + 1);
+    if (!text)
+    {
+        fclose (file);
+        return count;
+    }
+    if (fread (text, 1, (size_t) length, file) != (size_t) length)
+    {
+        fclose (file);
+        free (text);
+        return count;
+    }
+    fclose (file);
+    text[length] = 0;
+
+    cursor = text;
+    while (*cursor && count < MAX_NUM_ARGVS)
+    {
+        char quote = 0;
+        size_t token_length = 0;
+        while (*cursor && isspace ((unsigned char)*cursor))
+            cursor++;
+        if (!*cursor)
+            break;
+        token = cursor;
+        while (*cursor)
+        {
+            if (*cursor == '"')
+            {
+                quote = !quote;
+                memmove (cursor, cursor + 1, strlen (cursor));
+                continue;
+            }
+            if (!quote && isspace ((unsigned char)*cursor))
+                break;
+            cursor++;
+        }
+        if (*cursor)
+            *cursor++ = 0;
+        token_length = strlen (token);
+        if (token_length)
+        {
+            if (first_file_token && token[0] != '-' && token[0] != '+')
+            {
+                first_file_token = false;
+                continue;
+            }
+            first_file_token = false;
+            merged[count] = (char *) malloc (token_length + 1);
+            if (!merged[count])
+                break;
+            memcpy (merged[count], token, token_length + 1);
+            count++;
+        }
+    }
+    free (text);
+    return count;
+}
 static void Sys_InitSDL (void)
 {
 	SDL_version v;
@@ -137,7 +231,11 @@ int main(int argc, char *argv[])
 
 	parms.errstate = 0;
 
-	COM_InitArgv(parms.argc, parms.argv);
+	static char *merged_argv[MAX_NUM_ARGVS + 1];
+    parms.argc = Sys_LoadCommandLineFile (parms.argc, parms.argv, merged_argv);
+    parms.argv = merged_argv;
+
+    COM_InitArgv(parms.argc, parms.argv);
 
 	isDedicated = (COM_CheckParm("-dedicated") != 0);
 
