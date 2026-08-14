@@ -77,6 +77,8 @@ console is:
 int			glx, gly, glwidth, glheight;
 
 float		scr_con_current;
+static qboolean scr_xr_hud_layer;
+extern cvar_t vr_desktop_mirror;
 float		scr_conlines;		// lines of console to display
 
 //johnfitz -- new cvars
@@ -1191,7 +1193,7 @@ SCR_DrawCrosshair -- johnfitz
 */
 static void SCR_DrawCrosshair (void)
 {
-	if (cl.intermission || CL_InCutscene () || !crosshair.value || scr_viewsize.value >= 130)
+	if (R_HasXRFinalTarget () || cl.intermission || CL_InCutscene () || !crosshair.value || scr_viewsize.value >= 130)
 		return;
 
 	GL_SetCanvas (CANVAS_CROSSHAIR);
@@ -2111,45 +2113,9 @@ WARNING: be very careful calling this from elsewhere, because the refresh
 needs almost the entire 256k of stack space!
 ==================
 */
-void SCR_UpdateScreen (void)
+static void SCR_DrawScreenOverlay (void)
 {
-	GL_PerfBeginFrame ();
-	vid.numpages = (gl_triplebuffer.value) ? 3 : 2;
-
-	if (scr_disabled_for_loading)
-	{
-		if (realtime - scr_disabled_time > 60)
-		{
-			scr_disabled_for_loading = false;
-			Con_Printf ("load failed.\n");
-		}
-		else
-			return;
-	}
-
-	if (!scr_initialized || !con_initialized)
-		return;				// not initialized yet
-
-
-	GL_BeginRendering (&glx, &gly, &glwidth, &glheight);
-
-	//
-	// determine size of refresh window
-	//
-	if (vid.recalc_refdef)
-		SCR_CalcRefdef ();
-	r_refdef.scale = q_max (1, CLAMP (1, (int)r_scale.value, vid.maxscale));
-
-//
-// do 3D refresh drawing, and then update the screen
-//
-	SCR_SetUpToDrawConsole ();
-
-	V_UpdateBlend (); //johnfitz -- V_UpdatePalette cleaned up and renamed
-
-	V_RenderView ();
-
-	GL_BeginGroup ("2D");
+GL_BeginGroup ("2D");
 
 	GL_Set2D ();
 
@@ -2189,7 +2155,8 @@ void SCR_UpdateScreen (void)
 		SCR_DrawTurtle ();
 		SCR_DrawPause ();
 		SCR_CheckDrawCenterString ();
-		Sbar_Draw ();
+		if (!scr_xr_hud_layer)
+		    Sbar_Draw ();
 		SCR_DrawDevStats (); //johnfitz
 		SCR_DrawClock (); //johnfitz
 		SCR_DrawDemoControls ();
@@ -2204,8 +2171,129 @@ void SCR_UpdateScreen (void)
 	Draw_Flush ();
 
 	GL_EndGroup ();
+}
 
-	GL_PerfEndFrame ();
+void SCR_UpdateScreen (void)
+{
+	GL_PerfBeginFrame ();
+	vid.numpages = (gl_triplebuffer.value) ? 3 : 2;
+
+	if (scr_disabled_for_loading)
+	{
+		if (realtime - scr_disabled_time > 60)
+		{
+			scr_disabled_for_loading = false;
+			Con_Printf ("load failed.\n");
+		}
+		else
+			return;
+	}
+
+	if (!scr_initialized || !con_initialized)
+		return;				// not initialized yet
+
+
+	GL_BeginRendering (&glx, &gly, &glwidth, &glheight);
+
+	//
+	// determine size of refresh window
+	//
+	if (vid.recalc_refdef)
+		SCR_CalcRefdef ();
+	r_refdef.scale = q_max (1, CLAMP (1, (int)r_scale.value, vid.maxscale));
+
+//
+// do 3D refresh drawing, and then update the screen
+//
+	SCR_SetUpToDrawConsole ();
+
+	V_UpdateBlend (); //johnfitz -- V_UpdatePalette cleaned up and renamed
+
+		{
+		const iw_xr_frame_snapshot_t *snapshot;
+		if (VID_XR_GetStereoFrame (&snapshot))
+		{
+			int saved_glx = glx, saved_gly = gly, saved_glwidth = glwidth, saved_glheight = glheight;
+			int saved_vidwidth = vid.width, saved_vidheight = vid.height;
+			int saved_guiwidth = vid.guiwidth, saved_guiheight = vid.guiheight;
+			unsigned hud_fbo, eye;
+			int hud_width, hud_height;
+			qboolean hud_layer = VID_XR_BeginHUD (&hud_fbo, &hud_width, &hud_height);
+			scr_xr_hud_layer = hud_layer;
+
+			for (eye = 0; eye < 2; ++eye)
+			{
+				unsigned eye_fbo;
+				int eye_width, eye_height;
+				if (!VID_XR_BeginEye (eye, &eye_fbo, &eye_width, &eye_height))
+					continue;
+				glx = gly = 0;
+				glwidth = eye_width;
+				glheight = eye_height;
+				GL_SetFrameBufferSize (eye_width, eye_height);
+				vid.width = eye_width;
+				vid.height = eye_height;
+				vid.guiwidth = eye_width;
+				vid.guiheight = eye_height;
+				SCR_CalcRefdef ();
+				r_refdef.scale = q_max (1, CLAMP (1, (int)r_scale.value, vid.maxscale));
+				R_SetXRFinalTarget (eye_fbo, eye_width, eye_height);
+				V_RenderXREye (snapshot, eye);
+				Sbar_Changed ();
+				SCR_DrawScreenOverlay ();
+				GL_PostProcess ();
+				VID_XR_EndEye (eye);
+				R_ClearXREye ();
+			}
+			if (hud_layer)
+			{
+			    glx = gly = 0;
+			    glwidth = hud_width;
+			    glheight = hud_height;
+			    vid.width = hud_width;
+			    vid.height = hud_height;
+			    vid.guiwidth = hud_width;
+			    vid.guiheight = hud_height;
+			    R_SetXRFinalTarget (hud_fbo, hud_width, hud_height);
+			    GL_BindFramebufferFunc (GL_FRAMEBUFFER, hud_fbo);
+			    glViewport (0, 0, hud_width, hud_height);
+			    glClearColor (0.f, 0.f, 0.f, 0.f);
+			    glClear (GL_COLOR_BUFFER_BIT);
+			    GL_Set2D ();
+			    Sbar_Changed ();
+			    Sbar_Draw ();
+			    Draw_Flush ();
+			    R_ClearXREye ();
+			}
+			scr_xr_hud_layer = false;
+			glx = saved_glx;
+			gly = saved_gly;
+			glwidth = saved_glwidth;
+			glheight = saved_glheight;
+			vid.width = saved_vidwidth;
+			vid.height = saved_vidheight;
+			vid.guiwidth = saved_guiwidth;
+			vid.guiheight = saved_guiheight;
+			if (hud_layer && vr_desktop_mirror.value != 0)
+			{
+				GL_BindFramebufferFunc (GL_FRAMEBUFFER, 0);
+				glViewport (glx, gly, glwidth, glheight);
+				GL_Set2D ();
+				Sbar_Changed ();
+				Sbar_Draw ();
+				Draw_Flush ();
+			}
+			vid.recalc_refdef = true;
+		}
+		else
+		{
+			V_RenderView ();
+			SCR_DrawScreenOverlay ();
+		}
+
+	}
+
+GL_PerfEndFrame ();
 	GL_EndRendering ();
 }
 

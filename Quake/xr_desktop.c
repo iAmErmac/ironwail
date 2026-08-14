@@ -6,6 +6,16 @@
 #include "glquake.h"
 #include <SDL_syswm.h>
 #include <windows.h>
+typedef struct {
+    XrSwapchain swapchain;
+    XrSwapchainImageOpenGLKHR *images;
+    GLuint *fbos;
+    uint32_t image_count;
+    uint32_t image_index;
+    uint32_t width;
+    uint32_t height;
+    qboolean acquired;
+} iw_xr_gl_target_t;
 
 struct iw_xr_win_s {
     void *window;
@@ -17,6 +27,7 @@ struct iw_xr_win_s {
     XrSession session;
     XrSpace space;
     XrPosef screen_pose;
+    XrPosef hud_pose;
     qboolean recenter_requested;
         XrPosef screen_follow_current;
     XrPosef screen_follow_target;
@@ -45,7 +56,13 @@ XrSwapchain swapchain;
     float curve_radius;
     float screen_scale;
     float screen_distance;
-    qboolean curve_submission_logged;
+    float hud_scale;
+    float hud_distance;
+    float hud_yoffset;
+    qboolean curve_submission_logged;    iw_xr_gl_target_t eyes[2];
+    qboolean stereo_submission;
+    qboolean views_valid;
+    iw_xr_frame_snapshot_t frame_snapshot;
 
 #define XR_WIN_PROC(type, name) type name;
     PFN_xrGetInstanceProcAddr get_instance_proc_addr;
@@ -84,6 +101,51 @@ static void xr_log(iw_xr_win_t *xr, const char *message)
         xr->log(xr->userdata, message);
 }
 
+
+static void xr_destroy_target(iw_xr_win_t *xr, iw_xr_gl_target_t *target)
+{
+    uint32_t i;
+    if (!target) return;
+    if (target->fbos) { for (i = 0; i < target->image_count; ++i) if (target->fbos[i]) GL_DeleteFramebuffersFunc(1, &target->fbos[i]); free(target->fbos); }
+    free(target->images);
+    if (target->swapchain != XR_NULL_HANDLE && xr->destroy_swapchain) xr->destroy_swapchain(target->swapchain);
+    memset(target, 0, sizeof(*target));
+}
+
+static qboolean xr_create_target(iw_xr_win_t *xr, iw_xr_gl_target_t *target, int64_t format, uint32_t width, uint32_t height, uint32_t sample_count, const char **reason)
+{
+    XrSwapchainCreateInfo info; XrSwapchainImageBaseHeader *base_images; XrResult result; uint32_t i;
+    memset(&info, 0, sizeof(info)); info.type = XR_TYPE_SWAPCHAIN_CREATE_INFO;
+    info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT; info.format = format; info.sampleCount = q_max(sample_count, 1u); info.width = width; info.height = height; info.faceCount = info.arraySize = info.mipCount = 1;
+    result = xr->create_swapchain(xr->session, &info, &target->swapchain); if (result != XR_SUCCESS) return false;
+    result = xr->enumerate_swapchain_images(target->swapchain, 0, &target->image_count, NULL); if (result != XR_SUCCESS || !target->image_count) goto failed;
+    target->images = calloc(target->image_count, sizeof(*target->images)); target->fbos = calloc(target->image_count, sizeof(*target->fbos)); if (!target->images || !target->fbos) goto failed;
+    base_images = (XrSwapchainImageBaseHeader *)target->images; for (i = 0; i < target->image_count; ++i) target->images[i].type = XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR;
+    result = xr->enumerate_swapchain_images(target->swapchain, target->image_count, &target->image_count, base_images); if (result != XR_SUCCESS) goto failed;
+    GL_GenFramebuffersFunc(target->image_count, target->fbos);
+    for (i = 0; i < target->image_count; ++i) { GL_BindFramebufferFunc(GL_FRAMEBUFFER, target->fbos[i]); GL_FramebufferTexture2DFunc(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target->images[i].image, 0); if (GL_CheckFramebufferStatusFunc(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) goto failed; }
+    GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0); target->width = width; target->height = height; return true;
+failed:
+    GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0); xr_destroy_target(xr, target); if (reason) *reason = "OpenXR stereo swapchain framebuffer incomplete"; return false;
+}
+
+static qboolean xr_acquire_target(iw_xr_win_t *xr, iw_xr_gl_target_t *target)
+{
+    XrSwapchainImageAcquireInfo acquire_info; XrSwapchainImageWaitInfo wait_info; XrSwapchainImageReleaseInfo release_info;
+    if (!target || target->swapchain == XR_NULL_HANDLE) return false;
+    if (target->acquired) { GL_BindFramebufferFunc(GL_FRAMEBUFFER, target->fbos[target->image_index]); return true; }
+    memset(&acquire_info, 0, sizeof(acquire_info)); acquire_info.type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO;
+    if (xr->acquire_swapchain_image(target->swapchain, &acquire_info, &target->image_index) != XR_SUCCESS) return false;
+    memset(&wait_info, 0, sizeof(wait_info)); wait_info.type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO; wait_info.timeout = XR_INFINITE_DURATION;
+    if (xr->wait_swapchain_image(target->swapchain, &wait_info) != XR_SUCCESS) { memset(&release_info, 0, sizeof(release_info)); release_info.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO; xr->release_swapchain_image(target->swapchain, &release_info); return false; }
+    target->acquired = true; GL_BindFramebufferFunc(GL_FRAMEBUFFER, target->fbos[target->image_index]); return true;
+}
+
+static void xr_release_target(iw_xr_win_t *xr, iw_xr_gl_target_t *target)
+{
+    XrSwapchainImageReleaseInfo release_info; if (!target || !target->acquired) return;
+    memset(&release_info, 0, sizeof(release_info)); release_info.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO; xr->release_swapchain_image(target->swapchain, &release_info); target->acquired = false;
+}
 static void xr_destroy_resources(iw_xr_win_t *xr);
 
 static const char *xr_result_name(XrResult result)
@@ -189,6 +251,8 @@ static void xr_update_screen_pose (iw_xr_win_t *xr, const XrView *views, uint32_
         forward[1] = 0.0f;
         forward[2] = -1.0f;
     }
+    xr->hud_pose = xr_build_screen_pose (&center, forward, xr->hud_distance);
+    xr->hud_pose.position.y += xr->hud_yoffset;
     candidate = xr_build_screen_pose (&center, forward, xr->screen_distance);
     candidate_position = candidate.position;
 
@@ -326,11 +390,14 @@ static qboolean xr_load_instance(iw_xr_win_t *xr, const char **reason)
     return true;
 }
 
+
 static void xr_destroy_resources(iw_xr_win_t *xr)
 {
     uint32_t i;
     if (!xr)
         return;
+    xr_destroy_target(xr, &xr->eyes[0]);
+    xr_destroy_target(xr, &xr->eyes[1]);
     if (xr->fbos)
     {
         for (i = 0; i < xr->image_count; ++i)
@@ -379,10 +446,14 @@ iw_xr_win_t *IW_XRWin_Create(void *window, void (*log)(void *, const char *), vo
         xr->userdata = userdata;
         xr->session_state = XR_SESSION_STATE_UNKNOWN;
         xr->screen_pose.orientation.w = 1.0f;
+        xr->hud_pose.orientation.w = 1.0f;
         xr->screen_pose.position.y = 1.6f;
         xr->screen_pose.position.z = -2.0f;
         xr->screen_scale = 1.0f;
         xr->screen_distance = 2.5f;
+        xr->hud_scale = 0.35f;
+        xr->hud_distance = 0.5f;
+        xr->hud_yoffset = 0.0f;
     }
     return xr;
 }
@@ -420,6 +491,7 @@ iw_xr_result_t IW_XRWin_Probe(iw_xr_win_t *xr, iw_xr_bridge_t *bridge, uint64_t 
     XrViewConfigurationType view_configs[8];
     uint32_t view_config_count = 0;
     uint32_t view_config_index;
+    XrViewConfigurationView view_config_views[2];
 
     (void)bridge;
     (void)deadline_ns;
@@ -501,7 +573,13 @@ iw_xr_result_t IW_XRWin_Probe(iw_xr_win_t *xr, iw_xr_bridge_t *bridge, uint64_t 
     for (view_config_index = 0; view_config_index < view_config_count; ++view_config_index)
         if (view_configs[view_config_index] == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO)
             xr->view_config_type = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
-    memset(&requirements, 0, sizeof(requirements));
+    memset(view_config_views, 0, sizeof(view_config_views));
+    for (view_config_index = 0; view_config_index < Q_COUNTOF(view_config_views); ++view_config_index)
+        view_config_views[view_config_index].type = XR_TYPE_VIEW_CONFIGURATION_VIEW;
+    result = xr->enumerate_view_configuration_views(xr->instance, xr->system_id, xr->view_config_type,
+                                                     Q_COUNTOF(view_config_views), &count, view_config_views);
+    if (result != XR_SUCCESS || count < 2)
+        return xr_fail(xr, reason, result, "xrEnumerateViewConfigurationViews");    memset(&requirements, 0, sizeof(requirements));
     requirements.type = XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_KHR;
     result = xr->get_opengl_graphics_requirements(xr->instance, xr->system_id, &requirements);
     if (result != XR_SUCCESS)
@@ -619,7 +697,25 @@ xr->fbos = (GLuint *)calloc(xr->image_count, sizeof(*xr->fbos));
         }
     }
     GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
-    memset(&event, 0, sizeof(event));
+    for (i = 0; i < 2; ++i)
+    {
+        if (!xr_create_target(xr, &xr->eyes[i], swap_info.format,
+                              view_config_views[i].recommendedImageRectWidth,
+                              view_config_views[i].recommendedImageRectHeight,
+                              view_config_views[i].recommendedSwapchainSampleCount, reason))
+        {
+            xr_log(xr, "OpenXR stereo target creation failed; flat screen remains available");
+            xr_destroy_target(xr, &xr->eyes[0]);
+            xr_destroy_target(xr, &xr->eyes[1]);
+            break;
+        }
+    }
+    if (xr->eyes[0].swapchain != XR_NULL_HANDLE && xr->eyes[1].swapchain != XR_NULL_HANDLE)
+    {
+        char message[160];
+        q_snprintf(message, sizeof(message), "OpenXR stereo targets: %ux%u / %ux%u", xr->eyes[0].width, xr->eyes[0].height, xr->eyes[1].width, xr->eyes[1].height);
+        xr_log(xr, message);
+    }    memset(&event, 0, sizeof(event));
     event.type = XR_TYPE_EVENT_DATA_BUFFER;
     while (xr->poll_event(xr->instance, &event) == XR_SUCCESS)
     {
@@ -725,6 +821,7 @@ qboolean IW_XRWin_BeginFrame(iw_xr_win_t *xr, iw_xr_frame_snapshot_t *snapshot)
         return false;
     }
     xr->frame_running = true;
+    xr->views_valid = false;
     memset(snapshot, 0, sizeof(*snapshot));
     snapshot->predicted_display_time = (uint64_t)xr->frame_state.predictedDisplayTime;
     snapshot->predicted_display_period = (uint64_t)xr->frame_state.predictedDisplayPeriod;
@@ -770,9 +867,66 @@ qboolean IW_XRWin_BeginFrame(iw_xr_win_t *xr, iw_xr_frame_snapshot_t *snapshot)
             }
         }
     }
+    xr->views_valid = snapshot->view_count >= 2;
+    xr->frame_snapshot = *snapshot;
     return true;
 }
 
+qboolean IW_XRWin_HasStereoTargets(const iw_xr_win_t *xr)
+{
+    return xr && xr->eyes[0].swapchain != XR_NULL_HANDLE && xr->eyes[1].swapchain != XR_NULL_HANDLE;
+}
+
+qboolean IW_XRWin_BindEyeTarget(iw_xr_win_t *xr, unsigned eye)
+{
+    return xr && eye < 2 && xr_acquire_target(xr, &xr->eyes[eye]);
+}
+
+qboolean IW_XRWin_GetEyeTarget(const iw_xr_win_t *xr, unsigned eye, unsigned *fbo, int *width, int *height)
+{
+    const iw_xr_gl_target_t *target;
+    if (!xr || eye >= 2) return false;
+    target = &xr->eyes[eye];
+    if (!target->acquired) return false;
+    if (fbo) *fbo = target->fbos[target->image_index];
+    if (width) *width = (int)target->width;
+    if (height) *height = (int)target->height;
+    return true;
+}
+
+void IW_XRWin_MirrorEye(iw_xr_win_t *xr, unsigned eye, int width, int height)
+{
+    iw_xr_gl_target_t *target;
+    if (!xr || eye >= 2 || width <= 0 || height <= 0) return;
+    target = &xr->eyes[eye];
+    if (!target->acquired) return;
+    GL_BindFramebufferFunc(GL_READ_FRAMEBUFFER, target->fbos[target->image_index]);
+    GL_BindFramebufferFunc(GL_DRAW_FRAMEBUFFER, 0);
+    GL_BlitFramebufferFunc(0, 0, target->width, target->height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
+}
+qboolean IW_XRWin_ResolveEyeTarget(iw_xr_win_t *xr, unsigned eye, int source_width, int source_height)
+{
+    iw_xr_gl_target_t *target;
+    GLboolean framebuffer_srgb_was_enabled = GL_FALSE;
+    if (!xr || eye >= 2 || source_width <= 0 || source_height <= 0) return false;
+    target = &xr->eyes[eye]; if (!target->acquired) return false;
+#ifdef GL_FRAMEBUFFER_SRGB
+    if (xr->swapchain_is_srgb) { framebuffer_srgb_was_enabled = glIsEnabled(GL_FRAMEBUFFER_SRGB); glDisable(GL_FRAMEBUFFER_SRGB); }
+#endif
+    GL_BindFramebufferFunc(GL_READ_FRAMEBUFFER, 0); GL_BindFramebufferFunc(GL_DRAW_FRAMEBUFFER, target->fbos[target->image_index]);
+    GL_BlitFramebufferFunc(0, 0, source_width, source_height, 0, 0, target->width, target->height, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
+#ifdef GL_FRAMEBUFFER_SRGB
+    if (framebuffer_srgb_was_enabled) glEnable(GL_FRAMEBUFFER_SRGB);
+#endif
+    return true;
+}
+
+void IW_XRWin_SetStereoSubmission(iw_xr_win_t *xr, qboolean enabled)
+{
+    if (xr) xr->stereo_submission = enabled && IW_XRWin_HasStereoTargets(xr) && xr->views_valid;
+}
 qboolean IW_XRWin_ResolveDefaultFramebuffer(iw_xr_win_t *xr, int source_width, int source_height)
 {
     GLboolean framebuffer_srgb_was_enabled = GL_FALSE;
@@ -829,6 +983,15 @@ qboolean IW_XRWin_BindFrameTarget(iw_xr_win_t *xr)
     return true;
 }
 
+qboolean IW_XRWin_GetFrameTarget(const iw_xr_win_t *xr, unsigned *fbo, int *width, int *height)
+{
+    if (!xr || !xr->image_acquired)
+        return false;
+    if (fbo) *fbo = xr->fbos[xr->image_index];
+    if (width) *width = (int)xr->width;
+    if (height) *height = (int)xr->height;
+    return true;
+}
 iw_xr_result_t IW_XRWin_EndFrame(iw_xr_win_t *xr, qboolean submit)
 {
     XrResult result;
@@ -839,7 +1002,80 @@ iw_xr_result_t IW_XRWin_EndFrame(iw_xr_win_t *xr, qboolean submit)
     XrFrameEndInfo end_info;
     qboolean submit_image;
     if (!xr || !xr->frame_running)
-        return IW_XR_RESULT_INVALID;
+        return IW_XR_RESULT_INVALID;    if (xr->stereo_submission)
+    {
+        XrCompositionLayerProjection projection;
+        XrCompositionLayerProjectionView projection_views[2];
+        XrCompositionLayerQuad hud;
+        XrCompositionLayerBaseHeader *layers[2];
+        XrFrameEndInfo projection_end;
+        uint32_t i, layer_count = 0;
+        qboolean stereo_submit = xr->eyes[0].acquired && xr->eyes[1].acquired;
+        qboolean hud_submit = xr->image_acquired;
+
+        for (i = 0; i < 2; ++i)
+            xr_release_target (xr, &xr->eyes[i]);
+        if (xr->image_acquired)
+        {
+            memset (&release_info, 0, sizeof (release_info));
+            release_info.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO;
+            xr->release_swapchain_image (xr->swapchain, &release_info);
+            xr->image_acquired = false;
+        }
+
+        memset (&projection, 0, sizeof (projection));
+        memset (projection_views, 0, sizeof (projection_views));
+        projection.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION;
+        projection.space = xr->space;
+        projection.viewCount = 2;
+        projection.views = projection_views;
+        for (i = 0; i < 2; ++i)
+        {
+            projection_views[i].type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW;
+            projection_views[i].pose.position.x = xr->frame_snapshot.views[i].position[0];
+            projection_views[i].pose.position.y = xr->frame_snapshot.views[i].position[1];
+            projection_views[i].pose.position.z = xr->frame_snapshot.views[i].position[2];
+            projection_views[i].pose.orientation.x = xr->frame_snapshot.views[i].orientation[0];
+            projection_views[i].pose.orientation.y = xr->frame_snapshot.views[i].orientation[1];
+            projection_views[i].pose.orientation.z = xr->frame_snapshot.views[i].orientation[2];
+            projection_views[i].pose.orientation.w = xr->frame_snapshot.views[i].orientation[3];
+            projection_views[i].fov.angleLeft = xr->frame_snapshot.views[i].fov.left;
+            projection_views[i].fov.angleRight = xr->frame_snapshot.views[i].fov.right;
+            projection_views[i].fov.angleUp = xr->frame_snapshot.views[i].fov.up;
+            projection_views[i].fov.angleDown = xr->frame_snapshot.views[i].fov.down;
+            projection_views[i].subImage.swapchain = xr->eyes[i].swapchain;
+            projection_views[i].subImage.imageRect.extent.width = xr->eyes[i].width;
+            projection_views[i].subImage.imageRect.extent.height = xr->eyes[i].height;
+        }
+        layers[layer_count++] = (XrCompositionLayerBaseHeader *)&projection;
+
+        if (hud_submit)
+        {
+            memset (&hud, 0, sizeof (hud));
+            hud.type = XR_TYPE_COMPOSITION_LAYER_QUAD;
+            hud.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+            hud.space = xr->space;
+            hud.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+            hud.subImage.swapchain = xr->swapchain;
+            hud.subImage.imageRect.extent.width = (int32_t)xr->width;
+            hud.subImage.imageRect.extent.height = (int32_t)xr->height;
+            hud.pose = xr->hud_pose;
+            hud.size.width = 1.8f * xr->hud_scale;
+            hud.size.height = hud.size.width * (float)xr->height / (float)xr->width;
+            layers[layer_count++] = (XrCompositionLayerBaseHeader *)&hud;
+        }
+
+        memset (&projection_end, 0, sizeof (projection_end));
+        projection_end.type = XR_TYPE_FRAME_END_INFO;
+        projection_end.displayTime = xr->frame_state.predictedDisplayTime;
+        projection_end.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+        projection_end.layerCount = submit && stereo_submit && xr->frame_state.shouldRender ? layer_count : 0;
+        projection_end.layers = projection_end.layerCount ? layers : NULL;
+        result = xr->end_frame (xr->session, &projection_end);
+        xr->frame_running = false;
+        xr->stereo_submission = false;
+        return result == XR_SUCCESS ? IW_XR_RESULT_OK : IW_XR_RESULT_FAILED;
+    }
     submit_image = xr->image_acquired;
     if (xr->image_acquired)
     {
@@ -929,6 +1165,16 @@ void IW_XRWin_SetScreenGeometry(iw_xr_win_t *xr, float scale, float distance)
     }
 }
 
+void IW_XRWin_SetHUDGeometry(iw_xr_win_t *xr, float scale, float distance, float yoffset)
+{
+    if (xr)
+    {
+        xr->hud_scale = q_max (0.25f, scale);
+        xr->hud_distance = q_max (0.25f, distance);
+        xr->hud_yoffset = yoffset;
+    }
+}
+
 void IW_XRWin_RequestRecenter(iw_xr_win_t *xr)
 {
     if (xr)
@@ -958,11 +1204,20 @@ iw_xr_result_t IW_XRWin_Probe(iw_xr_win_t *xr, iw_xr_bridge_t *bridge, uint64_t 
 iw_xr_result_t IW_XRWin_Pump(iw_xr_win_t *xr, iw_xr_bridge_t *bridge) { (void)xr; (void)bridge; return IW_XR_RESULT_UNAVAILABLE; }
 qboolean IW_XRWin_BeginFrame(iw_xr_win_t *xr, iw_xr_frame_snapshot_t *snapshot) { (void)xr; (void)snapshot; return false; }
 qboolean IW_XRWin_BindFrameTarget(iw_xr_win_t *xr) { (void)xr; return false; }
+qboolean IW_XRWin_GetFrameTarget(const iw_xr_win_t *xr, unsigned *fbo, int *width, int *height) { (void)xr; if (fbo) *fbo = 0; if (width) *width = 0; if (height) *height = 0; return false; }
+qboolean IW_XRWin_HasStereoTargets(const iw_xr_win_t *xr) { (void)xr; return false; }
+qboolean IW_XRWin_BindEyeTarget(iw_xr_win_t *xr, unsigned eye) { (void)xr; (void)eye; return false; }
+qboolean IW_XRWin_GetEyeTarget(const iw_xr_win_t *xr, unsigned eye, unsigned *fbo, int *width, int *height) { (void)xr; (void)eye; if (fbo) *fbo = 0; if (width) *width = 0; if (height) *height = 0; return false; }
+void IW_XRWin_MirrorEye(iw_xr_win_t *xr, unsigned eye, int width, int height) { (void)xr; (void)eye; (void)width; (void)height; }
+qboolean IW_XRWin_ResolveEyeTarget(iw_xr_win_t *xr, unsigned eye, int source_width, int source_height) { (void)xr; (void)eye; (void)source_width; (void)source_height; return false; }
+void IW_XRWin_SetStereoSubmission(iw_xr_win_t *xr, qboolean enabled) { (void)xr; (void)enabled; }
 qboolean IW_XRWin_ResolveDefaultFramebuffer(iw_xr_win_t *xr, int source_width, int source_height) { (void)xr; (void)source_width; (void)source_height; return false; }
+
 iw_xr_result_t IW_XRWin_EndFrame(iw_xr_win_t *xr, qboolean submit) { (void)xr; (void)submit; return IW_XR_RESULT_UNAVAILABLE; }
 void IW_XRWin_Shutdown(iw_xr_win_t *xr) { (void)xr; }
 void IW_XRWin_RequestRecenter(iw_xr_win_t *xr) { (void)xr; }
 void IW_XRWin_SetScreenCurve(iw_xr_win_t *xr, qboolean enabled, float radius) { (void)xr; (void)enabled; (void)radius; }
 void IW_XRWin_SetScreenGeometry(iw_xr_win_t *xr, float scale, float distance) { (void)xr; (void)scale; (void)distance; }
+void IW_XRWin_SetHUDGeometry(iw_xr_win_t *xr, float scale, float distance, float yoffset) { (void)xr; (void)scale; (void)distance; (void)yoffset; }
 
 #endif

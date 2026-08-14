@@ -22,6 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #ifndef GLQUAKE_H
+#include "xr_bridge.h"
 #define GLQUAKE_H
 
 void GL_BeginRendering (int *x, int *y, int *width, int *height);
@@ -687,6 +688,7 @@ extern glframebufs_t framebufs;
 
 void GL_CreateFrameBuffers (void);
 void GL_DeleteFrameBuffers (void);
+void GL_SetFrameBufferSize (int width, int height);
 
 void GLLight_CreateResources (void);
 void GLLight_DeleteResources (void);
@@ -754,6 +756,16 @@ void GL_AddGarbageBuffer (GLuint handle);
 qboolean GL_NeedsSceneEffects (void);
 qboolean GL_NeedsPostprocess (void);
 void GL_PostProcess (void);
+void R_SetXRFinalTarget (GLuint fbo, int width, int height);
+qboolean R_HasXRFinalTarget (void);
+qboolean R_GetXRCanvasOffset (float *x, float *y);
+void R_SetXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye);
+void R_ClearXREye (void);
+qboolean VID_XR_GetStereoFrame (const iw_xr_frame_snapshot_t **snapshot);
+qboolean VID_XR_BeginEye (unsigned eye, unsigned *fbo, int *width, int *height);
+void VID_XR_EndEye (unsigned eye);
+qboolean VID_XR_BeginHUD (unsigned *fbo, int *width, int *height);
+
 
 float GL_WaterAlphaForTextureType (textype_t type);
 

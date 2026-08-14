@@ -31,6 +31,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 const vec3_t	rgb_black = {0.f, 0.f, 0.f};
 const vec3_t	rgb_white = {1.f, 1.f, 1.f};
 
+extern cvar_t vr_hud_scale;
+extern cvar_t vr_hud_render_yoffset;
+
 cvar_t		scr_conalpha = {"scr_conalpha", "0.5", CVAR_ARCHIVE}; //johnfitz
 cvar_t		scr_conbrightness = {"scr_conbrightness", "1.0", CVAR_ARCHIVE};
 
@@ -1236,23 +1239,49 @@ void Draw_GetCanvasTransform (canvastype type, drawtransform_t *transform)
 		Draw_Transform (vid.guiwidth/s, vid.guiheight/s, s, CANVAS_ALIGN_CENTERX, CANVAS_ALIGN_CENTERY, transform);
 		break;
 	case CANVAS_SBAR:
-		if (hudstyle == HUD_QUAKEWORLD)	// qw hud could cut off if too short
-			s = CLAMP (1.0f, scr_sbarscale.value, (float)vid.guiheight / 240.0f);
+		if (R_HasXRFinalTarget ())
+		{
+			s = 2.0f * CLAMP (0.5f, vr_hud_scale.value, 3.0f);
+			Draw_Transform (320, 48, s, CANVAS_ALIGN_CENTERX, CANVAS_ALIGN_CENTERY, transform);
+			transform->offset[1] -= 0.55f;
+		}
 		else
-			s = CLAMP(1.0f, scr_sbarscale.value, (float)vid.guiwidth / 320.0f);
-		if (cl.gametype == GAME_DEATHMATCH && (hudstyle == HUD_CLASSIC || hudstyle == HUD_QUAKEWORLD))
-			Draw_Transform (320, 48, s, CANVAS_ALIGN_LEFT, CANVAS_ALIGN_BOTTOM, transform);
-		else
-			Draw_Transform (320, 48, s, CANVAS_ALIGN_CENTERX, CANVAS_ALIGN_BOTTOM, transform);
+		{
+			if (hudstyle == HUD_QUAKEWORLD)
+				s = CLAMP (1.0f, scr_sbarscale.value, (float)vid.guiheight / 240.0f);
+			else
+				s = CLAMP(1.0f, scr_sbarscale.value, (float)vid.guiwidth / 320.0f);
+			if (cl.gametype == GAME_DEATHMATCH && (hudstyle == HUD_CLASSIC || hudstyle == HUD_QUAKEWORLD))
+				Draw_Transform (320, 48, s, CANVAS_ALIGN_LEFT, CANVAS_ALIGN_BOTTOM, transform);
+			else
+				Draw_Transform (320, 48, s, CANVAS_ALIGN_CENTERX, CANVAS_ALIGN_BOTTOM, transform);
+		}
 		break;
     case CANVAS_SBAR_QW_INV:
-		s = CLAMP(1.0f, scr_sbarscale.value, (float)vid.guiheight / 240.0f);
-        Draw_Transform (48, 48, s, CANVAS_ALIGN_RIGHT, CANVAS_ALIGN_BOTTOM, transform);
+		if (R_HasXRFinalTarget ())
+		{
+			s = 2.0f * CLAMP (0.5f, vr_hud_scale.value, 3.0f);
+			Draw_Transform (48, 48, s, CANVAS_ALIGN_CENTERX, CANVAS_ALIGN_CENTERY, transform);
+			transform->offset[1] -= 0.55f;
+		}
+		else
+		{
+			s = CLAMP(1.0f, scr_sbarscale.value, (float)vid.guiheight / 240.0f);
+			Draw_Transform (48, 48, s, CANVAS_ALIGN_RIGHT, CANVAS_ALIGN_BOTTOM, transform);
+		}
 		break;
 	case CANVAS_SBAR2:
-		s = q_min (vid.guiwidth / 400.0f, vid.guiheight / 225.0f);
-		s = CLAMP (1.0f, scr_sbarscale.value, s);
-		Draw_Transform (vid.guiwidth/s, vid.guiheight/s, s, CANVAS_ALIGN_CENTERX, CANVAS_ALIGN_CENTERY, transform);
+		if (R_HasXRFinalTarget ())
+		{
+			s = 2.0f * CLAMP (0.5f, vr_hud_scale.value, 3.0f);
+			Draw_Transform (400, 225, s, CANVAS_ALIGN_CENTERX, CANVAS_ALIGN_CENTERY, transform);
+		}
+		else
+		{
+			s = q_min (vid.guiwidth / 400.0f, vid.guiheight / 225.0f);
+			s = CLAMP (1.0f, scr_sbarscale.value, s);
+			Draw_Transform (vid.guiwidth/s, vid.guiheight/s, s, CANVAS_ALIGN_CENTERX, CANVAS_ALIGN_CENTERY, transform);
+		}
 		break;
 	case CANVAS_CROSSHAIR: //0,0 is center of viewport
 		s = CLAMP (1.0f, scr_crosshairscale.value, 10.0f);
@@ -1270,6 +1299,29 @@ void Draw_GetCanvasTransform (canvastype type, drawtransform_t *transform)
 		break;
 	default:
 		Sys_Error ("Draw_GetCanvasTransform: bad canvas type");
+	}
+	{
+		if (type == CANVAS_MENU && R_HasXRFinalTarget ())
+		{
+			const float scale = 1.f / 2.5f;
+			transform->scale[0] *= scale;
+			transform->scale[1] *= scale;
+			transform->offset[0] *= scale;
+			transform->offset[1] *= scale;
+		}
+
+		{
+			float x, y;
+			if (R_GetXRCanvasOffset (&x, &y))
+			{
+				transform->offset[0] += x;
+				transform->offset[1] += y;
+				if (type == CANVAS_SBAR || type == CANVAS_SBAR_QW_INV || type == CANVAS_SBAR2)
+				{
+					transform->offset[1] -= transform->scale[1] * vr_hud_render_yoffset.value;
+				}
+			}
+		}
 	}
 }
 
