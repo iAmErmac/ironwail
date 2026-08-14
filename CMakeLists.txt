@@ -115,6 +115,17 @@ else()
 endif()
 
 target_compile_definitions(ironwail PRIVATE $<$<CONFIG:Debug>:DEBUG=1> $<$<NOT:$<CONFIG:Debug>>:NDEBUG=1> USE_SDL2 USE_CODEC_WAVE)
+
+set(IRONWAIL_PAK_FILE "${CMAKE_CURRENT_SOURCE_DIR}/Quake/ironwail.pak" CACHE FILEPATH "Ironwail engine pak to copy beside the executable" )
+if (EXISTS ${IRONWAIL_PAK_FILE})
+    add_custom_command(TARGET ironwail POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${IRONWAIL_PAK_FILE}
+            $<TARGET_FILE_DIR:ironwail>/ironwail.pak
+        VERBATIM)
+else()
+    message(WARNING "Ironwail pak was not found; the executable will build without engine package data.")
+endif()
 if (IW_ENABLE_OPENXR AND IRONWAIL_OPENXR_LOADER_DLL)
     add_custom_command(TARGET ironwail POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different

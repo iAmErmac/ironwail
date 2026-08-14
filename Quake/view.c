@@ -22,6 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // view.c -- player eye positioning
 
 #include "quakedef.h"
+#include "xr_bridge.h"
 
 /*
 
@@ -919,6 +920,20 @@ the entity origin, so any view position inside that will be valid
 */
 extern vrect_t	scr_vrect;
 
+void V_RenderXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye)
+{
+	if (con_forcedup)
+		return;
+
+	if (cl.intermission)
+		V_CalcIntermissionRefdef ();
+	else if (!cl.paused)
+		V_CalcRefdef ();
+
+	R_SetXREye (snapshot, eye);
+	R_RenderView ();
+	V_PolyBlend ();
+}
 void V_RenderView (void)
 {
 	if (con_forcedup)

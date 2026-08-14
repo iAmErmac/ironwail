@@ -18,11 +18,20 @@ iw_xr_result_t IW_XRWin_Probe(iw_xr_win_t *xr, iw_xr_bridge_t *bridge, uint64_t 
 iw_xr_result_t IW_XRWin_Pump(iw_xr_win_t *xr, iw_xr_bridge_t *bridge);
 qboolean IW_XRWin_BeginFrame(iw_xr_win_t *xr, iw_xr_frame_snapshot_t *snapshot);
 qboolean IW_XRWin_BindFrameTarget(iw_xr_win_t *xr);
+qboolean IW_XRWin_GetFrameTarget(const iw_xr_win_t *xr, unsigned *fbo, int *width, int *height);
 qboolean IW_XRWin_ResolveDefaultFramebuffer(iw_xr_win_t *xr, int source_width, int source_height);
+qboolean IW_XRWin_HasStereoTargets(const iw_xr_win_t *xr);
+qboolean IW_XRWin_BindEyeTarget(iw_xr_win_t *xr, unsigned eye);
+qboolean IW_XRWin_GetEyeTarget(const iw_xr_win_t *xr, unsigned eye, unsigned *fbo, int *width, int *height);
+void IW_XRWin_MirrorEye(iw_xr_win_t *xr, unsigned eye, int width, int height);
+
+qboolean IW_XRWin_ResolveEyeTarget(iw_xr_win_t *xr, unsigned eye, int source_width, int source_height);
+void IW_XRWin_SetStereoSubmission(iw_xr_win_t *xr, qboolean enabled);
 iw_xr_result_t IW_XRWin_EndFrame(iw_xr_win_t *xr, qboolean submit);
 void IW_XRWin_Shutdown(iw_xr_win_t *xr);
 void IW_XRWin_RequestRecenter(iw_xr_win_t *xr);
 void IW_XRWin_SetScreenCurve(iw_xr_win_t *xr, qboolean enabled, float radius);
 void IW_XRWin_SetScreenGeometry(iw_xr_win_t *xr, float scale, float distance);
+void IW_XRWin_SetHUDGeometry(iw_xr_win_t *xr, float scale, float distance, float yoffset);
 
 #endif

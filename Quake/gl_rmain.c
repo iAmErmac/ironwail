@@ -22,6 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // r_main.c
 
 #include "quakedef.h"
+#include "xr_bridge.h"
 #if defined(ANDROID_GLES3)
 #include "gl_gles_ubo.h"
 #include "gl_gles_vao.h"
@@ -67,7 +68,157 @@ extern qboolean SV_BoxInPVS (vec3_t mins, vec3_t maxs, byte *pvs, mnode_t *node)
 // screen size info
 //
 refdef_t	r_refdef;
+extern cvar_t vr_world_scale;
+static qboolean r_xr_eye_pass;
+static unsigned r_xr_eye_index;static GLuint r_xr_final_fbo;
+static int r_xr_final_width;
+static int r_xr_final_height;
 
+void R_SetXRFinalTarget(GLuint fbo, int width, int height)
+{
+    r_xr_final_fbo = fbo;
+    r_xr_final_width = width;
+    r_xr_final_height = height;
+}
+
+qboolean R_HasXRFinalTarget(void) { return r_xr_final_fbo != 0; }
+static qboolean r_xr_asymmetric_projection;
+static iw_xr_fov_t r_xr_fov;
+static qboolean r_xr_head_anchor_valid;
+static float r_xr_head_anchor_yaw;
+static float r_xr_game_anchor_yaw;
+static qboolean r_xr_view_basis_valid;
+static vec3_t r_xr_forward, r_xr_right, r_xr_up;
+qboolean R_GetXRCanvasOffset (float *x, float *y)
+{
+	float left, right, bottom, top;
+	if (!r_xr_asymmetric_projection)
+		return false;
+	left = tanf (r_xr_fov.left);
+	right = tanf (r_xr_fov.right);
+	bottom = tanf (r_xr_fov.down);
+	top = tanf (r_xr_fov.up);
+	*x = -(right + left) / (right - left);
+	*y = -(top + bottom) / (top - bottom);
+	return true;
+}
+
+
+void R_XRRecenter (void)
+{
+	r_xr_head_anchor_valid = false;
+	r_xr_view_basis_valid = false;
+}
+
+static void R_XRToQuakePosition (const float xr[3], float quake[3]);
+
+static void R_XRRotateVector (const iw_xr_view_t *view, const float in[3], float out[3])
+{
+	float x = view->orientation[0], y = view->orientation[1];
+	float z = view->orientation[2], w = view->orientation[3];
+	float tx = 2.f * (y * in[2] - z * in[1]);
+	float ty = 2.f * (z * in[0] - x * in[2]);
+	float tz = 2.f * (x * in[1] - y * in[0]);
+
+	out[0] = in[0] + w * tx + (y * tz - z * ty);
+	out[1] = in[1] + w * ty + (z * tx - x * tz);
+	out[2] = in[2] + w * tz + (x * ty - y * tx);
+}
+
+static void R_XRNormalizeAngles (float *pitch, float *yaw, float *roll)
+{
+	while (*pitch >= 90.f) *pitch -= 180.f;
+	while (*pitch < -90.f) *pitch += 180.f;
+	while (*yaw >= 180.f) *yaw -= 360.f;
+	while (*yaw < -180.f) *yaw += 360.f;
+	while (*roll >= 180.f) *roll -= 360.f;
+	while (*roll < -180.f) *roll += 360.f;
+}
+
+static void R_XRHeadAngles (const iw_xr_view_t *view, float *pitch, float *yaw, float *roll)
+{
+	const float xr_forward[3] = { 0.f, 0.f, -1.f };
+	const float xr_right[3] = { 1.f, 0.f, 0.f };
+	const float xr_up[3] = { 0.f, 1.f, 0.f };
+	float forward_xr[3], right_xr[3], up_xr[3];
+	float forward[3], right[3], up[3];
+	float sp, cp, sy, cy, sr, cr;
+
+	R_XRRotateVector (view, xr_forward, forward_xr);
+	R_XRRotateVector (view, xr_right, right_xr);
+	R_XRRotateVector (view, xr_up, up_xr);
+	R_XRToQuakePosition (forward_xr, forward);
+	R_XRToQuakePosition (right_xr, right);
+	R_XRToQuakePosition (up_xr, up);
+
+	sp = -forward[2];
+	sy = forward[1];
+	cy = forward[0];
+	sr = -right[2];
+	cr = up[2];
+	if (fabsf (cy) > 0.001f)
+		cp = forward[0] / cy;
+	else if (fabsf (sy) > 0.001f)
+		cp = forward[1] / sy;
+	else if (fabsf (sr) > 0.001f)
+		cp = -right[2] / sr;
+	else if (fabsf (cr) > 0.001f)
+		cp = up[2] / cr;
+	else
+		cp = cosf (asinf (sp));
+
+	*pitch = RAD2DEG (atan2f (sp, cp));
+	*yaw = RAD2DEG (atan2f (sy, cy));
+	*roll = RAD2DEG (atan2f (sr, cr));
+	R_XRNormalizeAngles (pitch, yaw, roll);
+}
+static void R_XRToQuakePosition (const float xr[3], float quake[3])
+{
+	quake[0] = -xr[2];
+	quake[1] = -xr[0];
+	quake[2] = xr[1];
+}
+
+static void R_XRRotateYaw (float vector[3], float yaw)
+{
+	float radians = DEG2RAD (yaw);
+	float x = vector[0], y = vector[1];
+	vector[0] = x * cosf (radians) - y * sinf (radians);
+	vector[1] = x * sinf (radians) + y * cosf (radians);
+}
+
+static void R_SetXRProjection (float *matrix, float znear, float zfar)
+{
+	float left = tanf (r_xr_fov.left) * znear;
+	float right = tanf (r_xr_fov.right) * znear;
+	float bottom = tanf (r_xr_fov.down) * znear;
+	float top = tanf (r_xr_fov.up) * znear;
+	float xscale = 2.f * znear / (right - left);
+	float yscale = 2.f * znear / (top - bottom);
+	float xoffset = (right + left) / (right - left);
+	float yoffset = (top + bottom) / (top - bottom);
+	float zscale, ztranslate;
+
+	if (gl_clipcontrol_able)
+	{
+		zscale = znear / (zfar - znear);
+		ztranslate = zfar * znear / (zfar - znear);
+	}
+	else
+	{
+		zscale = -(zfar + znear) / (zfar - znear);
+		ztranslate = -2.f * zfar * znear / (zfar - znear);
+	}
+
+	memset (matrix, 0, 16 * sizeof (*matrix));
+	matrix[0] = -xoffset;
+	matrix[1] = -yoffset;
+	matrix[2] = -zscale;
+	matrix[3] = 1.f;
+	matrix[4] = -xscale;
+	matrix[9] = yscale;
+	matrix[14] = ztranslate;
+}
 mleaf_t		*r_viewleaf, *r_oldviewleaf;
 
 int		d_lightstylevalue[256];	// 8.8 fraction of base light value
@@ -156,6 +307,8 @@ cvar_t	r_scale = {"r_scale", "1", CVAR_ARCHIVE};
 //==============================================================================
 
 glframebufs_t framebufs;
+static int r_framebuffer_width;
+static int r_framebuffer_height;
 
 /*
 =============
@@ -173,11 +326,11 @@ static GLuint GL_CreateFBOAttachment (GLenum format, int samples, GLenum filter,
 	GL_ObjectLabelFunc (GL_TEXTURE, texnum, -1, name);
 	if (samples > 1)
 	{
-		GL_TexStorage2DMultisampleFunc (target, samples, format, vid.width, vid.height, GL_FALSE);
+		GL_TexStorage2DMultisampleFunc (target, samples, format, r_framebuffer_width, r_framebuffer_height, GL_FALSE);
 	}
 	else
 	{
-		GL_TexStorage2DFunc (target, 1, format, vid.width, vid.height);
+		GL_TexStorage2DFunc (target, 1, format, r_framebuffer_width, r_framebuffer_height);
 		glTexParameteri (target, GL_TEXTURE_MAG_FILTER, filter);
 		glTexParameteri (target, GL_TEXTURE_MIN_FILTER, filter);
 	}
@@ -245,6 +398,11 @@ GL_CreateFrameBuffers
 */
 void GL_CreateFrameBuffers (void)
 {
+	if (!r_framebuffer_width || !r_framebuffer_height)
+	{
+		r_framebuffer_width = vid.width;
+		r_framebuffer_height = vid.height;
+	}
 	#if defined(ANDROID_GLES3)
 	GLenum color_format = GL_RGBA8;
 #else
@@ -334,6 +492,16 @@ void GL_CreateFrameBuffers (void)
 GL_DeleteFrameBuffers
 =============
 */
+void GL_SetFrameBufferSize (int width, int height)
+{
+	if (width <= 0 || height <= 0 || (r_framebuffer_width == width && r_framebuffer_height == height))
+		return;
+
+	GL_DeleteFrameBuffers ();
+	r_framebuffer_width = width;
+	r_framebuffer_height = height;
+	GL_CreateFrameBuffers ();
+}
 void GL_DeleteFrameBuffers (void)
 {
 	GL_DeleteFramebuffersFunc (1, &framebufs.resolved_scene.fbo);
@@ -382,8 +550,9 @@ void GL_PostProcess (void)
 	palidx =  GLPalette_Postprocess ();
 	dither = (softemu == SOFTEMU_FINE) ? NOISESCALE * r_dither.value * r_softemu_dither_screen.value : 0.f;
 
-	GL_BindFramebufferFunc (GL_FRAMEBUFFER, 0);
-	glViewport (glx, gly, glwidth, glheight);
+	GL_BindFramebufferFunc (GL_FRAMEBUFFER, r_xr_final_fbo);
+	glViewport (r_xr_final_fbo ? 0 : glx, r_xr_final_fbo ? 0 : gly,
+		r_xr_final_fbo ? r_xr_final_width : glwidth, r_xr_final_fbo ? r_xr_final_height : glheight);
 
 	variant = q_min ((int)softemu, 2);
 	GL_UseProgram (glprogs.postprocess[variant]);
@@ -902,14 +1071,27 @@ void R_SetFrustum (void)
 	znear = CLAMP (0.5f, d, 4.f);
 	zfar = gl_farclip.value;
 
-	GL_FrustumMatrix(r_matproj, DEG2RAD(r_fovx), DEG2RAD(r_fovy), znear, zfar);
+	if (r_xr_asymmetric_projection)
+		R_SetXRProjection(r_matproj, znear, zfar);
+	else
+		GL_FrustumMatrix(r_matproj, DEG2RAD(r_fovx), DEG2RAD(r_fovy), znear, zfar);
 
 	// View matrix
-	RotationMatrix(r_matview, DEG2RAD(-r_refdef.viewangles[ROLL]), 0);
-	RotationMatrix(rotation, DEG2RAD(-r_refdef.viewangles[PITCH]), 1);
-	MatrixMultiply(r_matview, rotation);
-	RotationMatrix(rotation, DEG2RAD(-r_refdef.viewangles[YAW]), 2);
-	MatrixMultiply(r_matview, rotation);
+	if (r_xr_view_basis_valid)
+	{
+		IdentityMatrix (r_matview);
+		r_matview[0] = r_xr_forward[0]; r_matview[4] = r_xr_forward[1]; r_matview[8] = r_xr_forward[2];
+		r_matview[1] = -r_xr_right[0]; r_matview[5] = -r_xr_right[1]; r_matview[9] = -r_xr_right[2];
+		r_matview[2] = r_xr_up[0]; r_matview[6] = r_xr_up[1]; r_matview[10] = r_xr_up[2];
+	}
+	else
+	{
+		RotationMatrix(r_matview, DEG2RAD(-r_refdef.viewangles[ROLL]), 0);
+		RotationMatrix(rotation, DEG2RAD(-r_refdef.viewangles[PITCH]), 1);
+		MatrixMultiply(r_matview, rotation);
+		RotationMatrix(rotation, DEG2RAD(-r_refdef.viewangles[YAW]), 2);
+		MatrixMultiply(r_matview, rotation);
+	}
 
 	TranslationMatrix(translation, -r_refdef.vieworg[0], -r_refdef.vieworg[1], -r_refdef.vieworg[2]);
 	MatrixMultiply(r_matview, translation);
@@ -937,7 +1119,7 @@ GL_NeedsSceneEffects
 */
 qboolean GL_NeedsSceneEffects (void)
 {
-	return framebufs.scene.samples > 1 || water_warp || r_refdef.scale != 1;
+	return R_HasXRFinalTarget() || framebufs.scene.samples > 1 || water_warp || r_refdef.scale != 1;
 }
 
 /*
@@ -1066,7 +1248,14 @@ void R_SetupView (void)
 
 // build the transformation matrix for the given view angles
 	VectorCopy (r_refdef.vieworg, r_origin);
-	AngleVectors (r_refdef.viewangles, vpn, vright, vup);
+	if (r_xr_view_basis_valid)
+	{
+		VectorCopy (r_xr_forward, vpn);
+		VectorCopy (r_xr_right, vright);
+		VectorCopy (r_xr_up, vup);
+	}
+	else
+		AngleVectors (r_refdef.viewangles, vpn, vright, vup);
 
 // current viewleaf
 	r_oldviewleaf = r_viewleaf;
@@ -2003,7 +2192,8 @@ void R_RenderScene (void)
 
 	Fog_EnableGFog (); //johnfitz
 
-	S_ExtraUpdate (); // don't let sound get messed up if going slow
+	if (!r_xr_eye_pass || r_xr_eye_index == 0)
+		S_ExtraUpdate (); // don't let sound get messed up if going slow
 
 	R_DrawEntitiesOnList (false); //johnfitz -- false means this is the pass for nonalpha entities
 
@@ -2061,8 +2251,8 @@ void R_WarpScaleView (void)
 	srcw = r_refdef.vrect.width / r_refdef.scale;
 	srch = r_refdef.vrect.height / r_refdef.scale;
 
-	needwarpscale = r_refdef.scale != 1 || water_warp || (v_blend[3] && gl_polyblend.value && !softemu);
-	fbodest = GL_NeedsPostprocess () ? framebufs.composite.fbo : 0;
+	needwarpscale = R_HasXRFinalTarget() || r_refdef.scale != 1 || water_warp || (v_blend[3] && gl_polyblend.value && !softemu);
+	fbodest = GL_NeedsPostprocess () ? framebufs.composite.fbo : r_xr_final_fbo;
 
 	if (msaa)
 	{
@@ -2084,15 +2274,17 @@ void R_WarpScaleView (void)
 	}
 
 	GL_BindFramebufferFunc (GL_FRAMEBUFFER, fbodest);
-	glViewport (srcx, srcy, r_refdef.vrect.width, r_refdef.vrect.height);
+	glViewport (r_xr_final_fbo ? 0 : srcx, r_xr_final_fbo ? 0 : srcy,
+		r_xr_final_fbo ? r_xr_final_width : r_refdef.vrect.width,
+		r_xr_final_fbo ? r_xr_final_height : r_refdef.vrect.height);
 
 	if (!needwarpscale)
 		return;
 
 	GL_BeginGroup ("Warp/scale view");
 
-	smax = srcw/(float)vid.width;
-	tmax = srch/(float)vid.height;
+	smax = srcw/(float)r_framebuffer_width;
+	tmax = srch/(float)r_framebuffer_height;
 
 	GL_UseProgram (glprogs.warpscale[water_warp]);
 	GL_SetState (GLS_BLEND_OPAQUE | GLS_NO_ZTEST | GLS_NO_ZWRITE | GLS_CULL_NONE | GLS_ATTRIBS(0));
@@ -2119,6 +2311,60 @@ void R_WarpScaleView (void)
 R_RenderView
 ================
 */
+void R_SetXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye)
+{
+	const float xr_forward[3] = { 0.f, 0.f, -1.f };
+	const float xr_right[3] = { 1.f, 0.f, 0.f };
+	const float xr_up[3] = { 0.f, 1.f, 0.f };
+	float forward_xr[3], right_xr[3], up_xr[3];
+	float head_pitch, head_yaw, head_roll;
+	float dx, dy, dz, ipd, separation;
+
+	if (!snapshot || eye >= 2)
+		return;
+
+	R_XRHeadAngles (&snapshot->views[0], &head_pitch, &head_yaw, &head_roll);
+	if (!r_xr_head_anchor_valid)
+	{
+		r_xr_head_anchor_yaw = head_yaw;
+		r_xr_game_anchor_yaw = r_refdef.viewangles[YAW];
+		r_xr_head_anchor_valid = true;
+	}
+
+	R_XRRotateVector (&snapshot->views[0], xr_forward, forward_xr);
+	R_XRRotateVector (&snapshot->views[0], xr_right, right_xr);
+	R_XRRotateVector (&snapshot->views[0], xr_up, up_xr);
+	R_XRToQuakePosition (forward_xr, r_xr_forward);
+	R_XRToQuakePosition (right_xr, r_xr_right);
+	R_XRToQuakePosition (up_xr, r_xr_up);
+	R_XRRotateYaw (r_xr_forward, r_xr_game_anchor_yaw - r_xr_head_anchor_yaw);
+	R_XRRotateYaw (r_xr_right, r_xr_game_anchor_yaw - r_xr_head_anchor_yaw);
+	R_XRRotateYaw (r_xr_up, r_xr_game_anchor_yaw - r_xr_head_anchor_yaw);
+	r_xr_view_basis_valid = true;
+
+	r_refdef.viewangles[YAW] = r_xr_game_anchor_yaw + (head_yaw - r_xr_head_anchor_yaw);
+	r_refdef.viewangles[PITCH] = head_pitch;
+	r_refdef.viewangles[ROLL] = head_roll;
+
+	dx = snapshot->views[1].position[0] - snapshot->views[0].position[0];
+	dy = snapshot->views[1].position[1] - snapshot->views[0].position[1];
+	dz = snapshot->views[1].position[2] - snapshot->views[0].position[2];
+	ipd = sqrtf (dx * dx + dy * dy + dz * dz);
+	separation = vr_world_scale.value * ipd * (0.5f - (float)eye);
+	VectorMA (r_refdef.vieworg, -separation, r_xr_right, r_refdef.vieworg);
+
+	r_xr_fov = snapshot->views[eye].fov;
+	r_xr_asymmetric_projection = true;
+	r_xr_eye_pass = true;
+	r_xr_eye_index = eye;
+}
+void R_ClearXREye (void)
+{
+	r_xr_asymmetric_projection = false;
+	r_xr_eye_pass = false;
+	r_xr_view_basis_valid = false;
+	R_SetXRFinalTarget (0, 0, 0);
+}
 void R_RenderView (void)
 {
 	double	time1, time2;

@@ -25,6 +25,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 static int		sb_updates;		// if >= vid.numpages, no update needed
 
+static qboolean Sbar_IsXRHUD (void)
+{
+	return R_HasXRFinalTarget ();
+}
+
 #define STAT_MINUS		10	// num frame for '-' stats digit
 
 #define SBAR2_MARGIN_X	16
@@ -780,7 +785,7 @@ void Sbar_DrawInventoryQW (void)
 	}
 
 	// draw weapons, ammo, sigils on right side if full hud
-	if(scr_viewsize.value < 110)
+	if((scr_viewsize.value < 110 || Sbar_IsXRHUD ()))
 	{
 		int extraguns = 2 * hipnotic;
 
@@ -1025,7 +1030,7 @@ void Sbar_DrawInventory2 (void)
 	qpic_t	*pic;
 
 	// weapons
-	if (scr_viewsize.value < 110)
+	if ((scr_viewsize.value < 110 || Sbar_IsXRHUD ()))
 	{
 		const int ROW_HEIGHT = 16;
 		x = (int)(glcanvas.right + 1 + 0.5f);
@@ -1118,7 +1123,7 @@ void Sbar_DrawInventory2 (void)
 	}
 
 	// ammo counts
-	if (scr_viewsize.value < 110)
+	if ((scr_viewsize.value < 110 || Sbar_IsXRHUD ()))
 	{
 		pic = Sbar_InventoryBarPic ();
 
@@ -1145,7 +1150,7 @@ void Sbar_DrawInventory2 (void)
 	}
 
 	// items
-	if (scr_viewsize.value < 110 && (hudstyle == HUD_MODERN_SIDEAMMO || hudstyle == HUD_QUAKEWORLD))
+	if ((scr_viewsize.value < 110 || Sbar_IsXRHUD ()) && (hudstyle == HUD_MODERN_SIDEAMMO || hudstyle == HUD_QUAKEWORLD))
 	{
 		x = (int)(glcanvas.right - SBAR2_MARGIN_X - 16 + 0.5f);
 		y = (int)(glcanvas.bottom - SBAR2_MARGIN_Y - 68 - 20 + 0.5f);
@@ -1195,7 +1200,7 @@ void Sbar_DrawInventory2 (void)
 		}
 	}
 
-	if (scr_viewsize.value < 110)
+	if ((scr_viewsize.value < 110 || Sbar_IsXRHUD ()))
 	{
 		if (hipnotic) // hipnotic items
 		{
@@ -1424,7 +1429,7 @@ void Sbar_DrawFrags2 (void)
 		}
 
 	// name
-		if (scr_viewsize.value < 110)
+		if ((scr_viewsize.value < 110 || Sbar_IsXRHUD ()))
 			Sbar_DrawString (x + 40, y - 24, s->name);
 	}
 }
@@ -1690,7 +1695,7 @@ void Sbar_Draw (void)
 
 		if (hudstyle == HUD_CLASSIC)	//classic hud
 		{
-			if (scr_viewsize.value < 110) //johnfitz -- check viewsize instead of sb_lines
+			if ((scr_viewsize.value < 110 || Sbar_IsXRHUD ())) //johnfitz -- check viewsize instead of sb_lines
 			{
 				Sbar_DrawInventory ();
 				if (cl.maxclients != 1)
@@ -1699,11 +1704,11 @@ void Sbar_Draw (void)
 		}
 		else	//qw hud
 		{
-			if (scr_viewsize.value < 120)
+			if ((scr_viewsize.value < 120 || Sbar_IsXRHUD ()))
 			{
 				Sbar_DrawInventoryQW();
 			}
-			if (cl.maxclients != 1 && scr_viewsize.value < 110)	// qw hides frag count if MiniDeathmatchOverlay is showing
+			if (cl.maxclients != 1 && (scr_viewsize.value < 110 || Sbar_IsXRHUD ()))	// qw hides frag count if MiniDeathmatchOverlay is showing
 			{
 				if (!Sbar_MiniScoreboardSizeCheck() || cl.gametype != GAME_DEATHMATCH)
 				{
@@ -1720,7 +1725,7 @@ void Sbar_Draw (void)
 			Sbar_DrawScoreboard ();
 			sb_updates = 0;
 		}
-		else if (scr_viewsize.value < 120) //johnfitz -- check viewsize instead of sb_lines
+		else if ((scr_viewsize.value < 120 || Sbar_IsXRHUD ())) //johnfitz -- check viewsize instead of sb_lines
 		{
 			if (hudstyle == HUD_CLASSIC)
 				Sbar_DrawPicAlpha (0, 0, sb_sbar, scr_sbaralpha.value); //johnfitz -- scr_sbaralpha
@@ -1777,7 +1782,7 @@ void Sbar_Draw (void)
 			Sbar_DrawScoreboard ();
 			sb_updates = 0;
 		}
-		else if (scr_viewsize.value < 120) //johnfitz -- check viewsize instead of sb_lines
+		else if ((scr_viewsize.value < 120 || Sbar_IsXRHUD ())) //johnfitz -- check viewsize instead of sb_lines
 		{
 			GL_SetCanvas (CANVAS_SBAR2);
 

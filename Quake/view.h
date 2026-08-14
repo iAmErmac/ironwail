@@ -23,6 +23,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #ifndef _QUAKE_VIEW_H
 #define _QUAKE_VIEW_H
 
+#include "xr_bridge.h"
+
 extern	cvar_t		vid_gamma;
 extern	cvar_t		vid_contrast;
 
@@ -30,6 +32,7 @@ extern float v_blend[4];
 
 void V_Init (void);
 void V_RenderView (void);
+void V_RenderXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye);
 void V_CalcBlend (void);
 void V_UpdateBlend (void);
 void V_ResetEffects (void);

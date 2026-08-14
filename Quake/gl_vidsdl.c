@@ -98,6 +98,8 @@ static iw_xr_bridge_t *vid_xr_bridge;
 static iw_xr_win_t *vid_xr_backend;
 static qboolean vid_xr_frame_active;
 static qboolean vid_xr_frame_should_render;
+static qboolean vid_xr_stereo_frame;
+static iw_xr_frame_snapshot_t vid_xr_snapshot;
 
 cvar_t vr_mode = {"vr_mode", "1", CVAR_ARCHIVE};
 cvar_t vr_curved_screen = {"vr_curved_screen", "1", CVAR_ARCHIVE};
@@ -105,6 +107,12 @@ cvar_t vr_curve_radius = {"vr_curve_radius", "6.0", CVAR_ARCHIVE};
 cvar_t vr_screen_scale = {"vr_screen_scale", "2.2", CVAR_ARCHIVE};
 cvar_t vr_screen_distance = {"vr_screen_distance", "2.5", CVAR_ARCHIVE};
 cvar_t vr_desktop_mirror = {"vr_desktop_mirror", "1", CVAR_ARCHIVE};
+cvar_t vr_world_scale = {"vr_world_scale", "33.5", CVAR_ARCHIVE};
+cvar_t vr_hud_scale = {"vr_hud_scale", "0.7", CVAR_ARCHIVE};
+cvar_t vr_hud_size = {"vr_hud_size", "0.35", CVAR_ARCHIVE};
+cvar_t vr_hud_distance = {"vr_hud_distance", "0.5", CVAR_ARCHIVE};
+cvar_t vr_hud_render_yoffset = {"vr_hud_render_yoffset", "0", CVAR_ARCHIVE};
+cvar_t vr_hud_yoffset = {"vr_hud_yoffset", "0", CVAR_ARCHIVE};
 
 void VID_Menu_Init (void); //johnfitz
 
@@ -144,10 +152,13 @@ static void VID_VRMode_f (cvar_t *var)
         IW_XRBridge_SetDisabled (vid_xr_bridge, var->value == 0);
 }
 
+extern void R_XRRecenter(void);
+
 static void VID_VRRecenter_f (void)
 {
     if (vid_xr_backend)
         IW_XRWin_RequestRecenter (vid_xr_backend);
+    R_XRRecenter();
 }
 
 static void VID_XRRetry_f (void)
@@ -160,6 +171,31 @@ static void VID_XRRetry_f (void)
         IW_XRBridge_State (vid_xr_bridge), IW_XRBridge_FailureReason (vid_xr_bridge));
 }
 
+qboolean VID_XR_GetStereoFrame(const iw_xr_frame_snapshot_t **snapshot)
+{
+    if (snapshot)
+        *snapshot = vid_xr_stereo_frame ? &vid_xr_snapshot : NULL;
+    return vid_xr_stereo_frame;
+}
+qboolean VID_XR_BeginEye(unsigned eye, unsigned *fbo, int *width, int *height)
+{
+    return vid_xr_stereo_frame && IW_XRWin_BindEyeTarget(vid_xr_backend, eye) && IW_XRWin_GetEyeTarget(vid_xr_backend, eye, fbo, width, height);
+}
+qboolean VID_XR_BeginHUD(unsigned *fbo, int *width, int *height)
+{
+    return vid_xr_stereo_frame &&
+        IW_XRWin_BindFrameTarget (vid_xr_backend) &&
+        IW_XRWin_GetFrameTarget (vid_xr_backend, fbo, width, height);
+}
+void VID_XR_EndEye(unsigned eye)
+{
+    if (vid_xr_stereo_frame && eye == 0 && vr_desktop_mirror.value != 0)
+    {
+        int width, height;
+        SDL_GL_GetDrawableSize (draw_context, &width, &height);
+        IW_XRWin_MirrorEye (vid_xr_backend, eye, width, height);
+    }
+}
 void VID_XR_Pump (void)
 {
     iw_xr_result_t result;
@@ -1602,19 +1638,28 @@ void GL_BeginRendering (int *x, int *y, int *width, int *height)
 
 	vid_xr_frame_active = false;
 	vid_xr_frame_should_render = false;
+	vid_xr_stereo_frame = false;
+	memset(&vid_xr_snapshot, 0, sizeof(vid_xr_snapshot));
     if (vid_xr_backend)
         IW_XRWin_SetScreenCurve (vid_xr_backend, vr_curved_screen.value != 0, vr_curve_radius.value);
     if (vid_xr_backend)
         IW_XRWin_SetScreenGeometry (vid_xr_backend, vr_screen_scale.value, vr_screen_distance.value);
+    if (vid_xr_backend)
+        IW_XRWin_SetHUDGeometry (vid_xr_backend, vr_hud_size.value, vr_hud_distance.value, vr_hud_yoffset.value);
     if (vid_xr_backend && vid_xr_bridge && IW_XRBridge_OwnsPresentation (vid_xr_bridge))
 	{
 		iw_xr_frame_snapshot_t snapshot;
 		if (IW_XRWin_BeginFrame (vid_xr_backend, &snapshot))
 		{
 			vid_xr_frame_active = true;
-			vid_xr_frame_should_render = snapshot.should_render;
-			if (snapshot.should_render)
-			IW_XRWin_BindFrameTarget (vid_xr_backend);
+            vid_xr_frame_should_render = snapshot.should_render;
+            vid_xr_snapshot = snapshot;
+            vid_xr_stereo_frame = snapshot.should_render && snapshot.view_count >= 2 && key_dest == key_game && !cl.paused && !con_forcedup && cl.intermission == 0 && IW_XRWin_HasStereoTargets(vid_xr_backend);
+            IW_XRWin_SetStereoSubmission(vid_xr_backend, vid_xr_stereo_frame);
+            if (snapshot.should_render && !vid_xr_stereo_frame)
+                IW_XRWin_BindFrameTarget(vid_xr_backend);
+            if (!vid_xr_stereo_frame)
+                GL_SetFrameBufferSize (vid.width, vid.height);
 		}
 	}
 
@@ -1636,9 +1681,10 @@ GL_EndRendering
 */
 void GL_EndRendering (void)
 {
-	GL_PostProcess ();
-	if (vid_xr_frame_active && vid_xr_frame_should_render)
-		IW_XRWin_ResolveDefaultFramebuffer (vid_xr_backend, vid.width, vid.height);
+	if (!vid_xr_stereo_frame)
+        GL_PostProcess ();
+	if (vid_xr_frame_active && vid_xr_frame_should_render && !vid_xr_stereo_frame)
+        IW_XRWin_ResolveDefaultFramebuffer (vid_xr_backend, vid.width, vid.height);
 	if (!scr_skipupdate)
 	{
 #if !defined(ANDROID_GLES3)
@@ -1889,7 +1935,12 @@ void	VID_Init (void)
     Cvar_RegisterVariable (&vr_curve_radius);
     Cvar_RegisterVariable (&vr_screen_scale);
     Cvar_RegisterVariable (&vr_screen_distance);
-    Cvar_RegisterVariable (&vr_desktop_mirror);
+    Cvar_RegisterVariable (&vr_desktop_mirror);    Cvar_RegisterVariable (&vr_world_scale);
+    Cvar_RegisterVariable (&vr_hud_scale);
+    Cvar_RegisterVariable (&vr_hud_size);
+    Cvar_RegisterVariable (&vr_hud_distance);
+    Cvar_RegisterVariable (&vr_hud_yoffset);
+    Cvar_RegisterVariable (&vr_hud_render_yoffset);
     Cvar_SetCallback (&vr_mode, VID_VRMode_f);
 	Cvar_SetCallback (&vid_fullscreen, VID_Changed_f);
 	Cvar_SetCallback (&vid_width, VID_Changed_f);
