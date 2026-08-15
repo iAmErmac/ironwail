@@ -84,6 +84,18 @@ extern cvar_t gyro_turning_axis;
 extern cvar_t gyro_pitchsensitivity;
 extern cvar_t gyro_yawsensitivity;
 extern cvar_t gyro_noise_thresh;
+extern cvar_t vr_mode;
+extern cvar_t vr_curved_screen;
+extern cvar_t vr_curve_radius;
+extern cvar_t vr_screen_scale;
+extern cvar_t vr_screen_distance;
+extern cvar_t vr_desktop_mirror;
+extern cvar_t vr_world_scale;
+extern cvar_t vr_hud_scale;
+extern cvar_t vr_hud_size;
+extern cvar_t vr_hud_distance;
+extern cvar_t vr_hud_yoffset;
+extern cvar_t vr_hud_render_yoffset;
 
 extern char crosshair_char;
 
@@ -112,6 +124,7 @@ void M_Menu_Main_f (void);
 		void M_Menu_Search_f (void);
 		void M_Menu_ServerList_f (void);
 	void M_Menu_Options_f (void);
+	void M_Menu_VR_f (void);
 		void M_Menu_Keys_f (void);
 		void M_Menu_Video_f (void);
 		void M_Menu_Gamepad_f (void);
@@ -1131,6 +1144,9 @@ static enum m_state_e M_GetBaseState (enum m_state_e state)
 	switch (state)
 	{
 	case m_video:
+	case m_vr:
+	case m_vr_screen:
+	case m_vr_hud:
 	case m_graphics:
 	case m_gamepad:
 	case m_interface:
@@ -3085,6 +3101,7 @@ void M_Menu_Gamepad_f (void)
 ////////////////////////////////////////////////////////////////////////
 #define OPTIONS_LIST(begin_menu, item, end_menu)						\
 	begin_menu (OPTIONS, m_options, "")									\
+		item (OPT_VR,					"VR Options")\
 		item (OPT_PREVIEW,				"Live Preview")					\
 		item (OPT_GAMMA,				"Brightness")					\
 		item (OPT_CONTRAST,				"Contrast")						\
@@ -3104,6 +3121,32 @@ void M_Menu_Gamepad_f (void)
 		item (OPT_CONSOLE,				"Console")						\
 		item (OPT_DEFAULTS,				"Reset All")					\
 	end_menu ()															\
+		begin_menu (VR_OPTIONS, m_vr, TITLE("VR Options"))					\
+		item (VR_OPT_ENABLE, "Enable VR")						\
+		item (VR_OPT_SCREEN, "Virtual Screen")						\
+		item (VR_OPT_HUD, "VR HUD")							\
+		item (VR_OPT_MIRROR, "Desktop Mirror")					\
+		item (VR_OPT_WORLD_SCALE, "World Scale")					\
+		item (SPACER, "")									\
+		item (VR_OPT_RESET, "Reset Defaults")									\
+	end_menu ()										\
+	begin_menu (VR_SCREEN_OPTIONS, m_vr_screen, TITLE("Virtual Screen")) \
+		item (VR_SCREEN_OPT_SHAPE, "Shape")						\
+		item (VR_SCREEN_OPT_SCALE, "Scale")						\
+		item (VR_SCREEN_OPT_DISTANCE, "Distance")					\
+		item (VR_SCREEN_OPT_RADIUS, "Curve Radius")					\
+		item (SPACER, "")									\
+		item (VR_SCREEN_OPT_RESET, "Reset Defaults")								\
+	end_menu ()										\
+	begin_menu (VR_HUD_OPTIONS, m_vr_hud, TITLE("VR HUD"))					\
+		item (VR_HUD_OPT_SCALE, "Scale")							\
+		item (VR_HUD_OPT_GRAPHICS_SCALE, "Graphics Scale")				\
+		item (VR_HUD_OPT_DISTANCE, "Distance")					\
+		item (VR_HUD_OPT_LAYER_YOFFSET, "Vertical Offset")\
+		item (VR_HUD_OPT_YOFFSET, "Draw Y-Offset")			\
+		item (SPACER, "")									\
+		item (VR_HUD_OPT_RESET, "Reset Defaults")							\
+	end_menu ()										\
 	begin_menu (VIDEO_OPTIONS, m_video, TITLE("Display"))				\
 		item (OPT_RESOLUTION,			"Resolution")					\
 		item (OPT_DISPLAYMODE,			"Display Mode")					\
@@ -3541,6 +3584,35 @@ void M_Menu_Options_f (void)
 	M_Options_Init (m_options);
 }
 
+void M_Menu_VR_f (void)
+{
+	M_Options_Init (m_vr);
+}
+
+static void M_VR_ResetOptions (void)
+{
+	Cvar_SetValueQuick (&vr_mode, 1.f);
+	Cvar_SetValueQuick (&vr_desktop_mirror, 1.f);
+	Cvar_SetValueQuick (&vr_world_scale, 33.5f);
+}
+
+static void M_VR_ResetScreen (void)
+{
+	Cvar_SetValueQuick (&vr_curved_screen, 1.f);
+	Cvar_SetValueQuick (&vr_screen_scale, 2.2f);
+	Cvar_SetValueQuick (&vr_screen_distance, 2.5f);
+	Cvar_SetValueQuick (&vr_curve_radius, 6.f);
+}
+
+static void M_VR_ResetHUD (void)
+{
+	Cvar_SetValueQuick (&vr_hud_size, 0.35f);
+	Cvar_SetValueQuick (&vr_hud_scale, 0.7f);
+	Cvar_SetValueQuick (&vr_hud_distance, 0.5f);
+	Cvar_SetValueQuick (&vr_hud_yoffset, 0.f);
+    Cvar_SetValueQuick (&vr_hud_render_yoffset, 0.f);
+}
+
 typedef enum
 {
 	UI_MOUSE_OFF,
@@ -3599,6 +3671,42 @@ void M_AdjustSliders (int dir)
 
 	switch (M_Options_GetSelected ())
 	{
+	case VR_OPT_ENABLE:
+		Cbuf_AddText ("toggle vr_mode\n");
+		break;
+	case VR_OPT_MIRROR:
+		Cvar_SetValueQuick (&vr_desktop_mirror, !vr_desktop_mirror.value);
+		break;
+	case VR_OPT_WORLD_SCALE:
+		Cvar_SetValueQuick (&vr_world_scale, CLAMP (10.f, vr_world_scale.value + dir * 0.01f, 100.f));
+		break;
+	case VR_SCREEN_OPT_SHAPE:
+		Cvar_SetValueQuick (&vr_curved_screen, !vr_curved_screen.value);
+		break;
+	case VR_SCREEN_OPT_SCALE:
+		Cvar_SetValueQuick (&vr_screen_scale, CLAMP (0.5f, vr_screen_scale.value + dir * 0.01f, 5.f));
+		break;
+	case VR_SCREEN_OPT_DISTANCE:
+		Cvar_SetValueQuick (&vr_screen_distance, CLAMP (0.1f, vr_screen_distance.value + dir * 0.01f, 10.f));
+		break;
+	case VR_SCREEN_OPT_RADIUS:
+		Cvar_SetValueQuick (&vr_curve_radius, CLAMP (1.f, vr_curve_radius.value + dir * 0.01f, 20.f));
+		break;
+	case VR_HUD_OPT_SCALE:
+		Cvar_SetValueQuick (&vr_hud_size, CLAMP (0.1f, vr_hud_size.value + dir * 0.01f, 2.f));
+		break;
+	case VR_HUD_OPT_GRAPHICS_SCALE:
+		Cvar_SetValueQuick (&vr_hud_scale, CLAMP (0.1f, vr_hud_scale.value + dir * 0.01f, 4.f));
+		break;
+	case VR_HUD_OPT_DISTANCE:
+		Cvar_SetValueQuick (&vr_hud_distance, CLAMP (0.1f, vr_hud_distance.value + dir * 0.01f, 3.f));
+		break;
+	case VR_HUD_OPT_LAYER_YOFFSET:
+        Cvar_SetValueQuick (&vr_hud_yoffset, CLAMP (-2.f, vr_hud_yoffset.value + dir * 0.01f, 2.f));
+        break;
+    case VR_HUD_OPT_YOFFSET:
+		Cvar_SetValueQuick (&vr_hud_render_yoffset, CLAMP (-2.f, vr_hud_render_yoffset.value + dir * 0.01f, 2.f));
+		break;
 	case OPT_UISCALE:	// console and menu scale
 		l = ((vid.width + 31) / 32) / 10.0;
 		f = scr_conscale.value + dir * .1;
@@ -4004,7 +4112,32 @@ qboolean M_SetSliderValue (int option, float f)
 
 	switch (option)
 	{
-	case OPT_UISCALE:	// console and menu scale
+	case VR_OPT_WORLD_SCALE:
+		Cvar_SetValueQuick (&vr_world_scale, 10.f + f * 90.f);
+		return true;
+	case VR_SCREEN_OPT_SCALE:
+		Cvar_SetValueQuick (&vr_screen_scale, 0.5f + f * 4.5f);
+		return true;
+	case VR_SCREEN_OPT_DISTANCE:
+		Cvar_SetValueQuick (&vr_screen_distance, 0.1f + f * 9.9f);
+		return true;
+	case VR_SCREEN_OPT_RADIUS:
+		Cvar_SetValueQuick (&vr_curve_radius, 1.f + f * 19.f);
+		return true;
+	case VR_HUD_OPT_SCALE:
+		Cvar_SetValueQuick (&vr_hud_size, 0.1f + f * 1.9f);
+		return true;
+	case VR_HUD_OPT_GRAPHICS_SCALE:
+		Cvar_SetValueQuick (&vr_hud_scale, 0.1f + f * 3.9f);
+		return true;
+	case VR_HUD_OPT_DISTANCE:
+		Cvar_SetValueQuick (&vr_hud_distance, 0.1f + f * 2.9f);
+		return true;
+	case VR_HUD_OPT_LAYER_YOFFSET:
+		Cvar_SetValueQuick (&vr_hud_yoffset, -2.f + f * 4.f);
+		return true;
+		Cvar_SetValueQuick (&vr_hud_render_yoffset, -2.f + f * 4.f);
+		return true;	case OPT_UISCALE:	// console and menu scale
 		target_scale_frac = f;
 		l = (vid.width / 320.0) - 1;
 		f = l > 0 ? f * l + 1 : 0;
@@ -4185,6 +4318,7 @@ static void M_Options_DrawItem (int y, int item)
 
 	switch (item)
 	{
+	case OPT_VR:
 	case OPT_VIDEO:
 	case OPT_GRAPHICS:
 	case OPT_INTERFACE:
@@ -4193,9 +4327,48 @@ static void M_Options_DrawItem (int y, int item)
 	case OPT_GAMEPAD:
 	case OPT_MODS:
 	case GPAD_OPT_CALIBRATE:
+	case VR_OPT_SCREEN:
+	case VR_OPT_HUD:
 		M_Print (x - 4, y, "...");
+
 		break;
 
+
+	case VR_OPT_ENABLE:
+		M_DrawCheckbox (x, y, vr_mode.value);
+		break;
+	case VR_OPT_MIRROR:
+		M_DrawCheckbox (x, y, vr_desktop_mirror.value);
+		break;
+	case VR_OPT_WORLD_SCALE:
+		M_DrawSlider (x, y, (vr_world_scale.value - 10.f) / 90.f, va ("%.2f", vr_world_scale.value));
+		break;
+	case VR_SCREEN_OPT_SHAPE:
+		M_Print (x, y, vr_curved_screen.value ? "Curved" : "Flat");
+		break;
+	case VR_SCREEN_OPT_SCALE:
+		M_DrawSlider (x, y, (vr_screen_scale.value - 0.5f) / 4.5f, va ("%.2f", vr_screen_scale.value));
+		break;
+	case VR_SCREEN_OPT_DISTANCE:
+		M_DrawSlider (x, y, (vr_screen_distance.value - 0.1f) / 9.9f, va ("%.2f", vr_screen_distance.value));
+		break;
+	case VR_SCREEN_OPT_RADIUS:
+		M_DrawSlider (x, y, (vr_curve_radius.value - 1.f) / 19.f, va ("%.2f", vr_curve_radius.value));
+		break;
+	case VR_HUD_OPT_SCALE:
+		M_DrawSlider (x, y, (vr_hud_size.value - 0.1f) / 1.9f, va ("%.2f", vr_hud_size.value));
+		break;
+	case VR_HUD_OPT_GRAPHICS_SCALE:
+		M_DrawSlider (x, y, (vr_hud_scale.value - 0.1f) / 3.9f, va ("%.2f", vr_hud_scale.value));
+		break;
+	case VR_HUD_OPT_DISTANCE:
+		M_DrawSlider (x, y, (vr_hud_distance.value - 0.1f) / 2.9f, va ("%.2f", vr_hud_distance.value));
+		break;
+	case VR_HUD_OPT_LAYER_YOFFSET:
+		M_DrawSlider (x, y, (vr_hud_yoffset.value + 2.f) / 4.f, va ("%.2f", vr_hud_yoffset.value));
+		break;
+		M_DrawSlider (x, y, (vr_hud_render_yoffset.value + 2.f) / 4.f, va ("%.2f", vr_hud_render_yoffset.value));
+		break;
 	case OPT_UISCALE:
 		l = (vid.width / 320.0) - 1;
 		r = l > 0 ? (scr_conscale.value - 1) / l : 0;
@@ -4774,7 +4947,9 @@ void M_Options_Key (int k)
 		}
 		if (m_state == m_video)
 			VID_SyncCvars (); //sync cvars before leaving menu. FIXME: there are other ways to leave menu
-		if (m_state == m_options)
+		if (m_state == m_vr_screen || m_state == m_vr_hud)
+			M_Menu_VR_f ();
+	 else if (m_state == m_options)
 			M_Menu_Main_f ();
 		else
 			M_Menu_Options_f ();
@@ -4788,7 +4963,7 @@ void M_Options_Key (int k)
 		M_List_ClearSearch (&optionsmenu.list);
 		switch (M_Options_GetSelected ())
 		{
-		case OPT_CUSTOMIZE:
+	case OPT_CUSTOMIZE:
 			M_Menu_Keys_f ();
 			break;
 		case OPT_CONSOLE:
@@ -4805,6 +4980,24 @@ void M_Options_Key (int k)
 			break;
 		case OPT_MODS:
 			M_Menu_Mods_f ();
+			break;
+		case VR_OPT_SCREEN:
+			M_Options_Init (m_vr_screen);
+			break;
+		case VR_OPT_HUD:
+			M_Options_Init (m_vr_hud);
+			break;
+		case VR_OPT_RESET:
+			M_VR_ResetOptions ();
+			break;
+		case VR_SCREEN_OPT_RESET:
+			M_VR_ResetScreen ();
+			break;
+		case VR_HUD_OPT_RESET:
+			M_VR_ResetHUD ();
+			break;
+		case OPT_VR:
+			M_Menu_VR_f ();
 			break;
 		case OPT_VIDEO:
 			M_Menu_Video_f ();
@@ -5559,8 +5752,9 @@ void M_Quit_Key (int key)
 		}
 		break;
 
-#if defined(ANDROID_GLES3)
 	case K_ENTER:
+	case K_KP_ENTER:
+#if defined(ANDROID_GLES3)
 	case K_MOUSE1:
 #endif
 	case K_ABUTTON:
@@ -7238,6 +7432,10 @@ void M_Draw (void)
 	if (m_state == m_none || key_dest != key_menu)
 		return;
 
+
+	if (m_state == m_none || key_dest != key_menu)
+		return;
+
 	M_UpdateBounds ();
 
 	if (!m_recursiveDraw)
@@ -7360,6 +7558,7 @@ void M_Draw (void)
 
 void M_Keydown (int key, qboolean repeat)
 {
+
 	if (!bind_grab && !ui_mouse.value && M_IsMouseKey (key))
 		return;
 
