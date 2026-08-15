@@ -111,8 +111,8 @@ cvar_t vr_world_scale = {"vr_world_scale", "33.5", CVAR_ARCHIVE};
 cvar_t vr_hud_scale = {"vr_hud_scale", "0.7", CVAR_ARCHIVE};
 cvar_t vr_hud_size = {"vr_hud_size", "0.35", CVAR_ARCHIVE};
 cvar_t vr_hud_distance = {"vr_hud_distance", "0.5", CVAR_ARCHIVE};
-cvar_t vr_hud_render_yoffset = {"vr_hud_render_yoffset", "0", CVAR_ARCHIVE};
 cvar_t vr_hud_yoffset = {"vr_hud_yoffset", "0", CVAR_ARCHIVE};
+cvar_t vr_hud_render_yoffset = {"vr_hud_render_yoffset", "0", CVAR_ARCHIVE};
 
 void VID_Menu_Init (void); //johnfitz
 
@@ -166,6 +166,7 @@ static void VID_XRRetry_f (void)
     iw_xr_result_t result;
     if (!vid_xr_bridge)
         return;
+    IW_XRBridge_SetDisabled (vid_xr_bridge, false);
     result = IW_XRBridge_RequestRetry (vid_xr_bridge);
     Con_SafePrintf ("[OpenXR] retry result=%d state=%d reason=%s\n", result,
         IW_XRBridge_State (vid_xr_bridge), IW_XRBridge_FailureReason (vid_xr_bridge));
@@ -2107,6 +2108,11 @@ Cvar_SetValueQuick (&vid_width, (float)display_width);
 				xr_result, IW_XRBridge_State (vid_xr_bridge),
 				IW_XRBridge_ProbeDurationNs (vid_xr_bridge) / 1000000.0,
 				IW_XRBridge_FailureReason (vid_xr_bridge));
+			if (xr_result != IW_XR_RESULT_OK && vr_mode.value != 0)
+			{
+				Con_SafePrintf ("[OpenXR] falling back to desktop mode\n");
+				Cvar_SetValueQuick (&vr_mode, 0);
+			}
 		}
 	}
 	Cmd_AddCommand ("vr_retry", VID_XRRetry_f);
