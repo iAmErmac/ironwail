@@ -144,6 +144,8 @@ static const keyname_t keynames[] =
 	{"YBUTTON", K_YBUTTON},
 	{"LTRIGGER", K_LTRIGGER},
 	{"RTRIGGER", K_RTRIGGER},
+	{"LGRIP", K_LGRIP},
+	{"RGRIP", K_RGRIP},
 	{"MISC1", K_MISC1},
 	{"PADDLE1", K_PADDLE1},
 	{"PADDLE2", K_PADDLE2},
@@ -171,6 +173,8 @@ static const keyname_t keynames[] =
 	{"YBUTTON_ALT", K_YBUTTON_ALT},
 	{"LTRIGGER_ALT", K_LTRIGGER_ALT},
 	{"RTRIGGER_ALT", K_RTRIGGER_ALT},
+	{"LGRIP_ALT", K_LGRIP_ALT},
+	{"RGRIP_ALT", K_RGRIP_ALT},
 	{"MISC1_ALT", K_MISC1_ALT},
 	{"PADDLE1_ALT", K_PADDLE1_ALT},
 	{"PADDLE2_ALT", K_PADDLE2_ALT},
@@ -313,6 +317,10 @@ void Key_Console (int key)
 
 	switch (key)
 	{
+	case K_BBUTTON:
+		Con_ToggleConsole_f ();
+		return;
+
 	case K_ENTER:
 	case K_KP_ENTER:
 	case K_ABUTTON:
@@ -630,6 +638,7 @@ void Key_Message (int key)
 		return;
 
 	case K_ESCAPE:
+	case K_BBUTTON:
 		Key_EndChat ();
 		return;
 
@@ -1098,6 +1107,7 @@ void Key_Init (void)
 	consolekeys[K_MWHEELUP] = true;
 	consolekeys[K_MWHEELDOWN] = true;
 	consolekeys[K_ABUTTON] = true;
+	consolekeys[K_BBUTTON] = true;
 
 //
 // initialize menubound[]

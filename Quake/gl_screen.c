@@ -78,7 +78,7 @@ int			glx, gly, glwidth, glheight;
 
 float		scr_con_current;
 static qboolean scr_xr_hud_layer;
-extern cvar_t vr_desktop_mirror;
+extern cvar_t vr_desktop_mirror, vr_render_scale;
 float		scr_conlines;		// lines of console to display
 
 //johnfitz -- new cvars

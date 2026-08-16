@@ -47,13 +47,21 @@ typedef struct {
 
 typedef struct {
     qboolean active;
-    qboolean left_hand;
-    qboolean right_hand;
-    float left_aim[3];
-    float right_aim[3];
-    float left_stick[2];
-    float right_stick[2];
+    qboolean aim_valid;
+    qboolean grip_valid;
+    float aim_position[3];
+    float aim_orientation[4];
+    float grip_position[3];
+    float grip_orientation[4];
+    float trigger;
+    float grip;
+    float stick[2];
     unsigned buttons;
+} iw_xr_hand_snapshot_t;
+
+typedef struct {
+    qboolean active;
+    iw_xr_hand_snapshot_t hand[2];
 } iw_xr_action_snapshot_t;
 
 typedef struct {

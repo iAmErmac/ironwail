@@ -1,5 +1,7 @@
 #include "quakedef.h"
 #include "xr_desktop.h"
+extern cvar_t vr_render_scale;
+extern cvar_t vr_screen_follow;
 
 #if defined(IW_ENABLE_OPENXR)
 
@@ -63,6 +65,23 @@ XrSwapchain swapchain;
     qboolean stereo_submission;
     qboolean views_valid;
     iw_xr_frame_snapshot_t frame_snapshot;
+    iw_xr_action_snapshot_t actions;
+    XrActionSet action_set;
+    XrPath hand_paths[2];
+    XrAction aim_action;
+    XrAction grip_pose_action;
+    XrAction trigger_action;
+    XrAction trigger_click_action;
+    XrAction grip_action;
+    XrAction grip_click_action;
+    XrAction stick_action;
+    XrAction trackpad_action;
+    XrAction stick_click_action;
+    XrAction primary_action;
+    XrAction secondary_action;
+    XrAction menu_action;
+    XrSpace aim_spaces[2];
+    XrSpace grip_spaces[2];
 
 #define XR_WIN_PROC(type, name) type name;
     PFN_xrGetInstanceProcAddr get_instance_proc_addr;
@@ -93,6 +112,19 @@ XrSwapchain swapchain;
     PFN_xrBeginFrame begin_frame;
     PFN_xrEndFrame end_frame;
     PFN_xrGetOpenGLGraphicsRequirementsKHR get_opengl_graphics_requirements;
+    PFN_xrStringToPath string_to_path;
+    PFN_xrCreateActionSet create_action_set;
+    PFN_xrDestroyActionSet destroy_action_set;
+    PFN_xrCreateAction create_action;
+    PFN_xrDestroyAction destroy_action;
+    PFN_xrSuggestInteractionProfileBindings suggest_interaction_profile_bindings;
+    PFN_xrAttachSessionActionSets attach_session_action_sets;
+    PFN_xrSyncActions sync_actions;
+    PFN_xrGetActionStateBoolean get_action_state_boolean;
+    PFN_xrGetActionStateFloat get_action_state_float;
+    PFN_xrGetActionStateVector2f get_action_state_vector2f;
+    PFN_xrCreateActionSpace create_action_space;
+    PFN_xrLocateSpace locate_space;
 };
 
 static void xr_log(iw_xr_win_t *xr, const char *message)
@@ -147,6 +179,7 @@ static void xr_release_target(iw_xr_win_t *xr, iw_xr_gl_target_t *target)
     memset(&release_info, 0, sizeof(release_info)); release_info.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO; xr->release_swapchain_image(target->swapchain, &release_info); target->acquired = false;
 }
 static void xr_destroy_resources(iw_xr_win_t *xr);
+static void xr_update_actions(iw_xr_win_t *xr);
 
 static const char *xr_result_name(XrResult result)
 {
@@ -266,6 +299,11 @@ static void xr_update_screen_pose (iw_xr_win_t *xr, const XrView *views, uint32_
         xr->screen_follow_targeting = true;
         xr->recenter_requested = false;
     }
+    else if (!vr_screen_follow.value)
+    {
+        xr->screen_pose = xr->screen_follow_current;
+        return;
+    }
     else if (now < xr->screen_follow_ready_s)
     {
         xr->screen_follow_current = candidate;
@@ -378,6 +416,19 @@ static qboolean xr_load_instance(iw_xr_win_t *xr, const char **reason)
     XR_LOAD_INSTANCE(xrWaitFrame, wait_frame);
     XR_LOAD_INSTANCE(xrBeginFrame, begin_frame);
     XR_LOAD_INSTANCE(xrEndFrame, end_frame);
+    XR_LOAD_INSTANCE(xrStringToPath, string_to_path);
+    XR_LOAD_INSTANCE(xrCreateActionSet, create_action_set);
+    XR_LOAD_INSTANCE(xrDestroyActionSet, destroy_action_set);
+    XR_LOAD_INSTANCE(xrCreateAction, create_action);
+    XR_LOAD_INSTANCE(xrDestroyAction, destroy_action);
+    XR_LOAD_INSTANCE(xrSuggestInteractionProfileBindings, suggest_interaction_profile_bindings);
+    XR_LOAD_INSTANCE(xrAttachSessionActionSets, attach_session_action_sets);
+    XR_LOAD_INSTANCE(xrSyncActions, sync_actions);
+    XR_LOAD_INSTANCE(xrGetActionStateBoolean, get_action_state_boolean);
+    XR_LOAD_INSTANCE(xrGetActionStateFloat, get_action_state_float);
+    XR_LOAD_INSTANCE(xrGetActionStateVector2f, get_action_state_vector2f);
+    XR_LOAD_INSTANCE(xrCreateActionSpace, create_action_space);
+    XR_LOAD_INSTANCE(xrLocateSpace, locate_space);
     proc = NULL;
     if (xr->get_instance_proc_addr(xr->instance, "xrGetOpenGLGraphicsRequirementsKHR", &proc) != XR_SUCCESS || !proc)
     {
@@ -391,11 +442,197 @@ static qboolean xr_load_instance(iw_xr_win_t *xr, const char **reason)
 }
 
 
+#define XR_HAND_LEFT 0
+#define XR_HAND_RIGHT 1
+#define XR_BUTTON_TRIGGER 1u
+#define XR_BUTTON_GRIP 2u
+#define XR_BUTTON_STICK 4u
+#define XR_BUTTON_PRIMARY 8u
+#define XR_BUTTON_SECONDARY 16u
+#define XR_BUTTON_MENU 32u
+
+static qboolean xr_create_action(iw_xr_win_t *xr, XrActionType type, const char *name, const char *localized_name, XrAction *action)
+{
+    XrActionCreateInfo info;
+    memset(&info, 0, sizeof(info));
+    info.type = XR_TYPE_ACTION_CREATE_INFO;
+    info.actionType = type;
+    q_strlcpy(info.actionName, name, sizeof(info.actionName));
+    q_strlcpy(info.localizedActionName, localized_name, sizeof(info.localizedActionName));
+    info.countSubactionPaths = 2;
+    info.subactionPaths = xr->hand_paths;
+    return xr->create_action(xr->action_set, &info, action) == XR_SUCCESS;
+}
+
+static qboolean xr_add_binding(iw_xr_win_t *xr, XrActionSuggestedBinding *bindings, uint32_t *count, XrAction action, const char *path)
+{
+    XrPath binding;
+    if (xr->string_to_path(xr->instance, path, &binding) != XR_SUCCESS)
+        return false;
+    bindings[*count].action = action;
+    bindings[*count].binding = binding;
+    ++*count;
+    return true;
+}
+
+static void xr_suggest_profile(iw_xr_win_t *xr, const char *profile, XrActionSuggestedBinding *bindings, uint32_t count)
+{
+    XrInteractionProfileSuggestedBinding suggested;
+    XrPath interaction_profile;
+    if (!count || xr->string_to_path(xr->instance, profile, &interaction_profile) != XR_SUCCESS)
+        return;
+    memset(&suggested, 0, sizeof(suggested));
+    suggested.type = XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING;
+    suggested.interactionProfile = interaction_profile;
+    suggested.countSuggestedBindings = count;
+    suggested.suggestedBindings = bindings;
+    xr->suggest_interaction_profile_bindings(xr->instance, &suggested);
+}
+
+static void xr_suggest_touch_bindings(iw_xr_win_t *xr)
+{
+    XrActionSuggestedBinding bindings[18];
+    uint32_t count = 0;
+    xr_add_binding(xr, bindings, &count, xr->aim_action, "/user/hand/left/input/aim/pose");
+    xr_add_binding(xr, bindings, &count, xr->aim_action, "/user/hand/right/input/aim/pose");
+    xr_add_binding(xr, bindings, &count, xr->grip_pose_action, "/user/hand/left/input/grip/pose");
+    xr_add_binding(xr, bindings, &count, xr->grip_pose_action, "/user/hand/right/input/grip/pose");
+    xr_add_binding(xr, bindings, &count, xr->trigger_action, "/user/hand/left/input/trigger/value");
+    xr_add_binding(xr, bindings, &count, xr->trigger_action, "/user/hand/right/input/trigger/value");
+    xr_add_binding(xr, bindings, &count, xr->grip_action, "/user/hand/left/input/squeeze/value");
+    xr_add_binding(xr, bindings, &count, xr->grip_action, "/user/hand/right/input/squeeze/value");
+    xr_add_binding(xr, bindings, &count, xr->stick_action, "/user/hand/left/input/thumbstick");
+    xr_add_binding(xr, bindings, &count, xr->stick_action, "/user/hand/right/input/thumbstick");
+    xr_add_binding(xr, bindings, &count, xr->stick_click_action, "/user/hand/left/input/thumbstick/click");
+    xr_add_binding(xr, bindings, &count, xr->stick_click_action, "/user/hand/right/input/thumbstick/click");
+    xr_add_binding(xr, bindings, &count, xr->primary_action, "/user/hand/left/input/x/click");
+    xr_add_binding(xr, bindings, &count, xr->primary_action, "/user/hand/right/input/a/click");
+    xr_add_binding(xr, bindings, &count, xr->secondary_action, "/user/hand/left/input/y/click");
+    xr_add_binding(xr, bindings, &count, xr->secondary_action, "/user/hand/right/input/b/click");
+    xr_add_binding(xr, bindings, &count, xr->menu_action, "/user/hand/left/input/menu/click");
+    xr_suggest_profile(xr, "/interaction_profiles/oculus/touch_controller", bindings, count);
+}
+
+static void xr_suggest_index_bindings(iw_xr_win_t *xr)
+{
+    XrActionSuggestedBinding bindings[18];
+    uint32_t count = 0;
+    xr_add_binding(xr, bindings, &count, xr->aim_action, "/user/hand/left/input/aim/pose");
+    xr_add_binding(xr, bindings, &count, xr->aim_action, "/user/hand/right/input/aim/pose");
+    xr_add_binding(xr, bindings, &count, xr->grip_pose_action, "/user/hand/left/input/grip/pose");
+    xr_add_binding(xr, bindings, &count, xr->grip_pose_action, "/user/hand/right/input/grip/pose");
+    xr_add_binding(xr, bindings, &count, xr->trigger_action, "/user/hand/left/input/trigger/value");
+    xr_add_binding(xr, bindings, &count, xr->trigger_action, "/user/hand/right/input/trigger/value");
+    xr_add_binding(xr, bindings, &count, xr->grip_action, "/user/hand/left/input/squeeze/force");
+    xr_add_binding(xr, bindings, &count, xr->grip_action, "/user/hand/right/input/squeeze/force");
+    xr_add_binding(xr, bindings, &count, xr->stick_action, "/user/hand/left/input/thumbstick");
+    xr_add_binding(xr, bindings, &count, xr->stick_action, "/user/hand/right/input/thumbstick");
+    xr_add_binding(xr, bindings, &count, xr->stick_click_action, "/user/hand/left/input/thumbstick/click");
+    xr_add_binding(xr, bindings, &count, xr->stick_click_action, "/user/hand/right/input/thumbstick/click");
+    xr_add_binding(xr, bindings, &count, xr->primary_action, "/user/hand/left/input/a/click");
+    xr_add_binding(xr, bindings, &count, xr->primary_action, "/user/hand/right/input/a/click");
+    xr_add_binding(xr, bindings, &count, xr->secondary_action, "/user/hand/left/input/b/click");
+    xr_add_binding(xr, bindings, &count, xr->secondary_action, "/user/hand/right/input/b/click");
+    xr_suggest_profile(xr, "/interaction_profiles/valve/index_controller", bindings, count);
+}
+
+static void xr_suggest_vive_bindings(iw_xr_win_t *xr)
+{
+    XrActionSuggestedBinding bindings[16];
+    uint32_t count = 0;
+    xr_add_binding(xr, bindings, &count, xr->aim_action, "/user/hand/left/input/aim/pose");
+    xr_add_binding(xr, bindings, &count, xr->aim_action, "/user/hand/right/input/aim/pose");
+    xr_add_binding(xr, bindings, &count, xr->grip_pose_action, "/user/hand/left/input/grip/pose");
+    xr_add_binding(xr, bindings, &count, xr->grip_pose_action, "/user/hand/right/input/grip/pose");
+    xr_add_binding(xr, bindings, &count, xr->trigger_action, "/user/hand/left/input/trigger/value");
+    xr_add_binding(xr, bindings, &count, xr->trigger_action, "/user/hand/right/input/trigger/value");
+    xr_add_binding(xr, bindings, &count, xr->trigger_click_action, "/user/hand/left/input/trigger/click");
+    xr_add_binding(xr, bindings, &count, xr->trigger_click_action, "/user/hand/right/input/trigger/click");
+    xr_add_binding(xr, bindings, &count, xr->grip_click_action, "/user/hand/left/input/squeeze/click");
+    xr_add_binding(xr, bindings, &count, xr->grip_click_action, "/user/hand/right/input/squeeze/click");
+    xr_add_binding(xr, bindings, &count, xr->trackpad_action, "/user/hand/left/input/trackpad");
+    xr_add_binding(xr, bindings, &count, xr->trackpad_action, "/user/hand/right/input/trackpad");
+    xr_add_binding(xr, bindings, &count, xr->stick_click_action, "/user/hand/left/input/trackpad/click");
+    xr_add_binding(xr, bindings, &count, xr->stick_click_action, "/user/hand/right/input/trackpad/click");
+    xr_add_binding(xr, bindings, &count, xr->menu_action, "/user/hand/left/input/menu/click");
+    xr_add_binding(xr, bindings, &count, xr->menu_action, "/user/hand/right/input/menu/click");
+    xr_suggest_profile(xr, "/interaction_profiles/htc/vive_controller", bindings, count);
+}
+
+static qboolean xr_create_actions(iw_xr_win_t *xr)
+{
+    XrActionSetCreateInfo set_info;
+    XrSessionActionSetsAttachInfo attach_info;
+    XrActionSpaceCreateInfo space_info;
+    int hand;
+
+    if (xr->string_to_path(xr->instance, "/user/hand/left", &xr->hand_paths[XR_HAND_LEFT]) != XR_SUCCESS ||
+        xr->string_to_path(xr->instance, "/user/hand/right", &xr->hand_paths[XR_HAND_RIGHT]) != XR_SUCCESS)
+        return false;
+    memset(&set_info, 0, sizeof(set_info));
+    set_info.type = XR_TYPE_ACTION_SET_CREATE_INFO;
+    q_strlcpy(set_info.actionSetName, "gameplay", sizeof(set_info.actionSetName));
+    q_strlcpy(set_info.localizedActionSetName, "Gameplay", sizeof(set_info.localizedActionSetName));
+    if (xr->create_action_set(xr->instance, &set_info, &xr->action_set) != XR_SUCCESS)
+        return false;
+    if (!xr_create_action(xr, XR_ACTION_TYPE_POSE_INPUT, "aim_pose", "Aim Pose", &xr->aim_action) ||
+        !xr_create_action(xr, XR_ACTION_TYPE_POSE_INPUT, "grip_pose", "Grip Pose", &xr->grip_pose_action) ||
+        !xr_create_action(xr, XR_ACTION_TYPE_FLOAT_INPUT, "trigger", "Trigger", &xr->trigger_action) ||
+        !xr_create_action(xr, XR_ACTION_TYPE_BOOLEAN_INPUT, "trigger_click", "Trigger Click", &xr->trigger_click_action) ||
+        !xr_create_action(xr, XR_ACTION_TYPE_FLOAT_INPUT, "grip", "Grip", &xr->grip_action) ||
+        !xr_create_action(xr, XR_ACTION_TYPE_BOOLEAN_INPUT, "grip_click", "Grip Click", &xr->grip_click_action) ||
+        !xr_create_action(xr, XR_ACTION_TYPE_VECTOR2F_INPUT, "thumbstick", "Thumbstick", &xr->stick_action) ||
+        !xr_create_action(xr, XR_ACTION_TYPE_VECTOR2F_INPUT, "trackpad", "Trackpad", &xr->trackpad_action) ||
+        !xr_create_action(xr, XR_ACTION_TYPE_BOOLEAN_INPUT, "thumbstick_click", "Thumbstick Click", &xr->stick_click_action) ||
+        !xr_create_action(xr, XR_ACTION_TYPE_BOOLEAN_INPUT, "primary", "Primary Button", &xr->primary_action) ||
+        !xr_create_action(xr, XR_ACTION_TYPE_BOOLEAN_INPUT, "secondary", "Secondary Button", &xr->secondary_action) ||
+        !xr_create_action(xr, XR_ACTION_TYPE_BOOLEAN_INPUT, "menu", "Menu Button", &xr->menu_action))
+        return false;
+    xr_suggest_touch_bindings(xr);
+    xr_suggest_index_bindings(xr);
+    xr_suggest_vive_bindings(xr);
+    memset(&attach_info, 0, sizeof(attach_info));
+    attach_info.type = XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO;
+    attach_info.countActionSets = 1;
+    attach_info.actionSets = &xr->action_set;
+    if (xr->attach_session_action_sets(xr->session, &attach_info) != XR_SUCCESS)
+        return false;
+    for (hand = 0; hand < 2; ++hand)
+    {
+        memset(&space_info, 0, sizeof(space_info));
+        space_info.type = XR_TYPE_ACTION_SPACE_CREATE_INFO;
+        space_info.subactionPath = xr->hand_paths[hand];
+        space_info.poseInActionSpace.orientation.w = 1.0f;
+        space_info.action = xr->aim_action;
+        if (xr->create_action_space(xr->session, &space_info, &xr->aim_spaces[hand]) != XR_SUCCESS)
+            return false;
+        space_info.action = xr->grip_pose_action;
+        if (xr->create_action_space(xr->session, &space_info, &xr->grip_spaces[hand]) != XR_SUCCESS)
+            return false;
+    }
+    xr_log(xr, "OpenXR gameplay actions attached");
+    return true;
+}
+
+static void xr_destroy_actions(iw_xr_win_t *xr)
+{
+    int hand;
+    if (!xr) return;
+    for (hand = 0; hand < 2; ++hand)
+    {
+        if (xr->aim_spaces[hand] != XR_NULL_HANDLE && xr->destroy_space) xr->destroy_space(xr->aim_spaces[hand]);
+        if (xr->grip_spaces[hand] != XR_NULL_HANDLE && xr->destroy_space) xr->destroy_space(xr->grip_spaces[hand]);
+        xr->aim_spaces[hand] = xr->grip_spaces[hand] = XR_NULL_HANDLE;
+    }
+    if (xr->action_set != XR_NULL_HANDLE && xr->destroy_action_set) xr->destroy_action_set(xr->action_set);
+    xr->action_set = XR_NULL_HANDLE;
+}
 static void xr_destroy_resources(iw_xr_win_t *xr)
 {
     uint32_t i;
     if (!xr)
         return;
+    xr_destroy_actions(xr);
     xr_destroy_target(xr, &xr->eyes[0]);
     xr_destroy_target(xr, &xr->eyes[1]);
     if (xr->fbos)
@@ -606,7 +843,12 @@ iw_xr_result_t IW_XRWin_Probe(iw_xr_win_t *xr, iw_xr_bridge_t *bridge, uint64_t 
     }
     if (result != XR_SUCCESS)
         return xr_fail(xr, reason, result, "xrCreateSession");
-    memset(&space_info, 0, sizeof(space_info));
+    if (!xr_create_actions(xr))
+    {
+        if (reason) *reason = "OpenXR gameplay action creation failed";
+        xr_destroy_resources(xr);
+        return IW_XR_RESULT_FAILED;
+    }    memset(&space_info, 0, sizeof(space_info));
     space_info.type = XR_TYPE_REFERENCE_SPACE_CREATE_INFO;
     space_info.poseInReferenceSpace.orientation.w = 1.0f;
     space_info.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
@@ -700,8 +942,8 @@ xr->fbos = (GLuint *)calloc(xr->image_count, sizeof(*xr->fbos));
     for (i = 0; i < 2; ++i)
     {
         if (!xr_create_target(xr, &xr->eyes[i], swap_info.format,
-                              view_config_views[i].recommendedImageRectWidth,
-                              view_config_views[i].recommendedImageRectHeight,
+                              q_max(1u, (uint32_t)(view_config_views[i].recommendedImageRectWidth * CLAMP(0.3f, vr_render_scale.value, 2.f) + 0.5f)),
+                              q_max(1u, (uint32_t)(view_config_views[i].recommendedImageRectHeight * CLAMP(0.3f, vr_render_scale.value, 2.f) + 0.5f)),
                               view_config_views[i].recommendedSwapchainSampleCount, reason))
         {
             xr_log(xr, "OpenXR stereo target creation failed; flat screen remains available");
@@ -712,8 +954,8 @@ xr->fbos = (GLuint *)calloc(xr->image_count, sizeof(*xr->fbos));
     }
     if (xr->eyes[0].swapchain != XR_NULL_HANDLE && xr->eyes[1].swapchain != XR_NULL_HANDLE)
     {
-        char message[160];
-        q_snprintf(message, sizeof(message), "OpenXR stereo targets: %ux%u / %ux%u", xr->eyes[0].width, xr->eyes[0].height, xr->eyes[1].width, xr->eyes[1].height);
+        char message[192];
+        q_snprintf(message, sizeof(message), "OpenXR stereo targets: scale=%.2f, recommended=%ux%u / %ux%u, allocated=%ux%u / %ux%u", CLAMP(0.3f, vr_render_scale.value, 2.f), view_config_views[0].recommendedImageRectWidth, view_config_views[0].recommendedImageRectHeight, view_config_views[1].recommendedImageRectWidth, view_config_views[1].recommendedImageRectHeight, xr->eyes[0].width, xr->eyes[0].height, xr->eyes[1].width, xr->eyes[1].height);
         xr_log(xr, message);
     }    memset(&event, 0, sizeof(event));
     event.type = XR_TYPE_EVENT_DATA_BUFFER;
@@ -821,6 +1063,7 @@ qboolean IW_XRWin_BeginFrame(iw_xr_win_t *xr, iw_xr_frame_snapshot_t *snapshot)
         return false;
     }
     xr->frame_running = true;
+    xr_update_actions(xr);
     xr->views_valid = false;
     memset(snapshot, 0, sizeof(*snapshot));
     snapshot->predicted_display_time = (uint64_t)xr->frame_state.predictedDisplayTime;
@@ -872,6 +1115,118 @@ qboolean IW_XRWin_BeginFrame(iw_xr_win_t *xr, iw_xr_frame_snapshot_t *snapshot)
     return true;
 }
 
+static qboolean xr_action_bool(iw_xr_win_t *xr, XrAction action, XrPath hand)
+{
+    XrActionStateGetInfo info;
+    XrActionStateBoolean state;
+    memset(&info, 0, sizeof(info));
+    memset(&state, 0, sizeof(state));
+    info.type = XR_TYPE_ACTION_STATE_GET_INFO;
+    info.action = action;
+    info.subactionPath = hand;
+    state.type = XR_TYPE_ACTION_STATE_BOOLEAN;
+    return xr->get_action_state_boolean(xr->session, &info, &state) == XR_SUCCESS && state.isActive && state.currentState;
+}
+
+static float xr_action_float(iw_xr_win_t *xr, XrAction action, XrPath hand)
+{
+    XrActionStateGetInfo info;
+    XrActionStateFloat state;
+    memset(&info, 0, sizeof(info));
+    memset(&state, 0, sizeof(state));
+    info.type = XR_TYPE_ACTION_STATE_GET_INFO;
+    info.action = action;
+    info.subactionPath = hand;
+    state.type = XR_TYPE_ACTION_STATE_FLOAT;
+    if (xr->get_action_state_float(xr->session, &info, &state) != XR_SUCCESS || !state.isActive) return 0.0f;
+    return state.currentState;
+}
+
+static void xr_action_vec2(iw_xr_win_t *xr, XrAction action, XrPath hand, float out[2])
+{
+    XrActionStateGetInfo info;
+    XrActionStateVector2f state;
+    out[0] = out[1] = 0.0f;
+    memset(&info, 0, sizeof(info));
+    memset(&state, 0, sizeof(state));
+    info.type = XR_TYPE_ACTION_STATE_GET_INFO;
+    info.action = action;
+    info.subactionPath = hand;
+    state.type = XR_TYPE_ACTION_STATE_VECTOR2F;
+    if (xr->get_action_state_vector2f(xr->session, &info, &state) == XR_SUCCESS && state.isActive)
+    {
+        out[0] = state.currentState.x;
+        out[1] = state.currentState.y;
+    }
+}
+
+static void xr_update_actions(iw_xr_win_t *xr)
+{
+    XrActiveActionSet active_set;
+    XrActionsSyncInfo sync_info;
+    int hand;
+    memset(&xr->actions, 0, sizeof(xr->actions));
+    if (!xr->session_running || xr->action_set == XR_NULL_HANDLE) return;
+    memset(&active_set, 0, sizeof(active_set));
+    active_set.actionSet = xr->action_set;
+    memset(&sync_info, 0, sizeof(sync_info));
+    sync_info.type = XR_TYPE_ACTIONS_SYNC_INFO;
+    sync_info.countActiveActionSets = 1;
+    sync_info.activeActionSets = &active_set;
+    if (xr->sync_actions(xr->session, &sync_info) != XR_SUCCESS) return;
+    for (hand = 0; hand < 2; ++hand)
+    {
+        iw_xr_hand_snapshot_t *snapshot = &xr->actions.hand[hand];
+        XrSpaceLocation location;
+        float trackpad[2];
+        snapshot->trigger = xr_action_float(xr, xr->trigger_action, xr->hand_paths[hand]);
+        snapshot->grip = xr_action_float(xr, xr->grip_action, xr->hand_paths[hand]);
+        xr_action_vec2(xr, xr->stick_action, xr->hand_paths[hand], snapshot->stick);
+        xr_action_vec2(xr, xr->trackpad_action, xr->hand_paths[hand], trackpad);
+        if (snapshot->stick[0] == 0.0f && snapshot->stick[1] == 0.0f)
+        {
+            snapshot->stick[0] = trackpad[0];
+            snapshot->stick[1] = trackpad[1];
+        }
+        if (xr_action_bool(xr, xr->trigger_click_action, xr->hand_paths[hand])) snapshot->trigger = 1.0f;
+        if (xr_action_bool(xr, xr->grip_click_action, xr->hand_paths[hand])) snapshot->grip = 1.0f;
+        if (snapshot->trigger > 0.5f) snapshot->buttons |= XR_BUTTON_TRIGGER;
+        if (snapshot->grip > 0.5f) snapshot->buttons |= XR_BUTTON_GRIP;
+        if (xr_action_bool(xr, xr->stick_click_action, xr->hand_paths[hand])) snapshot->buttons |= XR_BUTTON_STICK;
+        if (xr_action_bool(xr, xr->primary_action, xr->hand_paths[hand])) snapshot->buttons |= XR_BUTTON_PRIMARY;
+        if (xr_action_bool(xr, xr->secondary_action, xr->hand_paths[hand])) snapshot->buttons |= XR_BUTTON_SECONDARY;
+        if (xr_action_bool(xr, xr->menu_action, xr->hand_paths[hand])) snapshot->buttons |= XR_BUTTON_MENU;
+        memset(&location, 0, sizeof(location));
+        location.type = XR_TYPE_SPACE_LOCATION;
+        if (xr->locate_space(xr->aim_spaces[hand], xr->space, xr->frame_state.predictedDisplayTime, &location) == XR_SUCCESS &&
+            (location.locationFlags & (XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT)) ==
+            (XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT))
+        {
+            snapshot->aim_valid = true;
+            snapshot->aim_position[0] = location.pose.position.x; snapshot->aim_position[1] = location.pose.position.y; snapshot->aim_position[2] = location.pose.position.z;
+            snapshot->aim_orientation[0] = location.pose.orientation.x; snapshot->aim_orientation[1] = location.pose.orientation.y; snapshot->aim_orientation[2] = location.pose.orientation.z; snapshot->aim_orientation[3] = location.pose.orientation.w;
+        }
+        memset(&location, 0, sizeof(location));
+        location.type = XR_TYPE_SPACE_LOCATION;
+        if (xr->locate_space(xr->grip_spaces[hand], xr->space, xr->frame_state.predictedDisplayTime, &location) == XR_SUCCESS &&
+            (location.locationFlags & (XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT)) ==
+            (XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT))
+        {
+            snapshot->grip_valid = true;
+            snapshot->grip_position[0] = location.pose.position.x; snapshot->grip_position[1] = location.pose.position.y; snapshot->grip_position[2] = location.pose.position.z;
+            snapshot->grip_orientation[0] = location.pose.orientation.x; snapshot->grip_orientation[1] = location.pose.orientation.y; snapshot->grip_orientation[2] = location.pose.orientation.z; snapshot->grip_orientation[3] = location.pose.orientation.w;
+        }
+        snapshot->active = snapshot->aim_valid || snapshot->grip_valid || snapshot->trigger != 0.0f || snapshot->grip != 0.0f || snapshot->stick[0] != 0.0f || snapshot->stick[1] != 0.0f || snapshot->buttons != 0;
+        xr->actions.active |= snapshot->active;
+    }
+}
+
+qboolean IW_XRWin_GetActions(const iw_xr_win_t *xr, iw_xr_action_snapshot_t *actions)
+{
+    if (!xr || !actions) return false;
+    *actions = xr->actions;
+    return actions->active;
+}
 qboolean IW_XRWin_HasStereoTargets(const iw_xr_win_t *xr)
 {
     return xr && xr->eyes[0].swapchain != XR_NULL_HANDLE && xr->eyes[1].swapchain != XR_NULL_HANDLE;
@@ -1202,9 +1557,122 @@ iw_xr_win_t *IW_XRWin_Create(void *window, void (*log)(void *, const char *), vo
 void IW_XRWin_Destroy(iw_xr_win_t *xr) { (void)xr; }
 iw_xr_result_t IW_XRWin_Probe(iw_xr_win_t *xr, iw_xr_bridge_t *bridge, uint64_t deadline_ns, const char **reason) { (void)xr; (void)bridge; (void)deadline_ns; if (reason) *reason = "OpenXR backend not compiled"; return IW_XR_RESULT_UNAVAILABLE; }
 iw_xr_result_t IW_XRWin_Pump(iw_xr_win_t *xr, iw_xr_bridge_t *bridge) { (void)xr; (void)bridge; return IW_XR_RESULT_UNAVAILABLE; }
+qboolean IW_XRWin_GetActions(const iw_xr_win_t *xr, iw_xr_action_snapshot_t *actions) { (void)xr; if (actions) memset(actions, 0, sizeof(*actions)); return false; }
 qboolean IW_XRWin_BeginFrame(iw_xr_win_t *xr, iw_xr_frame_snapshot_t *snapshot) { (void)xr; (void)snapshot; return false; }
 qboolean IW_XRWin_BindFrameTarget(iw_xr_win_t *xr) { (void)xr; return false; }
 qboolean IW_XRWin_GetFrameTarget(const iw_xr_win_t *xr, unsigned *fbo, int *width, int *height) { (void)xr; if (fbo) *fbo = 0; if (width) *width = 0; if (height) *height = 0; return false; }
+static qboolean xr_action_bool(iw_xr_win_t *xr, XrAction action, XrPath hand)
+{
+    XrActionStateGetInfo info;
+    XrActionStateBoolean state;
+    memset(&info, 0, sizeof(info));
+    memset(&state, 0, sizeof(state));
+    info.type = XR_TYPE_ACTION_STATE_GET_INFO;
+    info.action = action;
+    info.subactionPath = hand;
+    state.type = XR_TYPE_ACTION_STATE_BOOLEAN;
+    return xr->get_action_state_boolean(xr->session, &info, &state) == XR_SUCCESS && state.isActive && state.currentState;
+}
+
+static float xr_action_float(iw_xr_win_t *xr, XrAction action, XrPath hand)
+{
+    XrActionStateGetInfo info;
+    XrActionStateFloat state;
+    memset(&info, 0, sizeof(info));
+    memset(&state, 0, sizeof(state));
+    info.type = XR_TYPE_ACTION_STATE_GET_INFO;
+    info.action = action;
+    info.subactionPath = hand;
+    state.type = XR_TYPE_ACTION_STATE_FLOAT;
+    if (xr->get_action_state_float(xr->session, &info, &state) != XR_SUCCESS || !state.isActive) return 0.0f;
+    return state.currentState;
+}
+
+static void xr_action_vec2(iw_xr_win_t *xr, XrAction action, XrPath hand, float out[2])
+{
+    XrActionStateGetInfo info;
+    XrActionStateVector2f state;
+    out[0] = out[1] = 0.0f;
+    memset(&info, 0, sizeof(info));
+    memset(&state, 0, sizeof(state));
+    info.type = XR_TYPE_ACTION_STATE_GET_INFO;
+    info.action = action;
+    info.subactionPath = hand;
+    state.type = XR_TYPE_ACTION_STATE_VECTOR2F;
+    if (xr->get_action_state_vector2f(xr->session, &info, &state) == XR_SUCCESS && state.isActive)
+    {
+        out[0] = state.currentState.x;
+        out[1] = state.currentState.y;
+    }
+}
+
+static void xr_update_actions(iw_xr_win_t *xr)
+{
+    XrActiveActionSet active_set;
+    XrActionsSyncInfo sync_info;
+    int hand;
+    memset(&xr->actions, 0, sizeof(xr->actions));
+    if (!xr->session_running || xr->action_set == XR_NULL_HANDLE) return;
+    memset(&active_set, 0, sizeof(active_set));
+    active_set.actionSet = xr->action_set;
+    memset(&sync_info, 0, sizeof(sync_info));
+    sync_info.type = XR_TYPE_ACTIONS_SYNC_INFO;
+    sync_info.countActiveActionSets = 1;
+    sync_info.activeActionSets = &active_set;
+    if (xr->sync_actions(xr->session, &sync_info) != XR_SUCCESS) return;
+    for (hand = 0; hand < 2; ++hand)
+    {
+        iw_xr_hand_snapshot_t *snapshot = &xr->actions.hand[hand];
+        XrSpaceLocation location;
+        float trackpad[2];
+        snapshot->trigger = xr_action_float(xr, xr->trigger_action, xr->hand_paths[hand]);
+        snapshot->grip = xr_action_float(xr, xr->grip_action, xr->hand_paths[hand]);
+        xr_action_vec2(xr, xr->stick_action, xr->hand_paths[hand], snapshot->stick);
+        xr_action_vec2(xr, xr->trackpad_action, xr->hand_paths[hand], trackpad);
+        if (snapshot->stick[0] == 0.0f && snapshot->stick[1] == 0.0f)
+        {
+            snapshot->stick[0] = trackpad[0];
+            snapshot->stick[1] = trackpad[1];
+        }
+        if (xr_action_bool(xr, xr->trigger_click_action, xr->hand_paths[hand])) snapshot->trigger = 1.0f;
+        if (xr_action_bool(xr, xr->grip_click_action, xr->hand_paths[hand])) snapshot->grip = 1.0f;
+        if (snapshot->trigger > 0.5f) snapshot->buttons |= XR_BUTTON_TRIGGER;
+        if (snapshot->grip > 0.5f) snapshot->buttons |= XR_BUTTON_GRIP;
+        if (xr_action_bool(xr, xr->stick_click_action, xr->hand_paths[hand])) snapshot->buttons |= XR_BUTTON_STICK;
+        if (xr_action_bool(xr, xr->primary_action, xr->hand_paths[hand])) snapshot->buttons |= XR_BUTTON_PRIMARY;
+        if (xr_action_bool(xr, xr->secondary_action, xr->hand_paths[hand])) snapshot->buttons |= XR_BUTTON_SECONDARY;
+        if (xr_action_bool(xr, xr->menu_action, xr->hand_paths[hand])) snapshot->buttons |= XR_BUTTON_MENU;
+        memset(&location, 0, sizeof(location));
+        location.type = XR_TYPE_SPACE_LOCATION;
+        if (xr->locate_space(xr->aim_spaces[hand], xr->space, xr->frame_state.predictedDisplayTime, &location) == XR_SUCCESS &&
+            (location.locationFlags & (XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT)) ==
+            (XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT))
+        {
+            snapshot->aim_valid = true;
+            snapshot->aim_position[0] = location.pose.position.x; snapshot->aim_position[1] = location.pose.position.y; snapshot->aim_position[2] = location.pose.position.z;
+            snapshot->aim_orientation[0] = location.pose.orientation.x; snapshot->aim_orientation[1] = location.pose.orientation.y; snapshot->aim_orientation[2] = location.pose.orientation.z; snapshot->aim_orientation[3] = location.pose.orientation.w;
+        }
+        memset(&location, 0, sizeof(location));
+        location.type = XR_TYPE_SPACE_LOCATION;
+        if (xr->locate_space(xr->grip_spaces[hand], xr->space, xr->frame_state.predictedDisplayTime, &location) == XR_SUCCESS &&
+            (location.locationFlags & (XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT)) ==
+            (XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT))
+        {
+            snapshot->grip_valid = true;
+            snapshot->grip_position[0] = location.pose.position.x; snapshot->grip_position[1] = location.pose.position.y; snapshot->grip_position[2] = location.pose.position.z;
+            snapshot->grip_orientation[0] = location.pose.orientation.x; snapshot->grip_orientation[1] = location.pose.orientation.y; snapshot->grip_orientation[2] = location.pose.orientation.z; snapshot->grip_orientation[3] = location.pose.orientation.w;
+        }
+        snapshot->active = snapshot->aim_valid || snapshot->grip_valid || snapshot->trigger != 0.0f || snapshot->grip != 0.0f || snapshot->stick[0] != 0.0f || snapshot->stick[1] != 0.0f || snapshot->buttons != 0;
+        xr->actions.active |= snapshot->active;
+    }
+}
+
+qboolean IW_XRWin_GetActions(const iw_xr_win_t *xr, iw_xr_action_snapshot_t *actions)
+{
+    if (!xr || !actions) return false;
+    *actions = xr->actions;
+    return actions->active;
+}
 qboolean IW_XRWin_HasStereoTargets(const iw_xr_win_t *xr) { (void)xr; return false; }
 qboolean IW_XRWin_BindEyeTarget(iw_xr_win_t *xr, unsigned eye) { (void)xr; (void)eye; return false; }
 qboolean IW_XRWin_GetEyeTarget(const iw_xr_win_t *xr, unsigned eye, unsigned *fbo, int *width, int *height) { (void)xr; (void)eye; if (fbo) *fbo = 0; if (width) *width = 0; if (height) *height = 0; return false; }

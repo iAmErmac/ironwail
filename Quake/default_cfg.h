@@ -81,6 +81,12 @@ static const char default_cfg[] =
 "bind RSHOULDER \"impulse 10\"\n"
 "bind LTRIGGER +jump\n"
 "bind RTRIGGER +attack\n"
+"bind RTHUMB toggleconsole\n"
+"bind BBUTTON +jump\n"
+"bind ABUTTON +movedown\n"
+"bind LGRIP +speed\n"
+"bind YBUTTON +showscores\n"
+"bind XBUTTON messagemode\n"
 
 "gamma 0.95\n"
 "contrast 1.2\n"
@@ -88,6 +94,9 @@ static const char default_cfg[] =
 "sensitivity 3\n"
 
 "viewsize 110\n"
-"scr_autoscale\n"
+"scr_conscale 2.5\n"
+"scr_menuscale 2.5\n"
+"scr_sbarscale 2.5\n"
+"scr_crosshairscale 2.5\n"
 
 "+mlook\n";

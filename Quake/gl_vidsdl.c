@@ -102,10 +102,12 @@ static qboolean vid_xr_stereo_frame;
 static iw_xr_frame_snapshot_t vid_xr_snapshot;
 
 cvar_t vr_mode = {"vr_mode", "1", CVAR_ARCHIVE};
+cvar_t vr_render_scale = {"vr_render_scale", "1.0", CVAR_ARCHIVE};
 cvar_t vr_curved_screen = {"vr_curved_screen", "1", CVAR_ARCHIVE};
 cvar_t vr_curve_radius = {"vr_curve_radius", "6.0", CVAR_ARCHIVE};
 cvar_t vr_screen_scale = {"vr_screen_scale", "2.2", CVAR_ARCHIVE};
 cvar_t vr_screen_distance = {"vr_screen_distance", "2.5", CVAR_ARCHIVE};
+cvar_t vr_screen_follow = {"vr_screen_follow", "1", CVAR_ARCHIVE};
 cvar_t vr_desktop_mirror = {"vr_desktop_mirror", "1", CVAR_ARCHIVE};
 cvar_t vr_world_scale = {"vr_world_scale", "33.5", CVAR_ARCHIVE};
 cvar_t vr_hud_scale = {"vr_hud_scale", "0.7", CVAR_ARCHIVE};
@@ -113,6 +115,20 @@ cvar_t vr_hud_size = {"vr_hud_size", "0.35", CVAR_ARCHIVE};
 cvar_t vr_hud_distance = {"vr_hud_distance", "0.5", CVAR_ARCHIVE};
 cvar_t vr_hud_yoffset = {"vr_hud_yoffset", "0", CVAR_ARCHIVE};
 cvar_t vr_hud_render_yoffset = {"vr_hud_render_yoffset", "0", CVAR_ARCHIVE};
+cvar_t vr_dominant_hand = {"vr_dominant_hand", "0", CVAR_ARCHIVE};
+cvar_t vr_stabilize_mode = {"vr_stabilize_mode", "1", CVAR_ARCHIVE};
+cvar_t vr_weapon_pitch = {"vr_weapon_pitch", "-45", CVAR_ARCHIVE};
+cvar_t vr_weapon_xoffset = {"vr_weapon_xoffset", "0", CVAR_ARCHIVE};
+cvar_t vr_weapon_yoffset = {"vr_weapon_yoffset", "0", CVAR_ARCHIVE};
+cvar_t vr_weapon_zoffset = {"vr_weapon_zoffset", "10", CVAR_ARCHIVE};
+cvar_t vr_laser_sight = {"vr_laser_sight", "0", CVAR_ARCHIVE};
+cvar_t vr_laser_beam = {"vr_laser_beam", "0", CVAR_ARCHIVE};
+cvar_t vr_laser_color = {"vr_laser_color", "FF0000", CVAR_ARCHIVE};
+cvar_t vr_laser_beam_width = {"vr_laser_beam_width", "0.3", CVAR_ARCHIVE};
+cvar_t vr_laser_beam_alpha = {"vr_laser_beam_alpha", "0.2", CVAR_ARCHIVE};
+cvar_t vr_laser_alpha = {"vr_laser_alpha", "0.5", CVAR_ARCHIVE};
+cvar_t vr_laser_sight_scale = {"vr_laser_sight_scale", "1.5", CVAR_ARCHIVE};
+cvar_t vr_laser_hide_melee = {"vr_laser_hide_melee", "1", CVAR_ARCHIVE};
 
 void VID_Menu_Init (void); //johnfitz
 
@@ -144,6 +160,18 @@ static iw_xr_result_t VID_XRNullProbe (iw_xr_bridge_t *bridge, uint64_t deadline
     return IW_XRWin_Probe (vid_xr_backend, bridge, deadline_ns, reason);
 }
 
+static void VID_ApplyEarlyVRCvars(void)
+{
+    int i;
+    for (i = 1; i + 1 < com_argc; ++i)
+    {
+        if (!q_strcasecmp(com_argv[i], "+vr_render_scale"))
+        {
+            Cvar_SetValueQuick(&vr_render_scale, Q_atof(com_argv[i + 1]));
+            Con_SafePrintf("OpenXR startup vr_render_scale=%.2f\n", vr_render_scale.value);
+        }
+    }
+}
 static void VID_VRMode_f (cvar_t *var)
 {
     if (var->value == 0 && vid_xr_backend)
@@ -153,12 +181,18 @@ static void VID_VRMode_f (cvar_t *var)
 }
 
 extern void R_XRRecenter(void);
+extern void R_XRResync(void);
 
 static void VID_VRRecenter_f (void)
 {
     if (vid_xr_backend)
         IW_XRWin_RequestRecenter (vid_xr_backend);
     R_XRRecenter();
+}
+
+static void VID_VRResync_f (void)
+{
+    R_XRResync();
 }
 
 static void VID_XRRetry_f (void)
@@ -172,6 +206,11 @@ static void VID_XRRetry_f (void)
         IW_XRBridge_State (vid_xr_bridge), IW_XRBridge_FailureReason (vid_xr_bridge));
 }
 
+qboolean VID_XR_GetActions(iw_xr_action_snapshot_t *actions)
+{
+    return vid_xr_backend && vid_xr_bridge && IW_XRBridge_OwnsInput(vid_xr_bridge) &&
+        IW_XRWin_GetActions(vid_xr_backend, actions);
+}
 qboolean VID_XR_GetStereoFrame(const iw_xr_frame_snapshot_t **snapshot)
 {
     if (snapshot)
@@ -300,8 +339,8 @@ static const glfunc_t gl_arb_clip_control_functions[] =
 
 //johnfitz -- new cvars
 cvar_t		vid_fullscreen = {"vid_fullscreen", "0", CVAR_ARCHIVE};	// QuakeSpasm, was "1"
-cvar_t		vid_width = {"vid_width", "800", CVAR_ARCHIVE};		// QuakeSpasm, was 640
-cvar_t		vid_height = {"vid_height", "600", CVAR_ARCHIVE};	// QuakeSpasm, was 480
+cvar_t		vid_width = {"vid_width", "1024", CVAR_ARCHIVE};		// QuakeSpasm, was 640
+cvar_t		vid_height = {"vid_height", "768", CVAR_ARCHIVE};	// QuakeSpasm, was 480
 cvar_t		vid_refreshrate = {"vid_refreshrate", "60", CVAR_ARCHIVE};
 cvar_t		vid_vsync = {"vid_vsync", "0", CVAR_ARCHIVE};
 cvar_t		vid_fsaa = {"vid_fsaa", "0", CVAR_ARCHIVE}; // QuakeSpasm
@@ -1691,6 +1730,13 @@ void GL_EndRendering (void)
 #if !defined(ANDROID_GLES3)
 		if (!vid_xr_frame_active || vr_desktop_mirror.value != 0)
 			SDL_GL_SwapWindow (draw_context);
+		else
+		{
+			GL_BindFramebufferFunc (GL_FRAMEBUFFER, 0);
+			glClearColor (0.f, 0.f, 0.f, 1.f);
+			glClear (GL_COLOR_BUFFER_BIT);
+			SDL_GL_SwapWindow (draw_context);
+		}
 #endif
 	}
 	if (vid_xr_frame_active)
@@ -1916,6 +1962,7 @@ void	VID_Init (void)
 		"r_softemu_metric",
 		"scr_pixelaspect",
 		"vr_mode",
+		"vr_render_scale",
 	};
 #define num_readvars	Q_COUNTOF(read_vars)
 
@@ -1932,16 +1979,32 @@ void	VID_Init (void)
 	Cvar_RegisterVariable (&vid_borderless); //QuakeSpasm
 	Cvar_RegisterVariable (&vid_saveresize);
     Cvar_RegisterVariable (&vr_mode);
+    Cvar_RegisterVariable (&vr_render_scale);
     Cvar_RegisterVariable (&vr_curved_screen);
     Cvar_RegisterVariable (&vr_curve_radius);
     Cvar_RegisterVariable (&vr_screen_scale);
     Cvar_RegisterVariable (&vr_screen_distance);
+    Cvar_RegisterVariable (&vr_screen_follow);
     Cvar_RegisterVariable (&vr_desktop_mirror);    Cvar_RegisterVariable (&vr_world_scale);
     Cvar_RegisterVariable (&vr_hud_scale);
     Cvar_RegisterVariable (&vr_hud_size);
     Cvar_RegisterVariable (&vr_hud_distance);
     Cvar_RegisterVariable (&vr_hud_yoffset);
     Cvar_RegisterVariable (&vr_hud_render_yoffset);
+    Cvar_RegisterVariable (&vr_dominant_hand);
+    Cvar_RegisterVariable (&vr_stabilize_mode);
+    Cvar_RegisterVariable (&vr_weapon_pitch);
+    Cvar_RegisterVariable (&vr_weapon_xoffset);
+    Cvar_RegisterVariable (&vr_weapon_yoffset);
+    Cvar_RegisterVariable (&vr_weapon_zoffset);
+    Cvar_RegisterVariable (&vr_laser_sight);
+    Cvar_RegisterVariable (&vr_laser_beam);
+    Cvar_RegisterVariable (&vr_laser_color);
+    Cvar_RegisterVariable (&vr_laser_beam_width);
+    Cvar_RegisterVariable (&vr_laser_beam_alpha);
+    Cvar_RegisterVariable (&vr_laser_alpha);
+    Cvar_RegisterVariable (&vr_laser_sight_scale);
+    Cvar_RegisterVariable (&vr_laser_hide_melee);
     Cvar_SetCallback (&vr_mode, VID_VRMode_f);
 	Cvar_SetCallback (&vid_fullscreen, VID_Changed_f);
 	Cvar_SetCallback (&vid_width, VID_Changed_f);
@@ -1995,8 +2058,6 @@ putenv (vid_center);	/* SDL_putenv is problematic in versions <= 1.2.9 */
 	}
 #endif
 
-Cvar_SetValueQuick (&vid_width, (float)display_width);
-	Cvar_SetValueQuick (&vid_height, (float)display_height);
 	Cvar_SetValueQuick (&vid_refreshrate, (float)display_refreshrate);
 
 	if (CFG_OpenConfig(CONFIG_NAME) == 0 || CFG_OpenConfig("config.cfg") == 0)
@@ -2005,6 +2066,7 @@ Cvar_SetValueQuick (&vid_width, (float)display_width);
 		CFG_CloseConfig();
 	}
 	CFG_ReadCvarOverrides(read_vars, num_readvars);
+
 
 #if !defined(ANDROID_GLES3)
 	VID_InitModelist();
@@ -2117,6 +2179,7 @@ Cvar_SetValueQuick (&vid_width, (float)display_width);
 	}
 	Cmd_AddCommand ("vr_retry", VID_XRRetry_f);
 	Cmd_AddCommand ("vr_recenter", VID_VRRecenter_f);
+	Cmd_AddCommand ("vr_resync", VID_VRResync_f);
 	cmd = Cmd_AddCommand ("gl_info", GL_Info_f); //johnfitz
 	if (cmd)
 		cmd->completion = GL_Info_Completion_f;

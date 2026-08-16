@@ -168,9 +168,18 @@ Writes new values for v_forward, v_up, and v_right based on angles
 makevectors(vector)
 ==============
 */
+static qboolean PF_UseXRControllerAim (void)
+{
+	if (!sv.active || cls.demoplayback || cl.maxclients != 1 || !sv_player)
+		return false;
+	return PROG_TO_EDICT (pr_global_struct->self) == sv_player;
+}
+
 static void PF_makevectors (void)
 {
 	AngleVectors (G_VECTOR(OFS_PARM0), pr_global_struct->v_forward, pr_global_struct->v_right, pr_global_struct->v_up);
+	if (PF_UseXRControllerAim ())
+		R_GetXRControllerAim (pr_global_struct->v_forward, pr_global_struct->v_right, pr_global_struct->v_up);
 }
 
 /*
@@ -187,6 +196,12 @@ teleported.
 setorigin (entity, origin)
 =================
 */
+static qboolean PF_IsXRLocalProjectile (edict_t *e)
+{
+	if (!sv.active || cls.demoplayback || cl.maxclients != 1 || !sv_player || e == sv_player)
+		return false;
+	return e->v.owner == EDICT_TO_PROG (sv_player) || PROG_TO_EDICT (pr_global_struct->self) == sv_player;
+}
 static void PF_setorigin (void)
 {
 	edict_t	*e;
@@ -194,7 +209,8 @@ static void PF_setorigin (void)
 
 	e = G_EDICT(OFS_PARM0);
 	org = G_VECTOR(OFS_PARM1);
-	VectorCopy (org, e->v.origin);
+	if (!PF_IsXRLocalProjectile (e) || !R_GetXRControllerOrigin (e->v.origin))
+		VectorCopy (org, e->v.origin);
 	SV_LinkEdict (e, false);
 }
 
@@ -716,6 +732,17 @@ static void PF_traceline (void)
 	v2 = G_VECTOR(OFS_PARM1);
 	nomonsters = G_FLOAT(OFS_PARM2);
 	ent = G_EDICT(OFS_PARM3);
+
+	if (PF_UseXRControllerAim ())
+	{
+		vec3_t controller_origin, trace_delta;
+		if (R_GetXRControllerOrigin (controller_origin))
+		{
+			VectorSubtract (v2, v1, trace_delta);
+			VectorCopy (controller_origin, v1);
+			VectorAdd (controller_origin, trace_delta, v2);
+		}
+	}
 
 	/* FIXME FIXME FIXME: Why do we hit this with certain progs.dat ?? */
 	if (developer.value) {
@@ -1405,8 +1432,11 @@ static void PF_aim (void)
 	speed = G_FLOAT(OFS_PARM1);
 	(void) speed; /* variable set but not used */
 
-	VectorCopy (ent->v.origin, start);
-	start[2] += 20;
+	if (!PF_UseXRControllerAim () || !R_GetXRControllerOrigin (start))
+	{
+		VectorCopy (ent->v.origin, start);
+		start[2] += 20;
+	}
 
 // try sending a trace straight
 	VectorCopy (pr_global_struct->v_forward, dir);

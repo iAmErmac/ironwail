@@ -84,11 +84,11 @@ extern cvar_t gyro_turning_axis;
 extern cvar_t gyro_pitchsensitivity;
 extern cvar_t gyro_yawsensitivity;
 extern cvar_t gyro_noise_thresh;
-extern cvar_t vr_mode;
+extern cvar_t vr_mode, vr_render_scale;
 extern cvar_t vr_curved_screen;
 extern cvar_t vr_curve_radius;
 extern cvar_t vr_screen_scale;
-extern cvar_t vr_screen_distance;
+extern cvar_t vr_screen_distance, vr_screen_follow;
 extern cvar_t vr_desktop_mirror;
 extern cvar_t vr_world_scale;
 extern cvar_t vr_hud_scale;
@@ -96,6 +96,12 @@ extern cvar_t vr_hud_size;
 extern cvar_t vr_hud_distance;
 extern cvar_t vr_hud_yoffset;
 extern cvar_t vr_hud_render_yoffset;
+extern cvar_t vr_weapon_pitch, vr_weapon_xoffset, vr_weapon_yoffset, vr_weapon_zoffset;
+extern cvar_t vr_laser_sight, vr_laser_beam, vr_laser_color, vr_laser_beam_width, vr_laser_beam_alpha, vr_laser_alpha, vr_laser_sight_scale, vr_laser_hide_melee;
+extern cvar_t vr_turn_mode;
+extern cvar_t vr_turn_angle;
+extern cvar_t vr_dominant_hand, vr_stabilize_mode;
+extern cvar_t vr_move_deadzone, vr_turn_deadzone;
 
 extern char crosshair_char;
 
@@ -1147,6 +1153,8 @@ static enum m_state_e M_GetBaseState (enum m_state_e state)
 	case m_vr:
 	case m_vr_screen:
 	case m_vr_hud:
+	case m_vr_weapon:
+	case m_vr_laser:
 	case m_graphics:
 	case m_gamepad:
 	case m_interface:
@@ -3123,15 +3131,25 @@ void M_Menu_Gamepad_f (void)
 	end_menu ()															\
 		begin_menu (VR_OPTIONS, m_vr, TITLE("VR Options"))					\
 		item (VR_OPT_ENABLE, "Enable VR")						\
+		item (VR_OPT_XR_RENDER_SCALE, "VR Render Scale")				\
 		item (VR_OPT_SCREEN, "Virtual Screen")						\
 		item (VR_OPT_HUD, "VR HUD")							\
+		item (VR_OPT_WEAPON, "VR Weapon")				\
+		item (VR_OPT_LASER, "Laser Sight")				\
 		item (VR_OPT_MIRROR, "Desktop Mirror")					\
 		item (VR_OPT_WORLD_SCALE, "World Scale")					\
+		item (VR_OPT_CONTROLLER_SCHEME, "Controller Scheme")			\
+		item (VR_OPT_TWO_HANDED, "Two Handed Weapon")				\
+		item (VR_OPT_TURN_MODE, "Turn Mode")					\
+		item (VR_OPT_TURN_ANGLE, "Turn Angle")				\
+		item (VR_OPT_MOVE_DEADZONE, "Move Deadzone Adjust")			\
+		item (VR_OPT_TURN_DEADZONE, "Turn Deadzone Adjust")			\
 		item (SPACER, "")									\
 		item (VR_OPT_RESET, "Reset Defaults")									\
 	end_menu ()										\
 	begin_menu (VR_SCREEN_OPTIONS, m_vr_screen, TITLE("Virtual Screen")) \
-		item (VR_SCREEN_OPT_SHAPE, "Shape")						\
+		item (VR_SCREEN_OPT_SHAPE, "Shape")													\
+		item (VR_SCREEN_OPT_FOLLOW, "Follow Head")												\
 		item (VR_SCREEN_OPT_SCALE, "Scale")						\
 		item (VR_SCREEN_OPT_DISTANCE, "Distance")					\
 		item (VR_SCREEN_OPT_RADIUS, "Curve Radius")					\
@@ -3147,6 +3165,25 @@ void M_Menu_Gamepad_f (void)
 		item (SPACER, "")									\
 		item (VR_HUD_OPT_RESET, "Reset Defaults")							\
 	end_menu ()										\
+	begin_menu (VR_WEAPON_OPTIONS, m_vr_weapon, TITLE("VR Weapon"))	\
+		item (VR_WEAPON_OPT_PITCH, "Pitch Adjust")				\
+		item (VR_WEAPON_OPT_XOFFSET, "X Offset")					\
+		item (VR_WEAPON_OPT_YOFFSET, "Y Offset")					\
+		item (VR_WEAPON_OPT_ZOFFSET, "Z Offset")					\
+		item (SPACER, "")									\
+		item (VR_WEAPON_OPT_RESET, "Reset Defaults")					\
+	end_menu ()									\
+		begin_menu (VR_LASER_OPTIONS, m_vr_laser, TITLE("Laser Sight"))	\
+		item (VR_LASER_OPT_SIGHT, "Laser Sight")				\
+		item (VR_LASER_OPT_BEAM, "Laser Beam")				\
+		item (VR_LASER_OPT_DOT_SCALE, "Dot Scale")\
+		item (VR_LASER_OPT_DOT_ALPHA, "Dot Alpha")				\
+		item (VR_LASER_OPT_BEAM_WIDTH, "Beam Width")			\
+		item (VR_LASER_OPT_BEAM_ALPHA, "Beam Alpha")			\
+		item (VR_LASER_OPT_HIDE_MELEE, "Hide for Melee")			\
+		item (SPACER, "")									\
+		item (VR_LASER_OPT_RESET, "Reset Defaults")				\
+	end_menu ()									\
 	begin_menu (VIDEO_OPTIONS, m_video, TITLE("Display"))				\
 		item (OPT_RESOLUTION,			"Resolution")					\
 		item (OPT_DISPLAYMODE,			"Display Mode")					\
@@ -3592,8 +3629,15 @@ void M_Menu_VR_f (void)
 static void M_VR_ResetOptions (void)
 {
 	Cvar_SetValueQuick (&vr_mode, 1.f);
+	Cvar_SetValueQuick (&vr_render_scale, 1.f);
 	Cvar_SetValueQuick (&vr_desktop_mirror, 1.f);
 	Cvar_SetValueQuick (&vr_world_scale, 33.5f);
+	Cvar_SetValueQuick (&vr_dominant_hand, 0.f);
+	Cvar_SetValueQuick (&vr_stabilize_mode, 1.f);
+	Cvar_SetValueQuick (&vr_move_deadzone, 0.20f);
+	Cvar_SetValueQuick (&vr_turn_deadzone, 0.20f);
+	Cvar_SetValueQuick (&vr_turn_mode, 0.f);
+	Cvar_SetValueQuick (&vr_turn_angle, 30.f);
 }
 
 static void M_VR_ResetScreen (void)
@@ -3601,6 +3645,7 @@ static void M_VR_ResetScreen (void)
 	Cvar_SetValueQuick (&vr_curved_screen, 1.f);
 	Cvar_SetValueQuick (&vr_screen_scale, 2.2f);
 	Cvar_SetValueQuick (&vr_screen_distance, 2.5f);
+	Cvar_SetValueQuick (&vr_screen_follow, 1.f);
 	Cvar_SetValueQuick (&vr_curve_radius, 6.f);
 }
 
@@ -3613,6 +3658,24 @@ static void M_VR_ResetHUD (void)
     Cvar_SetValueQuick (&vr_hud_render_yoffset, 0.f);
 }
 
+static void M_VR_ResetLaser (void)
+{
+	Cvar_SetValueQuick (&vr_laser_sight, 0.f);
+	Cvar_SetValueQuick (&vr_laser_beam, 0.f);
+	Cvar_SetQuick (&vr_laser_color, "FF0000");
+	Cvar_SetValueQuick (&vr_laser_sight_scale, 1.5f);
+	Cvar_SetValueQuick (&vr_laser_alpha, 0.5f);
+	Cvar_SetValueQuick (&vr_laser_beam_width, 0.3f);
+	Cvar_SetValueQuick (&vr_laser_beam_alpha, 0.2f);
+	Cvar_SetValueQuick (&vr_laser_hide_melee, 1.f);
+}
+static void M_VR_ResetWeapon (void)
+{
+	Cvar_SetValueQuick (&vr_weapon_pitch, -45.f);
+	Cvar_SetValueQuick (&vr_weapon_xoffset, 0.f);
+	Cvar_SetValueQuick (&vr_weapon_yoffset, 0.f);
+	Cvar_SetValueQuick (&vr_weapon_zoffset, 10.f);
+}
 typedef enum
 {
 	UI_MOUSE_OFF,
@@ -3671,6 +3734,9 @@ void M_AdjustSliders (int dir)
 
 	switch (M_Options_GetSelected ())
 	{
+	case VR_OPT_XR_RENDER_SCALE:
+		Cvar_SetValueQuick (&vr_render_scale, CLAMP (0.3f, vr_render_scale.value + dir * 0.05f, 2.f));
+		break;
 	case VR_OPT_ENABLE:
 		Cbuf_AddText ("toggle vr_mode\n");
 		break;
@@ -3680,8 +3746,29 @@ void M_AdjustSliders (int dir)
 	case VR_OPT_WORLD_SCALE:
 		Cvar_SetValueQuick (&vr_world_scale, CLAMP (10.f, vr_world_scale.value + dir * 0.01f, 100.f));
 		break;
+	case VR_OPT_CONTROLLER_SCHEME:
+		Cvar_SetValueQuick (&vr_dominant_hand, !vr_dominant_hand.value);
+		break;
+	case VR_OPT_TWO_HANDED:
+		Cvar_SetValueQuick (&vr_stabilize_mode, !vr_stabilize_mode.value);
+		break;
+	case VR_OPT_TURN_MODE:
+		Cvar_SetValueQuick (&vr_turn_mode, !vr_turn_mode.value);
+		break;
+	case VR_OPT_TURN_ANGLE:
+		Cvar_SetValueQuick (&vr_turn_angle, CLAMP (1.f, vr_turn_angle.value + dir, 90.f));
+		break;
+	case VR_OPT_MOVE_DEADZONE:
+		Cvar_SetValueQuick (&vr_move_deadzone, CLAMP (0.0f, vr_move_deadzone.value + dir * 0.01f, 0.95f));
+		break;
+	case VR_OPT_TURN_DEADZONE:
+		Cvar_SetValueQuick (&vr_turn_deadzone, CLAMP (0.20f, vr_turn_deadzone.value + dir * 0.01f, 0.95f));
+		break;
 	case VR_SCREEN_OPT_SHAPE:
 		Cvar_SetValueQuick (&vr_curved_screen, !vr_curved_screen.value);
+		break;
+	case VR_SCREEN_OPT_FOLLOW:
+		Cvar_SetValueQuick (&vr_screen_follow, !vr_screen_follow.value);
 		break;
 	case VR_SCREEN_OPT_SCALE:
 		Cvar_SetValueQuick (&vr_screen_scale, CLAMP (0.5f, vr_screen_scale.value + dir * 0.01f, 5.f));
@@ -3706,6 +3793,39 @@ void M_AdjustSliders (int dir)
         break;
     case VR_HUD_OPT_YOFFSET:
 		Cvar_SetValueQuick (&vr_hud_render_yoffset, CLAMP (-2.f, vr_hud_render_yoffset.value + dir * 0.01f, 2.f));
+		break;
+	case VR_WEAPON_OPT_PITCH:
+		Cvar_SetValueQuick (&vr_weapon_pitch, CLAMP (-90.f, vr_weapon_pitch.value + dir, 90.f));
+		break;
+	case VR_WEAPON_OPT_XOFFSET:
+		Cvar_SetValueQuick (&vr_weapon_xoffset, CLAMP (-100.f, vr_weapon_xoffset.value + dir, 100.f));
+		break;
+	case VR_WEAPON_OPT_YOFFSET:
+		Cvar_SetValueQuick (&vr_weapon_yoffset, CLAMP (-100.f, vr_weapon_yoffset.value + dir, 100.f));
+		break;
+	case VR_WEAPON_OPT_ZOFFSET:
+		Cvar_SetValueQuick (&vr_weapon_zoffset, CLAMP (-100.f, vr_weapon_zoffset.value + dir, 100.f));
+		break;
+	case VR_LASER_OPT_SIGHT:
+		Cvar_SetValueQuick (&vr_laser_sight, !vr_laser_sight.value);
+		break;
+	case VR_LASER_OPT_BEAM:
+		Cvar_SetValueQuick (&vr_laser_beam, !vr_laser_beam.value);
+		break;
+	case VR_LASER_OPT_DOT_SCALE:
+		Cvar_SetValueQuick (&vr_laser_sight_scale, CLAMP (0.1f, vr_laser_sight_scale.value + dir * 0.1f, 10.f));
+		break;
+	case VR_LASER_OPT_DOT_ALPHA:
+		Cvar_SetValueQuick (&vr_laser_alpha, CLAMP (0.05f, vr_laser_alpha.value + dir * 0.05f, 1.f));
+		break;
+	case VR_LASER_OPT_BEAM_WIDTH:
+		Cvar_SetValueQuick (&vr_laser_beam_width, CLAMP (0.05f, vr_laser_beam_width.value + dir * 0.05f, 4.f));
+		break;
+	case VR_LASER_OPT_BEAM_ALPHA:
+		Cvar_SetValueQuick (&vr_laser_beam_alpha, CLAMP (0.05f, vr_laser_beam_alpha.value + dir * 0.05f, 1.f));
+		break;
+	case VR_LASER_OPT_HIDE_MELEE:
+		Cvar_SetValueQuick (&vr_laser_hide_melee, !vr_laser_hide_melee.value);
 		break;
 	case OPT_UISCALE:	// console and menu scale
 		l = ((vid.width + 31) / 32) / 10.0;
@@ -4112,8 +4232,20 @@ qboolean M_SetSliderValue (int option, float f)
 
 	switch (option)
 	{
+	case VR_OPT_XR_RENDER_SCALE:
+		Cvar_SetValueQuick (&vr_render_scale, 0.3f + f * 1.7f);
+		return true;
 	case VR_OPT_WORLD_SCALE:
 		Cvar_SetValueQuick (&vr_world_scale, 10.f + f * 90.f);
+		return true;
+	case VR_OPT_TURN_ANGLE:
+		Cvar_SetValueQuick (&vr_turn_angle, 1.f + f * 89.f);
+		return true;
+	case VR_OPT_MOVE_DEADZONE:
+		Cvar_SetValueQuick (&vr_move_deadzone, f * 0.95f);
+		return true;
+	case VR_OPT_TURN_DEADZONE:
+		Cvar_SetValueQuick (&vr_turn_deadzone, 0.20f + f * 0.75f);
 		return true;
 	case VR_SCREEN_OPT_SCALE:
 		Cvar_SetValueQuick (&vr_screen_scale, 0.5f + f * 4.5f);
@@ -4136,8 +4268,33 @@ qboolean M_SetSliderValue (int option, float f)
 	case VR_HUD_OPT_LAYER_YOFFSET:
 		Cvar_SetValueQuick (&vr_hud_yoffset, -2.f + f * 4.f);
 		return true;
+	case VR_HUD_OPT_YOFFSET:
 		Cvar_SetValueQuick (&vr_hud_render_yoffset, -2.f + f * 4.f);
-		return true;	case OPT_UISCALE:	// console and menu scale
+		return true;	case VR_WEAPON_OPT_PITCH:
+		Cvar_SetValueQuick (&vr_weapon_pitch, -90.f + f * 180.f);
+		return true;
+	case VR_WEAPON_OPT_XOFFSET:
+		Cvar_SetValueQuick (&vr_weapon_xoffset, -100.f + f * 200.f);
+		return true;
+	case VR_WEAPON_OPT_YOFFSET:
+		Cvar_SetValueQuick (&vr_weapon_yoffset, -100.f + f * 200.f);
+		return true;
+	case VR_WEAPON_OPT_ZOFFSET:
+		Cvar_SetValueQuick (&vr_weapon_zoffset, -100.f + f * 200.f);
+		return true;
+	case VR_LASER_OPT_DOT_SCALE:
+		Cvar_SetValueQuick (&vr_laser_sight_scale, 0.1f + f * 9.9f);
+		return true;
+	case VR_LASER_OPT_DOT_ALPHA:
+		Cvar_SetValueQuick (&vr_laser_alpha, 0.05f + f * 0.95f);
+		return true;
+	case VR_LASER_OPT_BEAM_WIDTH:
+		Cvar_SetValueQuick (&vr_laser_beam_width, 0.05f + f * 3.95f);
+		return true;
+	case VR_LASER_OPT_BEAM_ALPHA:
+		Cvar_SetValueQuick (&vr_laser_beam_alpha, 0.05f + f * 0.95f);
+		return true;
+	case OPT_UISCALE:	// console and menu scale
 		target_scale_frac = f;
 		l = (vid.width / 320.0) - 1;
 		f = l > 0 ? f * l + 1 : 0;
@@ -4329,11 +4486,16 @@ static void M_Options_DrawItem (int y, int item)
 	case GPAD_OPT_CALIBRATE:
 	case VR_OPT_SCREEN:
 	case VR_OPT_HUD:
+	case VR_OPT_WEAPON:
+	case VR_OPT_LASER:
 		M_Print (x - 4, y, "...");
 
 		break;
 
 
+	case VR_OPT_XR_RENDER_SCALE:
+		M_DrawSlider (x, y, (vr_render_scale.value - 0.3f) / 1.7f, va ("%.2f", vr_render_scale.value));
+		break;
 	case VR_OPT_ENABLE:
 		M_DrawCheckbox (x, y, vr_mode.value);
 		break;
@@ -4343,8 +4505,29 @@ static void M_Options_DrawItem (int y, int item)
 	case VR_OPT_WORLD_SCALE:
 		M_DrawSlider (x, y, (vr_world_scale.value - 10.f) / 90.f, va ("%.2f", vr_world_scale.value));
 		break;
+	case VR_OPT_TURN_MODE:
+		M_Print (x, y, vr_turn_mode.value ? "Smooth Turn" : "Snap Turn");
+		break;
+	case VR_OPT_TURN_ANGLE:
+		M_DrawSlider (x, y, (vr_turn_angle.value - 1.f) / 89.f, va ("%.0f", vr_turn_angle.value));
+		break;
+	case VR_OPT_CONTROLLER_SCHEME:
+		M_Print (x, y, vr_dominant_hand.value ? "Left handed" : "Right handed");
+		break;
+	case VR_OPT_TWO_HANDED:
+		M_DrawCheckbox (x, y, vr_stabilize_mode.value);
+		break;
+	case VR_OPT_MOVE_DEADZONE:
+		M_DrawSlider (x, y, vr_move_deadzone.value / 0.95f, va ("%.2f", vr_move_deadzone.value));
+		break;
+	case VR_OPT_TURN_DEADZONE:
+		M_DrawSlider (x, y, (vr_turn_deadzone.value - 0.20f) / 0.75f, va ("%.2f", vr_turn_deadzone.value));
+		break;
 	case VR_SCREEN_OPT_SHAPE:
 		M_Print (x, y, vr_curved_screen.value ? "Curved" : "Flat");
+		break;
+	case VR_SCREEN_OPT_FOLLOW:
+		M_Print (x, y, vr_screen_follow.value ? "On" : "Off");
 		break;
 	case VR_SCREEN_OPT_SCALE:
 		M_DrawSlider (x, y, (vr_screen_scale.value - 0.5f) / 4.5f, va ("%.2f", vr_screen_scale.value));
@@ -4367,7 +4550,41 @@ static void M_Options_DrawItem (int y, int item)
 	case VR_HUD_OPT_LAYER_YOFFSET:
 		M_DrawSlider (x, y, (vr_hud_yoffset.value + 2.f) / 4.f, va ("%.2f", vr_hud_yoffset.value));
 		break;
+	case VR_HUD_OPT_YOFFSET:
 		M_DrawSlider (x, y, (vr_hud_render_yoffset.value + 2.f) / 4.f, va ("%.2f", vr_hud_render_yoffset.value));
+		break;
+	case VR_WEAPON_OPT_PITCH:
+		M_DrawSlider (x, y, (vr_weapon_pitch.value + 90.f) / 180.f, va ("%.0f", vr_weapon_pitch.value));
+		break;
+	case VR_WEAPON_OPT_XOFFSET:
+		M_DrawSlider (x, y, (vr_weapon_xoffset.value + 100.f) / 200.f, va ("%.0f", vr_weapon_xoffset.value));
+		break;
+	case VR_WEAPON_OPT_YOFFSET:
+		M_DrawSlider (x, y, (vr_weapon_yoffset.value + 100.f) / 200.f, va ("%.0f", vr_weapon_yoffset.value));
+		break;
+	case VR_WEAPON_OPT_ZOFFSET:
+		M_DrawSlider (x, y, (vr_weapon_zoffset.value + 100.f) / 200.f, va ("%.0f", vr_weapon_zoffset.value));
+		break;
+	case VR_LASER_OPT_SIGHT:
+		M_DrawCheckbox (x, y, vr_laser_sight.value);
+		break;
+	case VR_LASER_OPT_BEAM:
+		M_DrawCheckbox (x, y, vr_laser_beam.value);
+		break;
+	case VR_LASER_OPT_DOT_SCALE:
+		M_DrawSlider (x, y, (vr_laser_sight_scale.value - 0.1f) / 9.9f, va ("%.1f", vr_laser_sight_scale.value));
+		break;
+	case VR_LASER_OPT_DOT_ALPHA:
+		M_DrawSlider (x, y, (vr_laser_alpha.value - 0.05f) / 0.95f, va ("%.2f", vr_laser_alpha.value));
+		break;
+	case VR_LASER_OPT_BEAM_WIDTH:
+		M_DrawSlider (x, y, (vr_laser_beam_width.value - 0.05f) / 3.95f, va ("%.2f", vr_laser_beam_width.value));
+		break;
+	case VR_LASER_OPT_BEAM_ALPHA:
+		M_DrawSlider (x, y, (vr_laser_beam_alpha.value - 0.05f) / 0.95f, va ("%.2f", vr_laser_beam_alpha.value));
+		break;
+	case VR_LASER_OPT_HIDE_MELEE:
+		M_DrawCheckbox (x, y, vr_laser_hide_melee.value);
 		break;
 	case OPT_UISCALE:
 		l = (vid.width / 320.0) - 1;
@@ -4947,7 +5164,7 @@ void M_Options_Key (int k)
 		}
 		if (m_state == m_video)
 			VID_SyncCvars (); //sync cvars before leaving menu. FIXME: there are other ways to leave menu
-		if (m_state == m_vr_screen || m_state == m_vr_hud)
+		if (m_state == m_vr_screen || m_state == m_vr_hud || m_state == m_vr_weapon || m_state == m_vr_laser)
 			M_Menu_VR_f ();
 	 else if (m_state == m_options)
 			M_Menu_Main_f ();
@@ -4987,6 +5204,12 @@ void M_Options_Key (int k)
 		case VR_OPT_HUD:
 			M_Options_Init (m_vr_hud);
 			break;
+		case VR_OPT_WEAPON:
+			M_Options_Init (m_vr_weapon);
+			break;
+		case VR_OPT_LASER:
+			M_Options_Init (m_vr_laser);
+			break;
 		case VR_OPT_RESET:
 			M_VR_ResetOptions ();
 			break;
@@ -4995,6 +5218,12 @@ void M_Options_Key (int k)
 			break;
 		case VR_HUD_OPT_RESET:
 			M_VR_ResetHUD ();
+			break;
+		case VR_WEAPON_OPT_RESET:
+			M_VR_ResetWeapon ();
+			break;
+		case VR_LASER_OPT_RESET:
+			M_VR_ResetLaser ();
 			break;
 		case OPT_VR:
 			M_Menu_VR_f ();
@@ -5554,6 +5783,8 @@ void M_Keys_Key (int k)
 		break;
 
 	case K_TAB:
+	case K_LEFTARROW:
+	case K_RIGHTARROW:
 	case K_LSHOULDER:
 	case K_RSHOULDER:
 		M_ThrottledSound ("misc/menu1.wav");
@@ -5577,6 +5808,7 @@ void M_Keys_Key (int k)
 			break;
 		/* fall-through */
 	case K_DEL:
+	case K_XBUTTON:
 	case K_YBUTTON:
 		M_ThrottledSound ("misc/menu2.wav");
 		M_UnbindCommand (keysmenu.filtered_items[keysmenu.list.cursor].command);

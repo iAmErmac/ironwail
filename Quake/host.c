@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // host.c -- coordinates spawning and killing of local servers
 
 #include "quakedef.h"
+#include "xr_input.h"
 
 extern void VID_XR_Pump (void);
 #include "bgmusic.h"
@@ -1224,6 +1225,7 @@ void _Host_Frame (double time)
 	IN_UpdateInputMode ();
 	Sys_SendKeyEvents ();
 	VID_XR_Pump ();
+	XR_Input_Update ();
 
 // allow mice or other external controllers to add commands
 	IN_Commands ();

@@ -38,6 +38,8 @@ enum m_state_e {
 	m_vr,
 	m_vr_screen,
 	m_vr_hud,
+	m_vr_weapon,
+	m_vr_laser,
 	m_video,
 	m_graphics,
 	m_interface,

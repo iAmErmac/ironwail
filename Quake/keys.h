@@ -44,6 +44,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 	def (K_YBUTTON,		/*auto*/,			"Y",				"TRIANGLE",					"Y")				\
 	def (K_LTRIGGER,	/*auto*/,			"LT",				"L2",						"ZL")				\
 	def (K_RTRIGGER,	/*auto*/,			"RT",				"R2",						"ZR")				\
+        def (K_LGRIP, /*auto*/, "L GRIP", "L GRIP", "L GRIP") \
+        def (K_RGRIP, /*auto*/, "R GRIP", "R GRIP", "R GRIP") \
 	def (K_MISC1,		/*auto*/,			NULL,				"MUTE",						"CAPTURE")			\
 	def (K_PADDLE1,		/*auto*/,			"P1 PADDLE",		NULL,						NULL)				\
 	def (K_PADDLE2,		/*auto*/,			"P3 PADDLE",		NULL,						NULL)				\
@@ -65,6 +67,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 	def (K_YBUTTON_ALT,		/*auto*/,		"Y (alt)",			"TRIANGLE (alt)",			"Y (alt)")			\
 	def (K_LTRIGGER_ALT,	/*auto*/,		"LT (alt)",			"L2",						"ZL (alt)")			\
 	def (K_RTRIGGER_ALT,	/*auto*/,		"RT (alt)",			"R2",						"ZR (alt)")			\
+        def (K_LGRIP_ALT, /*auto*/, "L GRIP (alt)", "L GRIP (alt)", "L GRIP (alt)") \
+        def (K_RGRIP_ALT, /*auto*/, "R GRIP (alt)", "R GRIP (alt)", "R GRIP (alt)") \
 	def (K_MISC1_ALT,		/*auto*/,		NULL,				"MUTE (alt)",				"CAPTURE (alt)")	\
 	def (K_PADDLE1_ALT,		/*auto*/,		"P1 PADDLE (alt)",	NULL,						NULL)				\
 	def (K_PADDLE2_ALT,		/*auto*/,		"P3 PADDLE (alt)",	NULL,						NULL)				\
