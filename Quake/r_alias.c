@@ -669,6 +669,7 @@ static void R_DrawAliasModel_Real (entity_t *e, aliasmode_t mode)
 
 	R_SetupAliasFrame (e, paliashdr, &lerpdata);
 	R_SetupEntityTransform (e, &lerpdata);
+	R_ApplyXRProjectileVisualOffset (e, lerpdata.origin);
 
 	if (lerpdata.pose1 == lerpdata.pose2)
 		lerpdata.blend = 0.f;
@@ -698,7 +699,8 @@ static void R_DrawAliasModel_Real (entity_t *e, aliasmode_t mode)
 	//
 	// transform it
 	//
-	R_EntityMatrix (model_matrix, lerpdata.origin, lerpdata.angles, e->scale);
+	if (!R_GetXRViewmodelMatrix (e, model_matrix, lerpdata.origin, e->scale))
+		R_EntityMatrix (model_matrix, lerpdata.origin, lerpdata.angles, e->scale);
 	ApplyTranslation (model_matrix, paliashdr->scale_origin[0], paliashdr->scale_origin[1] * fovscale, paliashdr->scale_origin[2] * fovscale);
 	ApplyScale (model_matrix, paliashdr->scale[0], paliashdr->scale[1] * fovscale, paliashdr->scale[2] * fovscale);
 

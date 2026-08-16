@@ -25,6 +25,7 @@ https://github.com/yquake2/yquake2/blob/master/src/client/input/sdl.c
 */
 
 #include "quakedef.h"
+#include "xr_input.h"
 #if defined(SDL_FRAMEWORK) || defined(NO_SDL_CONFIG)
 #if defined(ANDROID_GLES3)
 #include <SDL.h>
@@ -678,6 +679,7 @@ IN_Init
 */
 void IN_Init (void)
 {
+	XR_Input_Init ();
 	textmode = Key_TextEntry();
 	IN_UpdateSDLTextInput ();
 
@@ -740,6 +742,7 @@ void IN_Init (void)
 
 void IN_Shutdown (void)
 {
+	XR_Input_Shutdown ();
 	Sys_ActivateKeyFilter(false);
 	IN_Deactivate(true);
 	IN_ShutdownJoystick();
@@ -980,6 +983,8 @@ void IN_Commands (void)
 	const float stickthreshold = 0.9;
 	const float triggerthreshold = joy_deadzone_trigger.value;
 	
+	if (XR_Input_OwnsInput ())
+		return;
 	if (!joy_active_controller)
 		return;
 
@@ -1334,6 +1339,8 @@ void IN_MouseMove(usercmd_t *cmd)
 
 void IN_Move(usercmd_t *cmd)
 {
+	if (XR_Input_Move (cmd))
+		return;
 	IN_JoyMove(cmd);
 	IN_GyroMove(cmd);
 	IN_MouseMove(cmd);

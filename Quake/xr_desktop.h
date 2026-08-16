@@ -16,6 +16,7 @@ iw_xr_win_t *IW_XRWin_Create(void *window, void (*log)(void *, const char *), vo
 void IW_XRWin_Destroy(iw_xr_win_t *xr);
 iw_xr_result_t IW_XRWin_Probe(iw_xr_win_t *xr, iw_xr_bridge_t *bridge, uint64_t deadline_ns, const char **reason);
 iw_xr_result_t IW_XRWin_Pump(iw_xr_win_t *xr, iw_xr_bridge_t *bridge);
+qboolean IW_XRWin_GetActions(const iw_xr_win_t *xr, iw_xr_action_snapshot_t *actions);
 qboolean IW_XRWin_BeginFrame(iw_xr_win_t *xr, iw_xr_frame_snapshot_t *snapshot);
 qboolean IW_XRWin_BindFrameTarget(iw_xr_win_t *xr);
 qboolean IW_XRWin_GetFrameTarget(const iw_xr_win_t *xr, unsigned *fbo, int *width, int *height);

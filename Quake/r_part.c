@@ -36,15 +36,20 @@ static int	ramp2[8] = {0x6f, 0x6e, 0x6d, 0x6c, 0x6b, 0x6a, 0x68, 0x66};
 static int	ramp3[8] = {0x6d, 0x6b, 6, 5, 4, 3};
 
 particle_t	*particles;
+static qboolean r_vr_laser_dot_active;
+static vec3_t r_vr_laser_dot_origin;
+static uint32_t r_vr_laser_dot_color;
+static float r_vr_laser_dot_scale;
 int			r_numparticles, r_numactiveparticles;
 
 static float uvscale;
 static float texturescalefactor; //johnfitz -- compensate for apparent size of different particle textures
 
-cvar_t	r_particles = {"r_particles","2", CVAR_ARCHIVE}; //johnfitz
+cvar_t	r_particles = {"r_particles","1", CVAR_ARCHIVE}; //johnfitz
 
 typedef struct particlevert_t {
 	vec3_t		pos;
+	float		scale;
 	GLubyte		color[4];
 } particlevert_t;
 
@@ -92,6 +97,17 @@ particle_t *R_AllocParticle (void)
 R_InitParticles
 ===============
 */
+void R_SetVRLaserDot (qboolean active, const vec3_t origin, uint32_t color, float scale)
+{
+	r_vr_laser_dot_active = active;
+	if (active)
+	{
+		VectorCopy (origin, r_vr_laser_dot_origin);
+		r_vr_laser_dot_color = color;
+		r_vr_laser_dot_scale = scale;
+	}
+}
+
 void R_InitParticles (void)
 {
 	int		i;
@@ -669,6 +685,7 @@ static void R_FlushParticleBatch (void)
 GLESVAO_BindDynamic ();
 #endif
 GL_VertexAttribPointerFunc (0, 3, GL_FLOAT, GL_FALSE, sizeof(partverts[0]), ofs + offsetof(particlevert_t, pos));
+	GL_VertexAttribPointerFunc (2, 1, GL_FLOAT, GL_FALSE, sizeof(partverts[0]), ofs + offsetof(particlevert_t, scale));
 	GL_VertexAttribPointerFunc (1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(partverts[0]), ofs + offsetof(particlevert_t, color));
 #if defined(ANDROID_GLES3)
 	GLESVAO_UseLayout (GLES_LAYOUT_PARTICLE, "particles", buf, (GLuint)-1, GL_NONE);
@@ -693,17 +710,17 @@ static void R_DrawParticles_Real (qboolean alpha, qboolean showtris)
 	//float			alpha; //johnfitz -- particle transparency
 	float			scalex, scaley;
 	qboolean		dither, oit;
+	qboolean draw_regular = r_particles.value && (showtris || alpha == ((int)r_particles.value != 2));
+	qboolean draw_laser_dot = r_vr_laser_dot_active && !showtris && alpha;
 	int				i;
 
-	if (!r_particles.value)
+	if (!draw_regular && !draw_laser_dot)
 		return;
 
-	if (!r_numactiveparticles)
+	if (!r_numactiveparticles && !draw_laser_dot)
 		return;
 
 	// square particles are drawn opaque (avoiding alpha sorting issues)
-	if (!showtris && alpha != ((int)r_particles.value != 2))
-		return;
 
 	GL_BeginGroup ("Particles");
 
@@ -721,18 +738,19 @@ static void R_DrawParticles_Real (qboolean alpha, qboolean showtris)
 	GL_Uniform3fFunc (0, scalex, scaley, uvscale);
 
 	if (alpha)
-		GL_SetState (GLS_BLEND_ALPHA_OIT | GLS_NO_ZWRITE | GLS_CULL_NONE | GLS_ATTRIBS (2) | GLS_INSTANCED_ATTRIBS (2));
+		GL_SetState (GLS_BLEND_ALPHA_OIT | GLS_NO_ZWRITE | GLS_CULL_NONE | GLS_ATTRIBS (3) | GLS_INSTANCED_ATTRIBS (3));
 	else
-		GL_SetState (GLS_BLEND_OPAQUE | GLS_CULL_NONE | GLS_ATTRIBS (2) | GLS_INSTANCED_ATTRIBS (2));
+		GL_SetState (GLS_BLEND_OPAQUE | GLS_CULL_NONE | GLS_ATTRIBS (3) | GLS_INSTANCED_ATTRIBS (3));
 
 	numpartverts = 0;
-	for (i = 0, p = particles; i < r_numactiveparticles; i++, p++)
+	for (i = 0, p = particles; draw_regular && i < r_numactiveparticles; i++, p++)
 	{
 		if (numpartverts == countof(partverts))
 			R_FlushParticleBatch ();
 
 		v = &partverts[numpartverts++];
 		VectorCopy (p->org, v->pos);
+		v->scale = 1.f;
 
 		//johnfitz -- particle transparency and fade out
 		c = showtris ? color : (GLubyte *) &d_8to24table[(int)p->color];
@@ -743,6 +761,17 @@ static void R_DrawParticles_Real (qboolean alpha, qboolean showtris)
 		//alpha = CLAMP(0, p->die + 0.5 - cl.time, 1);
 		v->color[3] = c[3]; //(int)(alpha * 255);
 		//johnfitz
+	}
+
+	if (draw_laser_dot)
+	{
+		if (numpartverts == countof(partverts))
+			R_FlushParticleBatch ();
+
+		v = &partverts[numpartverts++];
+		VectorCopy (r_vr_laser_dot_origin, v->pos);
+		v->scale = r_vr_laser_dot_scale;
+		*(uint32_t *)&v->color = showtris ? 0xffffffff : r_vr_laser_dot_color;
 	}
 
 	R_FlushParticleBatch ();

@@ -69,6 +69,8 @@ extern qboolean SV_BoxInPVS (vec3_t mins, vec3_t maxs, byte *pvs, mnode_t *node)
 //
 refdef_t	r_refdef;
 extern cvar_t vr_world_scale;
+extern cvar_t vr_laser_sight, vr_laser_beam, vr_laser_color, vr_laser_beam_width, vr_laser_beam_alpha, vr_laser_alpha, vr_laser_sight_scale, vr_laser_hide_melee;
+extern qboolean VID_XR_GetActions(iw_xr_action_snapshot_t *actions);
 static qboolean r_xr_eye_pass;
 static unsigned r_xr_eye_index;static GLuint r_xr_final_fbo;
 static int r_xr_final_width;
@@ -85,10 +87,176 @@ qboolean R_HasXRFinalTarget(void) { return r_xr_final_fbo != 0; }
 static qboolean r_xr_asymmetric_projection;
 static iw_xr_fov_t r_xr_fov;
 static qboolean r_xr_head_anchor_valid;
+static qboolean r_xr_sync_player_yaw;
+static float r_xr_recenter_yaw;
+static qboolean r_xr_recenter_to_head;
 static float r_xr_head_anchor_yaw;
 static float r_xr_game_anchor_yaw;
 static qboolean r_xr_view_basis_valid;
 static vec3_t r_xr_forward, r_xr_right, r_xr_up;
+static vec3_t r_xr_center_vieworg;
+static qboolean r_xr_viewmodel_orientation_valid;
+static vec3_t r_xr_viewmodel_forward, r_xr_viewmodel_right, r_xr_viewmodel_up;
+static qboolean r_xr_controller_aim_valid;
+static vec3_t r_xr_controller_forward, r_xr_controller_right, r_xr_controller_up, r_xr_controller_origin;
+static qboolean r_xr_laser_valid;
+static vec3_t r_xr_laser_start, r_xr_laser_end;
+qboolean R_GetXRViewmodelMatrix (entity_t *e, float matrix[16], const vec3_t origin, unsigned char scale)
+{
+	vec3_t forward, up;
+	float scalefactor, correction, c, s;
+	if (e != &cl.viewent || !r_xr_eye_pass || !r_xr_viewmodel_orientation_valid)
+		return false;
+	VectorCopy (r_xr_viewmodel_forward, forward);
+	VectorCopy (r_xr_viewmodel_up, up);
+	correction = (cl.stats[STAT_ACTIVEWEAPON] == IT_SHOTGUN || cl.stats[STAT_ACTIVEWEAPON] == IT_ROCKET_LAUNCHER) ? 5.f : 0.f;
+	if (correction)
+	{
+		vec3_t original_forward, original_up;
+		c = cosf (DEG2RAD (correction));
+		s = sinf (DEG2RAD (correction));
+		VectorCopy (forward, original_forward);
+		VectorCopy (up, original_up);
+		VectorScale (original_forward, c, forward);
+		VectorMA (forward, s, original_up, forward);
+		VectorScale (original_up, c, up);
+		VectorMA (up, -s, original_forward, up);
+	}
+	scalefactor = ENTSCALE_DECODE(scale);
+	matrix[0] = forward[0] * scalefactor;
+	matrix[1] = forward[1] * scalefactor;
+	matrix[2] = forward[2] * scalefactor;
+	matrix[3] = 0.f;
+	matrix[4] = r_xr_viewmodel_right[0] * scalefactor;
+	matrix[5] = r_xr_viewmodel_right[1] * scalefactor;
+	matrix[6] = r_xr_viewmodel_right[2] * scalefactor;
+	matrix[7] = 0.f;
+	matrix[8] = up[0] * scalefactor;
+	matrix[9] = up[1] * scalefactor;
+	matrix[10] = up[2] * scalefactor;
+	matrix[11] = 0.f;
+	matrix[12] = origin[0];
+	matrix[13] = origin[1];
+	matrix[14] = origin[2];
+	matrix[15] = 1.f;
+	return true;
+}
+qboolean R_GetXRControllerAim (vec3_t forward, vec3_t right, vec3_t up)
+{
+	if (!r_xr_controller_aim_valid)
+		return false;
+	VectorCopy (r_xr_controller_forward, forward);
+	VectorCopy (r_xr_controller_right, right);
+	VectorCopy (r_xr_controller_up, up);
+	return true;
+}
+qboolean R_GetXRControllerOrigin (vec3_t origin)
+{
+	if (!r_xr_controller_aim_valid)
+		return false;
+	VectorCopy (r_xr_controller_origin, origin);
+	return true;
+}
+static uint32_t R_XRLaserColor (float alpha)
+{
+	const char *s = vr_laser_color.string;
+	int rgb[3] = { 255, 0, 0 };
+	int i, value = 0;
+	if (s && strlen (s) == 6)
+	{
+		for (i = 0; i < 6; ++i)
+		{
+			int digit;
+			if (s[i] >= '0' && s[i] <= '9') digit = s[i] - '0';
+			else if (s[i] >= 'a' && s[i] <= 'f') digit = s[i] - 'a' + 10;
+			else if (s[i] >= 'A' && s[i] <= 'F') digit = s[i] - 'A' + 10;
+			else return 0xff0000ff;
+			value = (value << 4) | digit;
+		}
+		rgb[0] = (value >> 16) & 255;
+		rgb[1] = (value >> 8) & 255;
+		rgb[2] = value & 255;
+	}
+	return ((uint32_t)(CLAMP (0.f, alpha, 1.f) * 255.f) << 24) | ((uint32_t)rgb[2] << 16) | ((uint32_t)rgb[1] << 8) | (uint32_t)rgb[0];
+}
+
+static qboolean R_XRLaserHiddenForMelee (void)
+{
+	int weapon = cl.stats[STAT_ACTIVEWEAPON];
+	return vr_laser_hide_melee.value != 0.f && (weapon == IT_AXE || weapon == RIT_AXE || weapon == HIT_MJOLNIR);
+}
+
+static void R_XRPrepareLaser (void)
+{
+	vec3_t target;
+	uint32_t color;
+
+	if (!r_xr_eye_pass)
+	{
+		r_xr_laser_valid = false;
+		return;
+	}
+	if (r_xr_eye_index != 0)
+		return;
+	r_xr_laser_valid = false;
+	if (!r_xr_controller_aim_valid || (!vr_laser_sight.value && !vr_laser_beam.value) || R_XRLaserHiddenForMelee ())
+		return;
+	VectorCopy (r_xr_controller_origin, r_xr_laser_start);
+	VectorMA (r_xr_laser_start, 8192.f, r_xr_controller_forward, target);
+	TraceLine (r_xr_laser_start, target, r_xr_laser_end);
+	r_xr_laser_valid = true;
+
+	if (vr_laser_sight.value)
+	{
+		dlight_t *light = CL_AllocDlight (0x56524c53);
+		color = R_XRLaserColor (1.f);
+		VectorCopy (r_xr_laser_end, light->origin);
+		VectorSet (light->color, (color & 255) / 255.f, ((color >> 8) & 255) / 255.f, ((color >> 16) & 255) / 255.f);
+		light->radius = 16.f;
+		light->die = cl.time + 0.1;
+		light->decay = 0.f;
+	}
+}
+
+static void R_XRUpdateLaserDot (void)
+{
+	vec3_t origin;
+	if (!r_xr_laser_valid || !vr_laser_sight.value)
+	{
+		R_SetVRLaserDot (false, vec3_origin, 0, 0.f);
+		return;
+	}
+	VectorMA (r_xr_laser_end, -0.5f, r_xr_controller_forward, origin);
+	R_SetVRLaserDot (true, origin, R_XRLaserColor (vr_laser_alpha.value), CLAMP (0.1f, vr_laser_sight_scale.value, 20.f));
+}
+
+static void R_XRDrawLaserBeam (void);
+
+static qboolean R_XRIsProjectileModel (const entity_t *e)
+{
+	const char *name;
+	if (!e || !e->model)
+		return false;
+	name = e->model->name;
+	return !strcmp (name, "progs/missile.mdl") || !strcmp (name, "progs/grenade.mdl") ||
+		!strcmp (name, "progs/spike.mdl") || !strcmp (name, "progs/s_spike.mdl");
+}
+
+void R_ApplyXRProjectileVisualOffset (const entity_t *e, vec3_t origin)
+{
+	vec3_t delta, offset;
+	float distance, blend;
+	if (!r_xr_eye_pass || !r_xr_controller_aim_valid || (sv.active && cl.maxclients == 1) || !R_XRIsProjectileModel (e))
+		return;
+	VectorSubtract (origin, cl_entities[cl.viewentity].origin, delta);
+	distance = VectorLength (delta);
+	if (distance >= 128.f)
+		return;
+	blend = CLAMP (0.f, (128.f - distance) / 80.f, 1.f);
+	VectorSubtract (r_xr_controller_origin, origin, offset);
+	VectorMA (origin, blend, offset, origin);
+}
+
 qboolean R_GetXRCanvasOffset (float *x, float *y)
 {
 	float left, right, bottom, top;
@@ -107,7 +275,25 @@ qboolean R_GetXRCanvasOffset (float *x, float *y)
 void R_XRRecenter (void)
 {
 	r_xr_head_anchor_valid = false;
+	r_xr_sync_player_yaw = true;
+	r_xr_recenter_to_head = true;
 	r_xr_view_basis_valid = false;
+}
+
+void R_XRResync (void)
+{
+	r_xr_recenter_yaw = r_refdef.viewangles[YAW];
+	r_xr_head_anchor_valid = false;
+	r_xr_sync_player_yaw = true;
+	r_xr_recenter_to_head = false;
+	r_xr_view_basis_valid = false;
+}
+
+void R_XRAdjustYaw (float delta)
+{
+	cl.viewangles[YAW] += delta;
+	if (r_xr_head_anchor_valid)
+		r_xr_game_anchor_yaw += delta;
 }
 
 static void R_XRToQuakePosition (const float xr[3], float quake[3]);
@@ -1416,10 +1602,11 @@ void R_DrawViewModel (void)
 
 	GL_BeginGroup ("View model");
 
-	// hack the depth range to prevent view model from poking into walls
-	GL_DepthRange (ZRANGE_VIEWMODEL);
+	if (!r_xr_eye_pass)
+		GL_DepthRange (ZRANGE_VIEWMODEL);
 	R_DrawAliasModels (&e, 1);
-	GL_DepthRange (ZRANGE_FULL);
+	if (!r_xr_eye_pass)
+		GL_DepthRange (ZRANGE_FULL);
 
 	GL_EndGroup ();
 }
@@ -1511,6 +1698,70 @@ static void R_AddDebugGeometry (const debugvert_t verts[], int numverts, const u
 	numdebugverts += numverts;
 }
 
+static void R_XRDrawLaserBeam (void)
+{
+	debugvert_t verts[16];
+	uint16_t idx[48];
+	vec3_t direction, side, up, radial;
+	uint32_t color;
+	float length, radius;
+	int i;
+
+	if (!r_xr_laser_valid || !vr_laser_beam.value)
+		return;
+	VectorSubtract (r_xr_laser_end, r_xr_laser_start, direction);
+	length = VectorNormalize (direction);
+	if (length <= 0.01f)
+		return;
+	if (fabsf (direction[2]) < 0.9f)
+		VectorSet (side, 0.f, 0.f, 1.f);
+	else
+		VectorSet (side, 0.f, 1.f, 0.f);
+	CrossProduct (direction, side, side);
+	VectorNormalize (side);
+	CrossProduct (side, direction, up);
+	VectorNormalize (up);
+	radius = 0.25f * CLAMP (0.05f, vr_laser_beam_width.value, 4.f);
+	color = R_XRLaserColor (vr_laser_beam_alpha.value);
+
+	for (i = 0; i < 8; ++i)
+	{
+		float angle = (float)i * (2.f * (float)M_PI / 8.f);
+		VectorScale (side, cosf (angle), radial);
+		VectorMA (radial, sinf (angle), up, radial);
+		VectorMA (r_xr_laser_start, radius, radial, verts[i * 2].pos);
+		VectorMA (r_xr_laser_end, radius, radial, verts[i * 2 + 1].pos);
+		verts[i * 2].color = color;
+		verts[i * 2 + 1].color = color;
+		idx[i * 6] = (uint16_t)(i * 2);
+		idx[i * 6 + 1] = (uint16_t)(((i + 1) % 8) * 2);
+		idx[i * 6 + 2] = (uint16_t)(i * 2 + 1);
+		idx[i * 6 + 3] = (uint16_t)(i * 2 + 1);
+		idx[i * 6 + 4] = (uint16_t)(((i + 1) % 8) * 2);
+		idx[i * 6 + 5] = (uint16_t)(((i + 1) % 8) * 2 + 1);
+	}
+
+	{
+		GLuint buf;
+		GLbyte *ofs;
+		GL_UseProgram (glprogs.debug3d);
+		GL_SetState (GLS_BLEND_ALPHA | GLS_NO_ZWRITE | GLS_CULL_NONE | GLS_ATTRIBS(2));
+		GL_UploadTransient (GL_ARRAY_BUFFER, verts, sizeof (verts), buf, ofs, "xr laser");
+		GL_BindBuffer (GL_ARRAY_BUFFER, buf);
+#if defined(ANDROID_GLES3)
+		GLESVAO_BindDynamic ();
+#endif
+		GL_VertexAttribPointerFunc (0, 3, GL_FLOAT, GL_FALSE, sizeof (verts[0]), ofs + offsetof (debugvert_t, pos));
+		GL_VertexAttribPointerFunc (1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof (verts[0]), ofs + offsetof (debugvert_t, color));
+#if defined(ANDROID_GLES3)
+		GLESVAO_UseLayout (GLES_LAYOUT_DEBUG, "xr laser", buf, buf, GL_UNSIGNED_SHORT);
+#endif
+		GL_UploadTransient (GL_ELEMENT_ARRAY_BUFFER, idx, sizeof (idx), buf, ofs, "xr laser");
+		GL_BindBuffer (GL_ELEMENT_ARRAY_BUFFER, buf);
+		GL_PerfCountDraws (1);
+		glDrawElements (GL_TRIANGLES, countof (idx), GL_UNSIGNED_SHORT, ofs);
+	}
+}
 /*
 ================
 R_EmitLine
@@ -2186,6 +2437,8 @@ R_RenderScene
 */
 void R_RenderScene (void)
 {
+	R_XRPrepareLaser ();
+	R_XRUpdateLaserDot ();
 	R_SetupScene (); //johnfitz -- this does everything that should be done once per call to RenderScene
 
 	R_Clear ();
@@ -2214,6 +2467,7 @@ void R_RenderScene (void)
 	R_EndTranslucency ();
 
 	R_DrawViewModel (); //johnfitz -- moved here from R_RenderView -- il8r -- moved for oit reasons
+	R_XRDrawLaserBeam ();
 
 	R_ShowTris (); //johnfitz
 
@@ -2274,9 +2528,12 @@ void R_WarpScaleView (void)
 	}
 
 	GL_BindFramebufferFunc (GL_FRAMEBUFFER, fbodest);
-	glViewport (r_xr_final_fbo ? 0 : srcx, r_xr_final_fbo ? 0 : srcy,
-		r_xr_final_fbo ? r_xr_final_width : r_refdef.vrect.width,
-		r_xr_final_fbo ? r_xr_final_height : r_refdef.vrect.height);
+	if (GL_NeedsPostprocess ())
+		glViewport (0, 0, r_framebuffer_width, r_framebuffer_height);
+	else
+		glViewport (r_xr_final_fbo ? 0 : srcx, r_xr_final_fbo ? 0 : srcy,
+			r_xr_final_fbo ? r_xr_final_width : r_refdef.vrect.width,
+			r_xr_final_fbo ? r_xr_final_height : r_refdef.vrect.height);
 
 	if (!needwarpscale)
 		return;
@@ -2311,6 +2568,145 @@ void R_WarpScaleView (void)
 R_RenderView
 ================
 */
+extern cvar_t vr_dominant_hand;
+extern cvar_t vr_stabilize_mode;
+extern cvar_t vr_weapon_pitch, vr_weapon_xoffset, vr_weapon_yoffset, vr_weapon_zoffset;
+
+static void R_XRRotateOrientation(const float orientation[4], const float in[3], float out[3])
+{
+	float x = orientation[0], y = orientation[1], z = orientation[2], w = orientation[3];
+	float tx = 2.f * (y * in[2] - z * in[1]);
+	float ty = 2.f * (z * in[0] - x * in[2]);
+	float tz = 2.f * (x * in[1] - y * in[0]);
+	out[0] = in[0] + w * tx + (y * tz - z * ty);
+	out[1] = in[1] + w * ty + (z * tx - x * tz);
+	out[2] = in[2] + w * tz + (x * ty - y * tx);
+}
+
+static void R_XRWeaponAngles(const float forward[3], const float right[3], const float up[3], vec3_t angles)
+{
+	float sp = -forward[2];
+	float sy = forward[1];
+	float cy = forward[0];
+	float sr = -right[2];
+	float cr = up[2];
+	float cp;
+	if (fabsf(cy) > 0.001f)
+		cp = forward[0] / cy;
+	else if (fabsf(sy) > 0.001f)
+		cp = forward[1] / sy;
+	else if (fabsf(sr) > 0.001f)
+		cp = -right[2] / sr;
+	else if (fabsf(cr) > 0.001f)
+		cp = up[2] / cr;
+	else
+		cp = cosf(asinf(sp));
+	angles[PITCH] = RAD2DEG(atan2f(sp, cp));
+	angles[YAW] = RAD2DEG(atan2f(sy, cy));
+	angles[ROLL] = RAD2DEG(atan2f(sr, cr));
+	R_XRNormalizeAngles(&angles[PITCH], &angles[YAW], &angles[ROLL]);
+}
+
+static void R_XRApplyWeaponPose(const iw_xr_frame_snapshot_t *snapshot)
+{
+	const float xr_forward[3] = { 0.f, 0.f, -1.f };
+	const float xr_right[3] = { 1.f, 0.f, 0.f };
+	const float xr_up[3] = { 0.f, 1.f, 0.f };
+	iw_xr_action_snapshot_t actions;
+	iw_xr_hand_snapshot_t *hand;
+	int dominant, offhand;
+	float head_delta_xr[3], position[3], forward_xr[3], dominant_forward_xr[3], forward[3], dominant_forward[3], right_xr[3], right[3], up_xr[3], up[3];
+	qboolean stabilized = false;
+	const float *hand_position, *hand_orientation, *offhand_position;
+
+	r_xr_controller_aim_valid = false;
+	if (!snapshot || !VID_XR_GetActions(&actions))
+		return;
+	dominant = vr_dominant_hand.value != 0 ? 0 : 1;
+	offhand = dominant ^ 1;
+	hand = &actions.hand[dominant];
+	if (!hand->grip_valid && !hand->aim_valid)
+		return;
+	hand_position = hand->grip_valid ? hand->grip_position : hand->aim_position;
+	hand_orientation = hand->grip_valid ? hand->grip_orientation : hand->aim_orientation;
+	offhand_position = actions.hand[offhand].grip_valid ? actions.hand[offhand].grip_position : actions.hand[offhand].aim_position;
+
+	head_delta_xr[0] = hand_position[0] - 0.5f * (snapshot->views[0].position[0] + snapshot->views[1].position[0]);
+	head_delta_xr[1] = hand_position[1] - 0.5f * (snapshot->views[0].position[1] + snapshot->views[1].position[1]);
+	head_delta_xr[2] = hand_position[2] - 0.5f * (snapshot->views[0].position[2] + snapshot->views[1].position[2]);
+	R_XRToQuakePosition(head_delta_xr, position);
+	R_XRRotateYaw(position, r_xr_game_anchor_yaw - r_xr_head_anchor_yaw);
+	VectorMA(r_xr_center_vieworg, vr_world_scale.value, position, cl.viewent.origin);
+	VectorCopy(cl.viewent.origin, r_xr_controller_origin);
+
+	R_XRRotateOrientation(hand_orientation, xr_forward, forward_xr);
+	VectorCopy(forward_xr, dominant_forward_xr);
+	if (vr_stabilize_mode.value != 0 && (actions.hand[offhand].grip_valid || actions.hand[offhand].aim_valid) && (actions.hand[offhand].buttons & 2u))
+	{
+		float dx = offhand_position[0] - hand_position[0];
+		float dy = offhand_position[1] - hand_position[1];
+		float dz = offhand_position[2] - hand_position[2];
+		float distance = sqrtf(dx * dx + dy * dy + dz * dz);
+		float planar = sqrtf(dx * dx + dz * dz);
+		if (distance > 0.05f && distance < 0.50f && planar > 0.05f)
+		{
+			forward_xr[0] = dx / distance;
+			forward_xr[1] = dy / distance;
+			forward_xr[2] = dz / distance;
+			stabilized = true;
+		}
+	}
+	R_XRRotateOrientation(hand_orientation, xr_right, right_xr);
+	R_XRRotateOrientation(hand_orientation, xr_up, up_xr);
+	R_XRToQuakePosition(forward_xr, forward);
+	R_XRToQuakePosition(right_xr, right);
+	R_XRToQuakePosition(up_xr, up);
+	R_XRRotateYaw(forward, r_xr_game_anchor_yaw - r_xr_head_anchor_yaw);
+	R_XRRotateYaw(right, r_xr_game_anchor_yaw - r_xr_head_anchor_yaw);
+	R_XRRotateYaw(up, r_xr_game_anchor_yaw - r_xr_head_anchor_yaw);
+	R_XRToQuakePosition(dominant_forward_xr, dominant_forward);
+	R_XRRotateYaw(dominant_forward, r_xr_game_anchor_yaw - r_xr_head_anchor_yaw);
+	if (stabilized)
+	{
+		vec3_t dominant_angles, stabilized_angles;
+		float planar = sqrtf(forward[0] * forward[0] + forward[1] * forward[1]);
+		R_XRWeaponAngles(dominant_forward, right, up, dominant_angles);
+		stabilized_angles[PITCH] = RAD2DEG(atan2f(-forward[2], planar));
+		stabilized_angles[YAW] = RAD2DEG(atan2f(forward[1], forward[0]));
+		stabilized_angles[ROLL] = dominant_angles[ROLL];
+		AngleVectors(stabilized_angles, forward, right, up);
+	}
+	VectorCopy(forward, r_xr_controller_forward);
+	VectorScale(right, -1.f, r_xr_controller_right);
+	VectorCopy(up, r_xr_controller_up);
+	r_xr_controller_aim_valid = true;
+	{
+		float correction = DEG2RAD(stabilized ? 0.f : vr_weapon_pitch.value);
+		float c = cosf(correction), s = sinf(correction);
+		vec3_t model_right, controller_forward, controller_up, model_forward, model_up;
+		VectorScale(right, -1.f, model_right);
+		VectorCopy(r_xr_controller_forward, controller_forward);
+		VectorCopy(r_xr_controller_up, controller_up);
+		VectorScale(controller_forward, c, r_xr_controller_forward);
+		VectorMA(r_xr_controller_forward, s, controller_up, r_xr_controller_forward);
+		VectorScale(controller_up, c, r_xr_controller_up);
+		VectorMA(r_xr_controller_up, -s, controller_forward, r_xr_controller_up);
+		VectorCopy(forward, model_forward);
+		VectorCopy(up, model_up);
+		VectorScale(model_forward, c, r_xr_viewmodel_forward);
+		VectorMA(r_xr_viewmodel_forward, s, model_up, r_xr_viewmodel_forward);
+		VectorScale(model_up, c, r_xr_viewmodel_up);
+		VectorMA(r_xr_viewmodel_up, -s, model_forward, r_xr_viewmodel_up);
+		VectorCopy(model_right, r_xr_viewmodel_right);
+		VectorMA(cl.viewent.origin, vr_weapon_xoffset.value, r_xr_viewmodel_forward, cl.viewent.origin);
+		VectorMA(cl.viewent.origin, vr_weapon_yoffset.value, r_xr_viewmodel_right, cl.viewent.origin);
+		VectorMA(cl.viewent.origin, vr_weapon_zoffset.value, r_xr_viewmodel_up, cl.viewent.origin);
+	}
+	r_xr_viewmodel_orientation_valid = true;
+	R_XRWeaponAngles(forward, right, up, cl.viewent.angles);
+	cl.viewent.angles[PITCH] = -cl.viewent.angles[PITCH];
+}
+
 void R_SetXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye)
 {
 	const float xr_forward[3] = { 0.f, 0.f, -1.f };
@@ -2326,6 +2722,12 @@ void R_SetXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye)
 	R_XRHeadAngles (&snapshot->views[0], &head_pitch, &head_yaw, &head_roll);
 	if (!r_xr_head_anchor_valid)
 	{
+		if (r_xr_sync_player_yaw)
+		{
+			cl.viewangles[YAW] = head_yaw;
+			r_refdef.viewangles[YAW] = head_yaw;
+			r_xr_sync_player_yaw = false;
+		}
 		r_xr_head_anchor_yaw = head_yaw;
 		r_xr_game_anchor_yaw = r_refdef.viewangles[YAW];
 		r_xr_head_anchor_valid = true;
@@ -2346,6 +2748,8 @@ void R_SetXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye)
 	r_refdef.viewangles[PITCH] = head_pitch;
 	r_refdef.viewangles[ROLL] = head_roll;
 
+	VectorCopy (r_refdef.vieworg, r_xr_center_vieworg);
+
 	dx = snapshot->views[1].position[0] - snapshot->views[0].position[0];
 	dy = snapshot->views[1].position[1] - snapshot->views[0].position[1];
 	dz = snapshot->views[1].position[2] - snapshot->views[0].position[2];
@@ -2357,6 +2761,8 @@ void R_SetXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye)
 	r_xr_asymmetric_projection = true;
 	r_xr_eye_pass = true;
 	r_xr_eye_index = eye;
+	r_xr_viewmodel_orientation_valid = false;
+	R_XRApplyWeaponPose(snapshot);
 }
 void R_ClearXREye (void)
 {
