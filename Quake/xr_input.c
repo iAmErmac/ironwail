@@ -2,22 +2,30 @@
 #include "input.h"
 #include "xr_bridge.h"
 #include "xr_input.h"
+#include "xr_interaction.h"
 
 extern qboolean VID_XR_GetActions(iw_xr_action_snapshot_t *actions);
 extern cvar_t vr_dominant_hand;
 extern cvar_t vr_stabilize_mode;
 extern void R_XRAdjustYaw(float delta);
+extern void VID_XR_Haptic(int hand, float amplitude, float duration_seconds);
 
 cvar_t vr_turn_mode = {"vr_turn_mode", "0", CVAR_ARCHIVE};
 cvar_t vr_turn_angle = {"vr_turn_angle", "30", CVAR_ARCHIVE};
 cvar_t vr_move_deadzone = {"vr_move_deadzone", "0.20", CVAR_ARCHIVE};
 cvar_t vr_turn_deadzone = {"vr_turn_deadzone", "0.20", CVAR_ARCHIVE};
+cvar_t vr_haptic_intensity = {"vr_haptic_intensity", "1", CVAR_ARCHIVE};
 
-static qboolean xr_key_state[14];
-static qboolean xr_owns_input;
+static qboolean xr_key_state[15];
+static qboolean xr_owns_input, xr_main_trigger_previous;
 static qboolean xr_turn_held;
 static float xr_smooth_turn_rate;
 static double xr_menu_repeat_time[4];
+
+static void XR_Input_MenuHaptic(void) {
+    int offhand = vr_dominant_hand.value != 0.f ? 1 : 0;
+    VID_XR_Haptic(offhand, 0.22f, 0.025f);
+}
 
 static void XR_Input_Key(int slot, int key, qboolean down)
 {
@@ -39,11 +47,13 @@ static void XR_Input_MenuKey(int slot, int key, qboolean down)
     if (!xr_key_state[slot])
     {
         XR_Input_Key(slot, key, true);
+        XR_Input_MenuHaptic();
         xr_menu_repeat_time[repeat_slot] = realtime + 0.35;
     }
     else if (realtime >= xr_menu_repeat_time[repeat_slot])
     {
         Key_Event(key, true);
+        XR_Input_MenuHaptic();
         xr_menu_repeat_time[repeat_slot] = realtime + 0.09;
     }
 }
@@ -74,12 +84,14 @@ void XR_Input_Init(void)
     Cvar_RegisterVariable(&vr_turn_angle);
     Cvar_RegisterVariable(&vr_move_deadzone);
     Cvar_RegisterVariable(&vr_turn_deadzone);
+    Cvar_RegisterVariable(&vr_haptic_intensity);
+    XR_Interaction_Init();
 
 }
 
 void XR_Input_Shutdown(void)
 {
-    static const int keys[] = { K_RTRIGGER, K_LTRIGGER, K_ABUTTON, K_BBUTTON, K_XBUTTON, K_YBUTTON, K_RTHUMB, K_LTHUMB, K_ESCAPE, K_LEFTARROW, K_RIGHTARROW, K_DOWNARROW, K_UPARROW, K_LGRIP };
+    static const int keys[] = { K_RTRIGGER, K_LTRIGGER, K_ABUTTON, K_BBUTTON, K_XBUTTON, K_YBUTTON, K_RTHUMB, K_LTHUMB, K_ESCAPE, K_LEFTARROW, K_RIGHTARROW, K_DOWNARROW, K_UPARROW, K_LGRIP, K_RGRIP };
     int i;
     for (i = 0; i < Q_COUNTOF(xr_key_state); ++i)
     {
@@ -88,6 +100,7 @@ void XR_Input_Shutdown(void)
     }
     xr_owns_input = false;
     xr_turn_held = false;
+    XR_Interaction_Shutdown();
 }
 
 void XR_Input_Update(void)
@@ -102,9 +115,27 @@ void XR_Input_Update(void)
         XR_Input_Shutdown();
         return;
     }
+    XR_Input_Key(14, K_RGRIP, (actions.hand[1].grip > 0.5f || (actions.hand[1].buttons & 2u)) != 0);
+    XR_Interaction_Update(&actions);
+    if ((actions.hand[dominant].buttons & 1u) && !xr_main_trigger_previous) VID_XR_Haptic(dominant, 0.30f, 0.025f);
+    xr_main_trigger_previous = (actions.hand[dominant].buttons & 1u) != 0;
+    if (XR_Interaction_ConsumesGameplay()) {
+        XR_Input_Key(0, K_RTRIGGER, false);
+        XR_Input_Key(1, K_LTRIGGER, false);
+        XR_Input_Key(2, K_ABUTTON, false);
+        XR_Input_Key(3, K_BBUTTON, false);
+        XR_Input_Key(4, K_XBUTTON, false);
+        XR_Input_Key(5, K_YBUTTON, false);
+        XR_Input_Key(6, K_RTHUMB, false);
+        XR_Input_Key(7, K_LTHUMB, false);
+        XR_Input_Key(8, K_ESCAPE, false);
+        xr_turn_held = false;
+        return;
+    }
     XR_Input_Key(0, K_RTRIGGER, (actions.hand[dominant].buttons & 1u) != 0);
     XR_Input_Key(1, K_LTRIGGER, (actions.hand[offhand].buttons & 1u) != 0);
-    XR_Input_Key(13, K_LGRIP, !vr_stabilize_mode.value && (actions.hand[offhand].buttons & 2u) != 0);
+    XR_Input_Key(13, K_LGRIP, (!vr_stabilize_mode.value || (actions.hand[dominant].grip <= 0.5f && (actions.hand[dominant].buttons & 2u) == 0)) && (actions.hand[offhand].grip > 0.5f || (actions.hand[offhand].buttons & 2u)));
+
     {
         qboolean menu_toggle = (actions.hand[0].buttons & 32u) != 0 || (actions.hand[1].buttons & 32u) != 0 ||
             ((actions.hand[dominant].buttons & (2u | 16u)) == (2u | 16u));

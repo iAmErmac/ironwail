@@ -85,6 +85,7 @@ static const char default_cfg[] =
 "bind BBUTTON +jump\n"
 "bind ABUTTON +movedown\n"
 "bind LGRIP +speed\n"
+"bind RGRIP +vr_weaponwheel\n"
 "bind YBUTTON +showscores\n"
 "bind XBUTTON messagemode\n"
 

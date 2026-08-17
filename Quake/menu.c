@@ -101,7 +101,7 @@ extern cvar_t vr_laser_sight, vr_laser_beam, vr_laser_color, vr_laser_beam_width
 extern cvar_t vr_turn_mode;
 extern cvar_t vr_turn_angle;
 extern cvar_t vr_dominant_hand, vr_stabilize_mode;
-extern cvar_t vr_move_deadzone, vr_turn_deadzone;
+extern cvar_t vr_move_deadzone, vr_turn_deadzone, vr_haptic_intensity;
 
 extern char crosshair_char;
 
@@ -3144,6 +3144,7 @@ void M_Menu_Gamepad_f (void)
 		item (VR_OPT_TURN_ANGLE, "Turn Angle")				\
 		item (VR_OPT_MOVE_DEADZONE, "Move Deadzone Adjust")			\
 		item (VR_OPT_TURN_DEADZONE, "Turn Deadzone Adjust")			\
+		item (VR_OPT_HAPTIC, "Haptic Intensity")				\
 		item (SPACER, "")									\
 		item (VR_OPT_RESET, "Reset Defaults")									\
 	end_menu ()										\
@@ -3636,6 +3637,7 @@ static void M_VR_ResetOptions (void)
 	Cvar_SetValueQuick (&vr_stabilize_mode, 1.f);
 	Cvar_SetValueQuick (&vr_move_deadzone, 0.20f);
 	Cvar_SetValueQuick (&vr_turn_deadzone, 0.20f);
+		Cvar_SetValueQuick (&vr_haptic_intensity, 1.f);
 	Cvar_SetValueQuick (&vr_turn_mode, 0.f);
 	Cvar_SetValueQuick (&vr_turn_angle, 30.f);
 }
@@ -3763,6 +3765,9 @@ void M_AdjustSliders (int dir)
 		break;
 	case VR_OPT_TURN_DEADZONE:
 		Cvar_SetValueQuick (&vr_turn_deadzone, CLAMP (0.20f, vr_turn_deadzone.value + dir * 0.01f, 0.95f));
+		break;
+	case VR_OPT_HAPTIC:
+		Cvar_SetValueQuick (&vr_haptic_intensity, CLAMP (0.f, vr_haptic_intensity.value + dir * 0.05f, 1.f));
 		break;
 	case VR_SCREEN_OPT_SHAPE:
 		Cvar_SetValueQuick (&vr_curved_screen, !vr_curved_screen.value);
@@ -4247,6 +4252,9 @@ qboolean M_SetSliderValue (int option, float f)
 	case VR_OPT_TURN_DEADZONE:
 		Cvar_SetValueQuick (&vr_turn_deadzone, 0.20f + f * 0.75f);
 		return true;
+	case VR_OPT_HAPTIC:
+		Cvar_SetValueQuick (&vr_haptic_intensity, f);
+		return true;
 	case VR_SCREEN_OPT_SCALE:
 		Cvar_SetValueQuick (&vr_screen_scale, 0.5f + f * 4.5f);
 		return true;
@@ -4522,6 +4530,9 @@ static void M_Options_DrawItem (int y, int item)
 		break;
 	case VR_OPT_TURN_DEADZONE:
 		M_DrawSlider (x, y, (vr_turn_deadzone.value - 0.20f) / 0.75f, va ("%.2f", vr_turn_deadzone.value));
+		break;
+	case VR_OPT_HAPTIC:
+		M_DrawSlider (x, y, vr_haptic_intensity.value, va ("%.2f", vr_haptic_intensity.value));
 		break;
 	case VR_SCREEN_OPT_SHAPE:
 		M_Print (x, y, vr_curved_screen.value ? "Curved" : "Flat");
@@ -5316,9 +5327,7 @@ typedef enum
 	MBF_GAMEPAD_ONLY		= 1 << 1,
 	MBF_DEVICE_MASK			= MBF_KBM_ONLY | MBF_GAMEPAD_ONLY,
 
-	// QSS/FTE compat: we merge the entries in bindlist.lst files with the engine-defined ones,
-	// whereas QSS/FTE complete replace theirs. To avoid having bind list files that break
-	// QSS/FTE, we mark certain keybinds as required and ignore files without them.
+	// QSS/FTE compat: require core entries when merging bindlist.lst files.
 	MBF_REQUIRED			= 1 << 2,
 } menubindflags_t;
 
@@ -5361,18 +5370,18 @@ static const menukeybind_t default_keybinds[] =
 	{"+attack",			"Attack",				0},
 	{"impulse 10",		"Next weapon",			0},
 	{"impulse 12",		"Previous weapon",		0},
-	{"impulse 1",		"Axe",					0},
-	{"impulse 2",		"Shotgun",				0},
-	{"impulse 3",		"Super Shotgun",		0},
-	{"impulse 4",		"Nailgun",				0},
-	{"impulse 5",		"Super Nailgun",		0},
-	{"impulse 6",		"Grenade Launcher",		0},
-	{"impulse 7",		"Rocket Launcher",		0},
-	{"impulse 8",		"Thunderbolt",			0},
+	{"impulse 1",			"Axe",					0},
+	{"impulse 2",			"Shotgun",				0},
+	{"impulse 3",			"Super Shotgun",		0},
+	{"impulse 4",			"Nailgun",				0},
+	{"impulse 5",			"Super Nailgun",		0},
+	{"impulse 6",			"Grenade Launcher",		0},
+	{"impulse 7",			"Rocket Launcher",			0},
+	{"impulse 8",			"Thunderbolt",			0},
 	{"impulse 225",		"Laser Cannon",			0},
 	{"impulse 226",		"Mjolnir",				0},
 	{"",				"",						0},
-	/* Miscellaneous entries **************************************************/
+	/* Miscelaneous entries ***************************************************/
 	{"*",				"",						0},
 	{"",				"",						0},
 	{QUICKSAVE,			"Quick save",			0},
@@ -5383,9 +5392,9 @@ static const menukeybind_t default_keybinds[] =
 	{"menu_options",	"Options menu",			0},
 	{"screenshot",		"Screenshot",			0},
 	{"+showscores",		"Show score",			0},
+	{"+vr_weaponwheel", "Weapon wheel", MBF_GAMEPAD_ONLY },
 	{"messagemode",		"Text chat",			MBF_REQUIRED | MBF_KBM_ONLY},
-	// only here to enforce QSS/FTE bindlist compat
-	// (filtered out from UI due to unsupported command/alias)
+	// Keep this marker so QSS/FTE bindlist files remain compatible.
 	{"+voip",			"Voice chat",			MBF_REQUIRED},
 };
 
@@ -5427,7 +5436,7 @@ static void M_Keys_AddCustomEntry (const char *cmd, const char *desc)
 		{
 			if (strcmp (deprecated[i], cmd) == 0)
 			{
-				Con_DPrintf ("Skipping deprecated key binding: \"%s\" \"%s\"\n", cmd, desc);
+				Con_DPrintf ("Skipping deprecated key binding: \"%s\" = \"%s\"\n", desc, cmd);
 				return;
 			}
 		}
@@ -5592,9 +5601,8 @@ static void M_Keys_LoadBindList (void)
 			Cmd_TokenizeString (line);
 			cmd = Cmd_Argv (0);
 			desc = Cmd_Argv (1);
-			/*tip = Cmd_Argv(2); unused in quakespasm*/
 
-			// skip blank/comment-only lines, separators must be explicitly marked with "-"
+			// Blank lines are not separators; use '-' for an intentional separator.
 			if (!cmd[0])
 				continue;
 
@@ -5603,7 +5611,7 @@ static void M_Keys_LoadBindList (void)
 					if ((default_keybinds[i].flags & MBF_REQUIRED) != 0 && strcmp (default_keybinds[i].command, cmd) == 0)
 						ClearBit (missing_mask, i);
 
-			M_Keys_AddCustomEntry( cmd, desc );
+			M_Keys_AddCustomEntry (cmd, desc);
 		}
 
 		free (file);

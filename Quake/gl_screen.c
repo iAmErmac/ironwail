@@ -25,6 +25,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "steam.h"
+#include "xr_interaction.h"
 #include <time.h>
 
 /*
@@ -2166,6 +2167,7 @@ GL_BeginGroup ("2D");
 		M_Draw ();
 		SCR_DrawFPS (); //johnfitz
 		SCR_DrawSaving ();
+		XR_Interaction_Draw ();
 	}
 
 	Draw_Flush ();

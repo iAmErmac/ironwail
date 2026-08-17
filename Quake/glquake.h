@@ -768,6 +768,8 @@ void R_ApplyXRProjectileVisualOffset (const entity_t *e, vec3_t origin);
 void R_SetXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye);
 void R_ClearXREye (void);
 qboolean VID_XR_GetStereoFrame (const iw_xr_frame_snapshot_t **snapshot);
+qboolean VID_XR_GetVirtualScreen(float position[3], float orientation[4], float *width, float *height);
+void VID_XR_SetVirtualPointer(const float start[3], const float hit[3], qboolean active);
 qboolean VID_XR_BeginEye (unsigned eye, unsigned *fbo, int *width, int *height);
 void VID_XR_EndEye (unsigned eye);
 qboolean VID_XR_BeginHUD (unsigned *fbo, int *width, int *height);

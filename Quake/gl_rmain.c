@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "xr_bridge.h"
+#include "xr_interaction.h"
 #if defined(ANDROID_GLES3)
 #include "gl_gles_ubo.h"
 #include "gl_gles_vao.h"
@@ -99,8 +100,8 @@ static qboolean r_xr_viewmodel_orientation_valid;
 static vec3_t r_xr_viewmodel_forward, r_xr_viewmodel_right, r_xr_viewmodel_up;
 static qboolean r_xr_controller_aim_valid;
 static vec3_t r_xr_controller_forward, r_xr_controller_right, r_xr_controller_up, r_xr_controller_origin;
-static qboolean r_xr_laser_valid;
-static vec3_t r_xr_laser_start, r_xr_laser_end;
+static qboolean r_xr_laser_valid, r_xr_pointer_valid;
+static vec3_t r_xr_laser_start, r_xr_laser_end, r_xr_pointer_start, r_xr_pointer_end;
 qboolean R_GetXRViewmodelMatrix (entity_t *e, float matrix[16], const vec3_t origin, unsigned char scale)
 {
 	vec3_t forward, up;
@@ -1478,8 +1479,8 @@ void R_SetupView (void)
 	R_SetFrustum ();
 
 	R_MarkSurfaces (); //johnfitz -- create texture chains from PVS
-
-	R_SortEntities ();
+    XR_Interaction_AddWorldEntities ();
+    R_SortEntities ();
 
 	R_PushDlights ();
 
@@ -1572,7 +1573,7 @@ R_IsViewModelVisible
 static qboolean R_IsViewModelVisible (void)
 {
 	entity_t *e = &cl.viewent;
-	if (!r_drawviewmodel.value || !r_drawentities.value || chase_active.value || scr_viewsize.value >= 130)
+	if (XR_Interaction_WheelActive () || !r_drawviewmodel.value || !r_drawentities.value || chase_active.value || scr_viewsize.value >= 130)
 		return false;
 
 	if (cl.items & IT_INVISIBILITY || cl.stats[STAT_HEALTH] <= 0)
@@ -1698,6 +1699,15 @@ static void R_AddDebugGeometry (const debugvert_t verts[], int numverts, const u
 	numdebugverts += numverts;
 }
 
+static void R_XRDrawPointer(void) {
+    vec3_t a, b, right, up; int i; const uint32_t color = 0xff00ffff;
+    if (!r_xr_pointer_valid) return;
+    R_EmitLine(r_xr_pointer_start, r_xr_pointer_end, color);
+    VectorScale(vright, 5.f, right); VectorScale(vup, 5.f, up);
+    for (i = 0; i < 16; ++i) { float t0=(float)i*2.f*(float)M_PI/16.f, t1=(float)(i+1)*2.f*(float)M_PI/16.f; VectorScale(right, cosf(t0), a); VectorMA(a, sinf(t0), up, a); VectorAdd(a, r_xr_pointer_end, a); VectorScale(right, cosf(t1), b); VectorMA(b, sinf(t1), up, b); VectorAdd(b, r_xr_pointer_end, b); R_EmitLine(a,b,color); }
+    VectorMA(r_xr_pointer_end, -1.5f, vright, a); VectorMA(r_xr_pointer_end, 1.5f, vright, b); R_EmitLine(a,b,color);
+    VectorMA(r_xr_pointer_end, -1.5f, vup, a); VectorMA(r_xr_pointer_end, 1.5f, vup, b); R_EmitLine(a,b,color);
+}
 static void R_XRDrawLaserBeam (void)
 {
 	debugvert_t verts[16];
@@ -2440,8 +2450,7 @@ void R_RenderScene (void)
 	R_XRPrepareLaser ();
 	R_XRUpdateLaserDot ();
 	R_SetupScene (); //johnfitz -- this does everything that should be done once per call to RenderScene
-
-	R_Clear ();
+    R_Clear ();
 
 	Fog_EnableGFog (); //johnfitz
 
@@ -2449,6 +2458,7 @@ void R_RenderScene (void)
 		S_ExtraUpdate (); // don't let sound get messed up if going slow
 
 	R_DrawEntitiesOnList (false); //johnfitz -- false means this is the pass for nonalpha entities
+    XR_Interaction_DrawWorldModels ();
 
 	R_DrawParticles (false);
 
@@ -2468,6 +2478,9 @@ void R_RenderScene (void)
 
 	R_DrawViewModel (); //johnfitz -- moved here from R_RenderView -- il8r -- moved for oit reasons
 	R_XRDrawLaserBeam ();
+
+	R_FlushDebugGeometry ();
+
 
 	R_ShowTris (); //johnfitz
 
@@ -2638,10 +2651,19 @@ static void R_XRApplyWeaponPose(const iw_xr_frame_snapshot_t *snapshot)
 	R_XRRotateYaw(position, r_xr_game_anchor_yaw - r_xr_head_anchor_yaw);
 	VectorMA(r_xr_center_vieworg, vr_world_scale.value, position, cl.viewent.origin);
 	VectorCopy(cl.viewent.origin, r_xr_controller_origin);
+    r_xr_pointer_valid = false;
+    { vec3_t pointer_start_xr, pointer_hit_xr, pointer_delta;
+      if (XR_Interaction_GetVirtualPointer(pointer_start_xr, pointer_hit_xr)) {
+        pointer_delta[0] = pointer_hit_xr[0] - 0.5f * (snapshot->views[0].position[0] + snapshot->views[1].position[0]);
+        pointer_delta[1] = pointer_hit_xr[1] - 0.5f * (snapshot->views[0].position[1] + snapshot->views[1].position[1]);
+        pointer_delta[2] = pointer_hit_xr[2] - 0.5f * (snapshot->views[0].position[2] + snapshot->views[1].position[2]);
+        R_XRToQuakePosition(pointer_delta, pointer_delta); R_XRRotateYaw(pointer_delta, r_xr_game_anchor_yaw - r_xr_head_anchor_yaw);
+        VectorMA(r_xr_center_vieworg, vr_world_scale.value, pointer_delta, r_xr_pointer_end); pointer_delta[0] = pointer_start_xr[0] - 0.5f * (snapshot->views[0].position[0] + snapshot->views[1].position[0]); pointer_delta[1] = pointer_start_xr[1] - 0.5f * (snapshot->views[0].position[1] + snapshot->views[1].position[1]); pointer_delta[2] = pointer_start_xr[2] - 0.5f * (snapshot->views[0].position[2] + snapshot->views[1].position[2]); R_XRToQuakePosition(pointer_delta, pointer_delta); R_XRRotateYaw(pointer_delta, r_xr_game_anchor_yaw - r_xr_head_anchor_yaw); VectorMA(r_xr_center_vieworg, vr_world_scale.value, pointer_delta, r_xr_pointer_start); r_xr_pointer_valid = true;
+      } }
 
 	R_XRRotateOrientation(hand_orientation, xr_forward, forward_xr);
 	VectorCopy(forward_xr, dominant_forward_xr);
-	if (vr_stabilize_mode.value != 0 && (actions.hand[offhand].grip_valid || actions.hand[offhand].aim_valid) && (actions.hand[offhand].buttons & 2u))
+	if (vr_stabilize_mode.value != 0 && (actions.hand[offhand].grip_valid || actions.hand[offhand].aim_valid) && (actions.hand[dominant].grip > 0.5f || (actions.hand[dominant].buttons & 2u)) && (actions.hand[offhand].grip > 0.5f || (actions.hand[offhand].buttons & 2u)))
 	{
 		float dx = offhand_position[0] - hand_position[0];
 		float dy = offhand_position[1] - hand_position[1];
@@ -2798,7 +2820,7 @@ void R_RenderView (void)
 		glFinish ();
 
 	R_SetupView (); //johnfitz -- this does everything that should be done once per frame
-	R_UploadFrameData ();
+    R_UploadFrameData ();
 	R_RenderScene ();
 	R_WarpScaleView ();
 

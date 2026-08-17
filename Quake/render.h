@@ -90,6 +90,7 @@ typedef struct entity_s
 
 	float					traildelay;		// time left until next particle trail update
 	vec3_t					trailorg;		// previous particle trail point
+	float					wheel_brightness;
 } entity_t;
 
 // !!! if this is changed, it must be changed in asm_draw.h too !!!

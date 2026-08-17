@@ -62,6 +62,10 @@ XrSwapchain swapchain;
     float hud_distance;
     float hud_yoffset;
     qboolean curve_submission_logged;    iw_xr_gl_target_t eyes[2];
+    iw_xr_gl_target_t pointer_target;
+    qboolean pointer_active;
+    float pointer_start[3];
+    float pointer_hit[3];
     qboolean stereo_submission;
     qboolean views_valid;
     iw_xr_frame_snapshot_t frame_snapshot;
@@ -80,6 +84,7 @@ XrSwapchain swapchain;
     XrAction primary_action;
     XrAction secondary_action;
     XrAction menu_action;
+    XrAction haptic_action;
     XrSpace aim_spaces[2];
     XrSpace grip_spaces[2];
 
@@ -125,6 +130,8 @@ XrSwapchain swapchain;
     PFN_xrGetActionStateVector2f get_action_state_vector2f;
     PFN_xrCreateActionSpace create_action_space;
     PFN_xrLocateSpace locate_space;
+    PFN_xrApplyHapticFeedback apply_haptic_feedback;
+    PFN_xrStopHapticFeedback stop_haptic_feedback;
 };
 
 static void xr_log(iw_xr_win_t *xr, const char *message)
@@ -202,6 +209,46 @@ static qboolean xr_normalize3 (float v[3]) { float l=sqrtf(xr_dot3(v,v)); if(l<0
     xr_cross3 (qv, v, t); t[0] *= 2.0f; t[1] *= 2.0f; t[2] *= 2.0f;
     xr_cross3 (qv, t, c);
     out[0] = v[0] + q->w * t[0] + c[0]; out[1] = v[1] + q->w * t[1] + c[1]; out[2] = v[2] + q->w * t[2] + c[2];
+}
+static XrQuaternionf xr_quaternion_from_basis(const float x[3], const float y[3], const float z[3])
+{
+    XrQuaternionf q;
+    float trace = x[0] + y[1] + z[2];
+    if (trace > 0.f) {
+        float s = sqrtf(trace + 1.f) * 2.f;
+        q.w = 0.25f * s; q.x = (y[2] - z[1]) / s; q.y = (z[0] - x[2]) / s; q.z = (x[1] - y[0]) / s;
+    } else if (x[0] > y[1] && x[0] > z[2]) {
+        float s = sqrtf(1.f + x[0] - y[1] - z[2]) * 2.f;
+        q.w = (y[2] - z[1]) / s; q.x = 0.25f * s; q.y = (y[0] + x[1]) / s; q.z = (z[0] + x[2]) / s;
+    } else if (y[1] > z[2]) {
+        float s = sqrtf(1.f + y[1] - x[0] - z[2]) * 2.f;
+        q.w = (z[0] - x[2]) / s; q.x = (y[0] + x[1]) / s; q.y = 0.25f * s; q.z = (z[1] + y[2]) / s;
+    } else {
+        float s = sqrtf(1.f + z[2] - x[0] - y[1]) * 2.f;
+        q.w = (x[1] - y[0]) / s; q.x = (z[0] + x[2]) / s; q.y = (z[1] + y[2]) / s; q.z = 0.25f * s;
+    }
+    return q;
+}
+
+static XrPosef xr_pointer_pose(const float start[3], const float hit[3], const float eye[3])
+{
+    XrPosef pose;
+    float x[3], y[3], z[3], view[3], length;
+    memset(&pose, 0, sizeof(pose));
+    pose.position.x = (start[0] + hit[0]) * 0.5f;
+    pose.position.y = (start[1] + hit[1]) * 0.5f;
+    pose.position.z = (start[2] + hit[2]) * 0.5f;
+    x[0] = hit[0] - start[0]; x[1] = hit[1] - start[1]; x[2] = hit[2] - start[2];
+    length = sqrtf(xr_dot3(x, x));
+    if (length < 0.01f) { pose.orientation.w = 1.f; return pose; }
+    x[0] /= length; x[1] /= length; x[2] /= length;
+    view[0] = eye[0] - pose.position.x; view[1] = eye[1] - pose.position.y; view[2] = eye[2] - pose.position.z;
+    if (!xr_normalize3(view)) { view[0] = 0.f; view[1] = 0.f; view[2] = -1.f; }
+    xr_cross3(view, x, y);
+    if (!xr_normalize3(y)) { y[0] = 0.f; y[1] = 1.f; y[2] = 0.f; xr_cross3(y, x, y); xr_normalize3(y); }
+    xr_cross3(x, y, z); xr_normalize3(z);
+    pose.orientation = xr_quaternion_from_basis(x, y, z);
+    return pose;
 }
 static float xr_yaw_delta (float a, float b)
 {
@@ -429,6 +476,8 @@ static qboolean xr_load_instance(iw_xr_win_t *xr, const char **reason)
     XR_LOAD_INSTANCE(xrGetActionStateVector2f, get_action_state_vector2f);
     XR_LOAD_INSTANCE(xrCreateActionSpace, create_action_space);
     XR_LOAD_INSTANCE(xrLocateSpace, locate_space);
+    XR_LOAD_INSTANCE(xrApplyHapticFeedback, apply_haptic_feedback);
+    XR_LOAD_INSTANCE(xrStopHapticFeedback, stop_haptic_feedback);
     proc = NULL;
     if (xr->get_instance_proc_addr(xr->instance, "xrGetOpenGLGraphicsRequirementsKHR", &proc) != XR_SUCCESS || !proc)
     {
@@ -491,7 +540,7 @@ static void xr_suggest_profile(iw_xr_win_t *xr, const char *profile, XrActionSug
 
 static void xr_suggest_touch_bindings(iw_xr_win_t *xr)
 {
-    XrActionSuggestedBinding bindings[18];
+    XrActionSuggestedBinding bindings[20];
     uint32_t count = 0;
     xr_add_binding(xr, bindings, &count, xr->aim_action, "/user/hand/left/input/aim/pose");
     xr_add_binding(xr, bindings, &count, xr->aim_action, "/user/hand/right/input/aim/pose");
@@ -510,12 +559,14 @@ static void xr_suggest_touch_bindings(iw_xr_win_t *xr)
     xr_add_binding(xr, bindings, &count, xr->secondary_action, "/user/hand/left/input/y/click");
     xr_add_binding(xr, bindings, &count, xr->secondary_action, "/user/hand/right/input/b/click");
     xr_add_binding(xr, bindings, &count, xr->menu_action, "/user/hand/left/input/menu/click");
+    xr_add_binding(xr, bindings, &count, xr->haptic_action, "/user/hand/left/output/haptic");
+    xr_add_binding(xr, bindings, &count, xr->haptic_action, "/user/hand/right/output/haptic");
     xr_suggest_profile(xr, "/interaction_profiles/oculus/touch_controller", bindings, count);
 }
 
 static void xr_suggest_index_bindings(iw_xr_win_t *xr)
 {
-    XrActionSuggestedBinding bindings[18];
+    XrActionSuggestedBinding bindings[20];
     uint32_t count = 0;
     xr_add_binding(xr, bindings, &count, xr->aim_action, "/user/hand/left/input/aim/pose");
     xr_add_binding(xr, bindings, &count, xr->aim_action, "/user/hand/right/input/aim/pose");
@@ -533,12 +584,14 @@ static void xr_suggest_index_bindings(iw_xr_win_t *xr)
     xr_add_binding(xr, bindings, &count, xr->primary_action, "/user/hand/right/input/a/click");
     xr_add_binding(xr, bindings, &count, xr->secondary_action, "/user/hand/left/input/b/click");
     xr_add_binding(xr, bindings, &count, xr->secondary_action, "/user/hand/right/input/b/click");
+    xr_add_binding(xr, bindings, &count, xr->haptic_action, "/user/hand/left/output/haptic");
+    xr_add_binding(xr, bindings, &count, xr->haptic_action, "/user/hand/right/output/haptic");
     xr_suggest_profile(xr, "/interaction_profiles/valve/index_controller", bindings, count);
 }
 
 static void xr_suggest_vive_bindings(iw_xr_win_t *xr)
 {
-    XrActionSuggestedBinding bindings[16];
+    XrActionSuggestedBinding bindings[20];
     uint32_t count = 0;
     xr_add_binding(xr, bindings, &count, xr->aim_action, "/user/hand/left/input/aim/pose");
     xr_add_binding(xr, bindings, &count, xr->aim_action, "/user/hand/right/input/aim/pose");
@@ -555,8 +608,10 @@ static void xr_suggest_vive_bindings(iw_xr_win_t *xr)
     xr_add_binding(xr, bindings, &count, xr->stick_click_action, "/user/hand/left/input/trackpad/click");
     xr_add_binding(xr, bindings, &count, xr->stick_click_action, "/user/hand/right/input/trackpad/click");
     xr_add_binding(xr, bindings, &count, xr->menu_action, "/user/hand/left/input/menu/click");
+    xr_add_binding(xr, bindings, &count, xr->haptic_action, "/user/hand/left/output/haptic");
+    xr_add_binding(xr, bindings, &count, xr->haptic_action, "/user/hand/right/output/haptic");
     xr_add_binding(xr, bindings, &count, xr->menu_action, "/user/hand/right/input/menu/click");
-    xr_suggest_profile(xr, "/interaction_profiles/htc/vive_controller", bindings, count);
+   xr_suggest_profile(xr, "/interaction_profiles/htc/vive_controller", bindings, count);
 }
 
 static qboolean xr_create_actions(iw_xr_win_t *xr)
@@ -586,7 +641,8 @@ static qboolean xr_create_actions(iw_xr_win_t *xr)
         !xr_create_action(xr, XR_ACTION_TYPE_BOOLEAN_INPUT, "thumbstick_click", "Thumbstick Click", &xr->stick_click_action) ||
         !xr_create_action(xr, XR_ACTION_TYPE_BOOLEAN_INPUT, "primary", "Primary Button", &xr->primary_action) ||
         !xr_create_action(xr, XR_ACTION_TYPE_BOOLEAN_INPUT, "secondary", "Secondary Button", &xr->secondary_action) ||
-        !xr_create_action(xr, XR_ACTION_TYPE_BOOLEAN_INPUT, "menu", "Menu Button", &xr->menu_action))
+        !xr_create_action(xr, XR_ACTION_TYPE_BOOLEAN_INPUT, "menu", "Menu Button", &xr->menu_action) ||
+        !xr_create_action(xr, XR_ACTION_TYPE_VIBRATION_OUTPUT, "haptic", "Haptic", &xr->haptic_action))
         return false;
     xr_suggest_touch_bindings(xr);
     xr_suggest_index_bindings(xr);
@@ -635,6 +691,7 @@ static void xr_destroy_resources(iw_xr_win_t *xr)
     xr_destroy_actions(xr);
     xr_destroy_target(xr, &xr->eyes[0]);
     xr_destroy_target(xr, &xr->eyes[1]);
+    xr_destroy_target(xr, &xr->pointer_target);
     if (xr->fbos)
     {
         for (i = 0; i < xr->image_count; ++i)
@@ -949,9 +1006,12 @@ xr->fbos = (GLuint *)calloc(xr->image_count, sizeof(*xr->fbos));
             xr_log(xr, "OpenXR stereo target creation failed; flat screen remains available");
             xr_destroy_target(xr, &xr->eyes[0]);
             xr_destroy_target(xr, &xr->eyes[1]);
+    xr_destroy_target(xr, &xr->pointer_target);
             break;
         }
     }
+    if (!xr_create_target(xr, &xr->pointer_target, swap_info.format, 256, 64, 1, NULL))
+        xr_log(xr, "OpenXR pointer layer unavailable");
     if (xr->eyes[0].swapchain != XR_NULL_HANDLE && xr->eyes[1].swapchain != XR_NULL_HANDLE)
     {
         char message[192];
@@ -1227,6 +1287,44 @@ qboolean IW_XRWin_GetActions(const iw_xr_win_t *xr, iw_xr_action_snapshot_t *act
     *actions = xr->actions;
     return actions->active;
 }
+qboolean IW_XRWin_GetVirtualScreen(const iw_xr_win_t *xr, float position[3], float orientation[4], float *width, float *height) {
+    if (!xr || !xr->screen_follow_valid) return false;
+    if (position) { position[0] = xr->screen_pose.position.x; position[1] = xr->screen_pose.position.y; position[2] = xr->screen_pose.position.z; }
+    if (orientation) { orientation[0] = xr->screen_pose.orientation.x; orientation[1] = xr->screen_pose.orientation.y; orientation[2] = xr->screen_pose.orientation.z; orientation[3] = xr->screen_pose.orientation.w; }
+    if (width) *width = 3.6f * xr->screen_scale;
+    if (height) *height = 2.7f * xr->screen_scale;
+    return true;
+}
+void IW_XRWin_SetVirtualPointer(iw_xr_win_t *xr, const float start[3], const float hit[3], qboolean active)
+{
+    if (!xr) return;
+    xr->pointer_active = active && start && hit;
+    if (xr->pointer_active) {
+        memcpy(xr->pointer_start, start, sizeof(xr->pointer_start));
+        memcpy(xr->pointer_hit, hit, sizeof(xr->pointer_hit));
+    }
+}
+void IW_XRWin_Haptic(iw_xr_win_t *xr, int hand, float amplitude, float duration_seconds)
+{
+    XrHapticActionInfo info;
+    XrHapticVibration vibration;
+    if (!xr || hand < 0 || hand > 1 || xr->session == XR_NULL_HANDLE || xr->haptic_action == XR_NULL_HANDLE || !xr->apply_haptic_feedback)
+        return;
+    memset(&info, 0, sizeof(info));
+    memset(&vibration, 0, sizeof(vibration));
+        info.type = XR_TYPE_HAPTIC_ACTION_INFO;
+    info.action = xr->haptic_action;
+    info.subactionPath = xr->hand_paths[hand];
+    if (amplitude <= 0.f || duration_seconds <= 0.f) {
+        if (xr->stop_haptic_feedback) xr->stop_haptic_feedback(xr->session, &info);
+        return;
+    }
+    vibration.type = XR_TYPE_HAPTIC_VIBRATION;
+    vibration.amplitude = CLAMP(0.f, amplitude, 1.f);
+    vibration.frequency = XR_FREQUENCY_UNSPECIFIED;
+    vibration.duration = (XrDuration)(CLAMP(0.001f, duration_seconds, 2.f) * 1000000000.0f);
+    xr->apply_haptic_feedback(xr->session, &info, (const XrHapticBaseHeader *)&vibration);
+}
 qboolean IW_XRWin_HasStereoTargets(const iw_xr_win_t *xr)
 {
     return xr && xr->eyes[0].swapchain != XR_NULL_HANDLE && xr->eyes[1].swapchain != XR_NULL_HANDLE;
@@ -1353,9 +1451,11 @@ iw_xr_result_t IW_XRWin_EndFrame(iw_xr_win_t *xr, qboolean submit)
     XrSwapchainImageReleaseInfo release_info;
     XrCompositionLayerQuad quad;
     XrCompositionLayerCylinderKHR cylinder;
-    XrCompositionLayerBaseHeader *layers[1];
+    XrCompositionLayerBaseHeader *layers[2];
+    XrCompositionLayerQuad pointer;
     XrFrameEndInfo end_info;
     qboolean submit_image;
+    uint32_t layer_count = 1;
     if (!xr || !xr->frame_running)
         return IW_XR_RESULT_INVALID;    if (xr->stereo_submission)
     {
@@ -1483,11 +1583,30 @@ iw_xr_result_t IW_XRWin_EndFrame(iw_xr_win_t *xr, qboolean submit)
         }
         layers[0] = (XrCompositionLayerBaseHeader *)&quad;
     }
-    memset(&end_info, 0, sizeof(end_info));
+    if (xr->pointer_active && xr_acquire_target(xr, &xr->pointer_target))
+    {
+        GL_BindFramebufferFunc(GL_FRAMEBUFFER, xr->pointer_target.fbos[xr->pointer_target.image_index]);
+        glViewport(0, 0, xr->pointer_target.width, xr->pointer_target.height);
+        glClearColor(0.f, 0.f, 0.f, 0.f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glEnable(GL_SCISSOR_TEST); glScissor(0, 16, 244, 32); glClearColor(0.1f, 1.f, 0.8f, 1.f); glClear(GL_COLOR_BUFFER_BIT); glScissor(244, 20, 6, 24); glClearColor(1.f, 1.f, 1.f, 1.f); glClear(GL_COLOR_BUFFER_BIT); glScissor(240, 24, 14, 16); glClear(GL_COLOR_BUFFER_BIT); glScissor(238, 28, 18, 8); glClear(GL_COLOR_BUFFER_BIT); glDisable(GL_SCISSOR_TEST);
+        xr_release_target(xr, &xr->pointer_target);
+        memset(&pointer, 0, sizeof(pointer));
+        pointer.type = XR_TYPE_COMPOSITION_LAYER_QUAD;
+        pointer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        pointer.space = xr->space;
+        pointer.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        pointer.subImage.swapchain = xr->pointer_target.swapchain;
+        pointer.subImage.imageRect.extent.width = xr->pointer_target.width;
+        pointer.subImage.imageRect.extent.height = xr->pointer_target.height;
+        pointer.pose = xr_pointer_pose(xr->pointer_start, xr->pointer_hit, xr->frame_snapshot.views[0].position);
+        pointer.size.width = sqrtf((xr->pointer_hit[0] - xr->pointer_start[0]) * (xr->pointer_hit[0] - xr->pointer_start[0]) + (xr->pointer_hit[1] - xr->pointer_start[1]) * (xr->pointer_hit[1] - xr->pointer_start[1]) + (xr->pointer_hit[2] - xr->pointer_start[2]) * (xr->pointer_hit[2] - xr->pointer_start[2]));
+        pointer.size.height = 0.012f;
+        layers[layer_count++] = (XrCompositionLayerBaseHeader *)&pointer;    }    memset(&end_info, 0, sizeof(end_info));
     end_info.type = XR_TYPE_FRAME_END_INFO;
     end_info.displayTime = xr->frame_state.predictedDisplayTime;
     end_info.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
-    end_info.layerCount = submit && submit_image && xr->frame_state.shouldRender && xr->screen_follow_valid && (double)GetTickCount64 () * 0.001 >= xr->screen_follow_ready_s ? 1 : 0;
+    end_info.layerCount = submit && submit_image && xr->frame_state.shouldRender && xr->screen_follow_valid && (double)GetTickCount64 () * 0.001 >= xr->screen_follow_ready_s ? layer_count : 0;
     end_info.layers = submit && submit_image && xr->frame_state.shouldRender && xr->screen_follow_valid && (double)GetTickCount64 () * 0.001 >= xr->screen_follow_ready_s ? layers : NULL;
     result = xr->end_frame(xr->session, &end_info);
     xr->frame_running = false;
@@ -1558,6 +1677,8 @@ void IW_XRWin_Destroy(iw_xr_win_t *xr) { (void)xr; }
 iw_xr_result_t IW_XRWin_Probe(iw_xr_win_t *xr, iw_xr_bridge_t *bridge, uint64_t deadline_ns, const char **reason) { (void)xr; (void)bridge; (void)deadline_ns; if (reason) *reason = "OpenXR backend not compiled"; return IW_XR_RESULT_UNAVAILABLE; }
 iw_xr_result_t IW_XRWin_Pump(iw_xr_win_t *xr, iw_xr_bridge_t *bridge) { (void)xr; (void)bridge; return IW_XR_RESULT_UNAVAILABLE; }
 qboolean IW_XRWin_GetActions(const iw_xr_win_t *xr, iw_xr_action_snapshot_t *actions) { (void)xr; if (actions) memset(actions, 0, sizeof(*actions)); return false; }
+qboolean IW_XRWin_GetVirtualScreen(const iw_xr_win_t *xr, float position[3], float orientation[4], float *width, float *height) { (void)xr; (void)position; (void)orientation; (void)width; (void)height; return false; }
+void IW_XRWin_SetVirtualPointer(iw_xr_win_t *xr, const float start[3], const float hit[3], qboolean active) { (void)xr; (void)start; (void)hit; (void)active; }
 qboolean IW_XRWin_BeginFrame(iw_xr_win_t *xr, iw_xr_frame_snapshot_t *snapshot) { (void)xr; (void)snapshot; return false; }
 qboolean IW_XRWin_BindFrameTarget(iw_xr_win_t *xr) { (void)xr; return false; }
 qboolean IW_XRWin_GetFrameTarget(const iw_xr_win_t *xr, unsigned *fbo, int *width, int *height) { (void)xr; if (fbo) *fbo = 0; if (width) *width = 0; if (height) *height = 0; return false; }
@@ -1672,6 +1793,14 @@ qboolean IW_XRWin_GetActions(const iw_xr_win_t *xr, iw_xr_action_snapshot_t *act
     if (!xr || !actions) return false;
     *actions = xr->actions;
     return actions->active;
+}
+qboolean IW_XRWin_GetVirtualScreen(const iw_xr_win_t *xr, float position[3], float orientation[4], float *width, float *height) {
+    if (!xr || !xr->screen_follow_valid) return false;
+    if (position) { position[0] = xr->screen_pose.position.x; position[1] = xr->screen_pose.position.y; position[2] = xr->screen_pose.position.z; }
+    if (orientation) { orientation[0] = xr->screen_pose.orientation.x; orientation[1] = xr->screen_pose.orientation.y; orientation[2] = xr->screen_pose.orientation.z; orientation[3] = xr->screen_pose.orientation.w; }
+    if (width) *width = 3.6f * xr->screen_scale;
+    if (height) *height = 2.7f * xr->screen_scale;
+    return true;
 }
 qboolean IW_XRWin_HasStereoTargets(const iw_xr_win_t *xr) { (void)xr; return false; }
 qboolean IW_XRWin_BindEyeTarget(iw_xr_win_t *xr, unsigned eye) { (void)xr; (void)eye; return false; }
