@@ -2489,7 +2489,20 @@ static void COM_AddEnginePak (void)
 		com_searchpaths = search;
 	}
 
-	com_modified = modified;
+	{
+		pack_t *vrpak = NULL;
+		char vrfile[MAX_OSPATH];
+		if (host_parms->exedir) { q_snprintf(vrfile, sizeof(vrfile), "%s/ironwail_vr.pak", host_parms->exedir); vrpak = COM_LoadPackFile(vrfile); }
+		if (!vrpak) { q_snprintf(vrfile, sizeof(vrfile), "%s/ironwail_vr.pak", host_parms->basedir); vrpak = COM_LoadPackFile(vrfile); }
+		if (!vrpak) for (i = 0; i < com_numbasedirs; ++i) { q_snprintf(vrfile, sizeof(vrfile), "%s/ironwail_vr.pak", com_basedirs[i]); vrpak = COM_LoadPackFile(vrfile); if (vrpak) break; }
+		if (vrpak) {
+			searchpath_t *vrsearch = (searchpath_t *) Z_Malloc(sizeof(searchpath_t));
+			vrsearch->path_id = com_searchpaths ? com_searchpaths->path_id : 1u;
+			vrsearch->pack = vrpak;
+			vrsearch->next = com_searchpaths;
+			com_searchpaths = vrsearch;
+		}
+	}	com_modified = modified;
 }
 
 /*

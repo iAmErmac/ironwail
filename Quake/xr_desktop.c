@@ -66,6 +66,9 @@ XrSwapchain swapchain;
     qboolean pointer_active;
     float pointer_start[3];
     float pointer_hit[3];
+    unsigned pointer_color;
+    float pointer_alpha;
+    float pointer_width;
     qboolean stereo_submission;
     qboolean views_valid;
     iw_xr_frame_snapshot_t frame_snapshot;
@@ -210,6 +213,11 @@ static qboolean xr_normalize3 (float v[3]) { float l=sqrtf(xr_dot3(v,v)); if(l<0
     xr_cross3 (qv, t, c);
     out[0] = v[0] + q->w * t[0] + c[0]; out[1] = v[1] + q->w * t[1] + c[1]; out[2] = v[2] + q->w * t[2] + c[2];
 }
+static void xr_rotate_inverse3 (const XrQuaternionf *q, const float v[3], float out[3])
+{
+    XrQuaternionf inverse = { -q->x, -q->y, -q->z, q->w };
+    xr_rotate3(&inverse, v, out);
+}
 static XrQuaternionf xr_quaternion_from_basis(const float x[3], const float y[3], const float z[3])
 {
     XrQuaternionf q;
@@ -253,6 +261,16 @@ static XrPosef xr_pointer_pose(const float start[3], const float hit[3], const f
 static float xr_yaw_delta (float a, float b)
 {
     float d = a - b; while (d > 180.0f) d -= 360.0f; while (d < -180.0f) d += 360.0f; return d;
+}
+static XrPosef xr_cylinder_pose(const XrPosef *screen_pose, float radius)
+{
+    XrPosef pose = *screen_pose;
+    float offset[3] = { 0.f, 0.f, radius };
+    xr_rotate3(&pose.orientation, offset, offset);
+    pose.position.x += offset[0];
+    pose.position.y += offset[1];
+    pose.position.z += offset[2];
+    return pose;
 }
 static XrPosef xr_build_screen_pose (const XrVector3f *center, const float forward[3], float distance)
 {
@@ -1291,19 +1309,94 @@ qboolean IW_XRWin_GetVirtualScreen(const iw_xr_win_t *xr, float position[3], flo
     if (!xr || !xr->screen_follow_valid) return false;
     if (position) { position[0] = xr->screen_pose.position.x; position[1] = xr->screen_pose.position.y; position[2] = xr->screen_pose.position.z; }
     if (orientation) { orientation[0] = xr->screen_pose.orientation.x; orientation[1] = xr->screen_pose.orientation.y; orientation[2] = xr->screen_pose.orientation.z; orientation[3] = xr->screen_pose.orientation.w; }
-    if (width) *width = 3.6f * xr->screen_scale;
-    if (height) *height = 2.7f * xr->screen_scale;
+    if (width) *width = 2.97f * xr->screen_scale;
+    if (height) *height = 2.2275f * xr->screen_scale;
     return true;
 }
-void IW_XRWin_SetVirtualPointer(iw_xr_win_t *xr, const float start[3], const float hit[3], qboolean active)
+
+qboolean IW_XRWin_RaycastVirtualScreen(const iw_xr_win_t *xr, const float origin[3], const float orientation[4], iw_xr_virtual_screen_hit_t *hit)
+{
+    XrQuaternionf ray_orientation;
+    float direction[3] = { 0.f, 0.f, -1.f }, offset[3], local_origin[3], local_direction[3], local_hit[3];
+    float width, height, distance, u, v;
+    qboolean curved;
+    if (hit) memset(hit, 0, sizeof(*hit));
+    if (!xr || !origin || !orientation || !hit || !xr->screen_follow_valid) return false;
+    ray_orientation.x = orientation[0]; ray_orientation.y = orientation[1]; ray_orientation.z = orientation[2]; ray_orientation.w = orientation[3];
+    xr_rotate3(&ray_orientation, direction, direction);
+    width = 2.97f * xr->screen_scale;
+    height = 2.2275f * xr->screen_scale;
+    curved = xr->curved_screen && xr->cylinder_supported && xr->curve_radius > 1.2f;
+    if (curved) {
+        XrPosef cylinder_pose = xr_cylinder_pose(&xr->screen_pose, xr->curve_radius);
+        float radius = xr->curve_radius, a, b, c, discriminant, t0, t1, angle, half_angle;
+        offset[0] = origin[0] - cylinder_pose.position.x;
+        offset[1] = origin[1] - cylinder_pose.position.y;
+        offset[2] = origin[2] - cylinder_pose.position.z;
+        xr_rotate_inverse3(&cylinder_pose.orientation, offset, local_origin);
+        xr_rotate_inverse3(&cylinder_pose.orientation, direction, local_direction);
+        a = local_direction[0] * local_direction[0] + local_direction[2] * local_direction[2];
+        b = 2.f * (local_origin[0] * local_direction[0] + local_origin[2] * local_direction[2]);
+        c = local_origin[0] * local_origin[0] + local_origin[2] * local_origin[2] - radius * radius;
+        discriminant = b * b - 4.f * a * c;
+        if (a < 0.00001f || discriminant < 0.f) return false;
+        t0 = (-b - sqrtf(discriminant)) / (2.f * a);
+        t1 = (-b + sqrtf(discriminant)) / (2.f * a);
+        distance = t0 > 0.0001f ? t0 : t1;
+        if (distance <= 0.0001f) return false;
+        local_hit[0] = local_origin[0] + local_direction[0] * distance;
+        local_hit[1] = local_origin[1] + local_direction[1] * distance;
+        local_hit[2] = local_origin[2] + local_direction[2] * distance;
+        angle = atan2f(local_hit[0], -local_hit[2]);
+        half_angle = width * 0.5f / radius;
+        u = 0.5f + angle / (2.f * half_angle);
+        hit->normal[0] = -local_hit[0] / radius;
+        hit->normal[1] = 0.f;
+        hit->normal[2] = -local_hit[2] / radius;
+        xr_rotate3(&cylinder_pose.orientation, local_hit, offset);
+        hit->position[0] = cylinder_pose.position.x + offset[0];
+        hit->position[1] = cylinder_pose.position.y + offset[1];
+        hit->position[2] = cylinder_pose.position.z + offset[2];
+        xr_rotate3(&cylinder_pose.orientation, hit->normal, offset);
+    } else {
+        offset[0] = origin[0] - xr->screen_pose.position.x;
+        offset[1] = origin[1] - xr->screen_pose.position.y;
+        offset[2] = origin[2] - xr->screen_pose.position.z;
+        xr_rotate_inverse3(&xr->screen_pose.orientation, offset, local_origin);
+        xr_rotate_inverse3(&xr->screen_pose.orientation, direction, local_direction);
+        if (fabsf(local_direction[2]) < 0.0001f) return false;
+        distance = -local_origin[2] / local_direction[2];
+        if (distance <= 0.0001f) return false;
+        local_hit[0] = local_origin[0] + local_direction[0] * distance;
+        local_hit[1] = local_origin[1] + local_direction[1] * distance;
+        local_hit[2] = local_origin[2] + local_direction[2] * distance;
+        u = 0.5f + local_hit[0] / width;
+        hit->normal[0] = 0.f; hit->normal[1] = 0.f; hit->normal[2] = -1.f;
+        xr_rotate3(&xr->screen_pose.orientation, local_hit, offset);
+        hit->position[0] = xr->screen_pose.position.x + offset[0];
+        hit->position[1] = xr->screen_pose.position.y + offset[1];
+        hit->position[2] = xr->screen_pose.position.z + offset[2];
+        xr_rotate3(&xr->screen_pose.orientation, hit->normal, offset);
+    }
+    hit->normal[0] = offset[0]; hit->normal[1] = offset[1]; hit->normal[2] = offset[2];
+    v = 0.5f - local_hit[1] / height;
+    hit->u = u; hit->v = v; hit->valid = true;
+    hit->inside = u >= 0.f && u <= 1.f && v >= 0.f && v <= 1.f;
+    return true;
+}
+void IW_XRWin_SetVirtualPointer(iw_xr_win_t *xr, const float start[3], const float hit[3], qboolean active, unsigned color, float alpha, float width)
 {
     if (!xr) return;
     xr->pointer_active = active && start && hit;
     if (xr->pointer_active) {
         memcpy(xr->pointer_start, start, sizeof(xr->pointer_start));
         memcpy(xr->pointer_hit, hit, sizeof(xr->pointer_hit));
+        xr->pointer_color = color;
+        xr->pointer_alpha = alpha;
+        xr->pointer_width = width;
     }
 }
+
 void IW_XRWin_Haptic(iw_xr_win_t *xr, int hand, float amplitude, float duration_seconds)
 {
     XrHapticActionInfo info;
@@ -1550,8 +1643,8 @@ iw_xr_result_t IW_XRWin_EndFrame(iw_xr_win_t *xr, qboolean submit)
     quad.subImage.imageRect.extent.width = (int32_t)xr->width;
     quad.subImage.imageRect.extent.height = (int32_t)xr->height;
     quad.pose = xr->screen_pose;
-    quad.size.width = 3.6f * xr->screen_scale;
-    quad.size.height = 2.7f * xr->screen_scale;
+    quad.size.width = 2.97f * xr->screen_scale;
+    quad.size.height = 2.2275f * xr->screen_scale;
     if (xr->curved_screen && xr->cylinder_supported && xr->curve_radius > 1.2f)
     {
         if (!xr->curve_submission_logged)
@@ -1566,7 +1659,7 @@ iw_xr_result_t IW_XRWin_EndFrame(iw_xr_win_t *xr, qboolean submit)
         cylinder.space = xr->space;
         cylinder.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
         cylinder.subImage = quad.subImage;
-        cylinder.pose = quad.pose;
+        cylinder.pose = xr_cylinder_pose(&quad.pose, xr->curve_radius);
         cylinder.radius = xr->curve_radius;
         cylinder.centralAngle = quad.size.width / xr->curve_radius;
         cylinder.aspectRatio = quad.size.width / quad.size.height;
@@ -1589,11 +1682,15 @@ iw_xr_result_t IW_XRWin_EndFrame(iw_xr_win_t *xr, qboolean submit)
         glViewport(0, 0, xr->pointer_target.width, xr->pointer_target.height);
         glClearColor(0.f, 0.f, 0.f, 0.f);
         glClear(GL_COLOR_BUFFER_BIT);
-        glEnable(GL_SCISSOR_TEST); glScissor(0, 16, 244, 32); glClearColor(0.1f, 1.f, 0.8f, 1.f); glClear(GL_COLOR_BUFFER_BIT); glScissor(244, 20, 6, 24); glClearColor(1.f, 1.f, 1.f, 1.f); glClear(GL_COLOR_BUFFER_BIT); glScissor(240, 24, 14, 16); glClear(GL_COLOR_BUFFER_BIT); glScissor(238, 28, 18, 8); glClear(GL_COLOR_BUFFER_BIT); glDisable(GL_SCISSOR_TEST);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(0, 26, xr->pointer_target.width, 12);
+        glClearColor(((xr->pointer_color >> 16) & 255) / 255.f, ((xr->pointer_color >> 8) & 255) / 255.f, (xr->pointer_color & 255) / 255.f, xr->pointer_alpha);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glDisable(GL_SCISSOR_TEST);
         xr_release_target(xr, &xr->pointer_target);
         memset(&pointer, 0, sizeof(pointer));
         pointer.type = XR_TYPE_COMPOSITION_LAYER_QUAD;
-        pointer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        pointer.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT;
         pointer.space = xr->space;
         pointer.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
         pointer.subImage.swapchain = xr->pointer_target.swapchain;
@@ -1601,7 +1698,7 @@ iw_xr_result_t IW_XRWin_EndFrame(iw_xr_win_t *xr, qboolean submit)
         pointer.subImage.imageRect.extent.height = xr->pointer_target.height;
         pointer.pose = xr_pointer_pose(xr->pointer_start, xr->pointer_hit, xr->frame_snapshot.views[0].position);
         pointer.size.width = sqrtf((xr->pointer_hit[0] - xr->pointer_start[0]) * (xr->pointer_hit[0] - xr->pointer_start[0]) + (xr->pointer_hit[1] - xr->pointer_start[1]) * (xr->pointer_hit[1] - xr->pointer_start[1]) + (xr->pointer_hit[2] - xr->pointer_start[2]) * (xr->pointer_hit[2] - xr->pointer_start[2]));
-        pointer.size.height = 0.012f;
+        pointer.size.height = 0.012f * CLAMP(0.25f, xr->pointer_width, 8.f);
         layers[layer_count++] = (XrCompositionLayerBaseHeader *)&pointer;    }    memset(&end_info, 0, sizeof(end_info));
     end_info.type = XR_TYPE_FRAME_END_INFO;
     end_info.displayTime = xr->frame_state.predictedDisplayTime;
@@ -1678,130 +1775,11 @@ iw_xr_result_t IW_XRWin_Probe(iw_xr_win_t *xr, iw_xr_bridge_t *bridge, uint64_t 
 iw_xr_result_t IW_XRWin_Pump(iw_xr_win_t *xr, iw_xr_bridge_t *bridge) { (void)xr; (void)bridge; return IW_XR_RESULT_UNAVAILABLE; }
 qboolean IW_XRWin_GetActions(const iw_xr_win_t *xr, iw_xr_action_snapshot_t *actions) { (void)xr; if (actions) memset(actions, 0, sizeof(*actions)); return false; }
 qboolean IW_XRWin_GetVirtualScreen(const iw_xr_win_t *xr, float position[3], float orientation[4], float *width, float *height) { (void)xr; (void)position; (void)orientation; (void)width; (void)height; return false; }
-void IW_XRWin_SetVirtualPointer(iw_xr_win_t *xr, const float start[3], const float hit[3], qboolean active) { (void)xr; (void)start; (void)hit; (void)active; }
+qboolean IW_XRWin_RaycastVirtualScreen(const iw_xr_win_t *xr, const float origin[3], const float orientation[4], iw_xr_virtual_screen_hit_t *hit) { (void)xr; (void)origin; (void)orientation; if (hit) memset(hit, 0, sizeof(*hit)); return false; }
+void IW_XRWin_SetVirtualPointer(iw_xr_win_t *xr, const float start[3], const float hit[3], qboolean active, unsigned color, float alpha, float width) { (void)xr; (void)start; (void)hit; (void)active; (void)color; (void)alpha; (void)width; }
 qboolean IW_XRWin_BeginFrame(iw_xr_win_t *xr, iw_xr_frame_snapshot_t *snapshot) { (void)xr; (void)snapshot; return false; }
 qboolean IW_XRWin_BindFrameTarget(iw_xr_win_t *xr) { (void)xr; return false; }
 qboolean IW_XRWin_GetFrameTarget(const iw_xr_win_t *xr, unsigned *fbo, int *width, int *height) { (void)xr; if (fbo) *fbo = 0; if (width) *width = 0; if (height) *height = 0; return false; }
-static qboolean xr_action_bool(iw_xr_win_t *xr, XrAction action, XrPath hand)
-{
-    XrActionStateGetInfo info;
-    XrActionStateBoolean state;
-    memset(&info, 0, sizeof(info));
-    memset(&state, 0, sizeof(state));
-    info.type = XR_TYPE_ACTION_STATE_GET_INFO;
-    info.action = action;
-    info.subactionPath = hand;
-    state.type = XR_TYPE_ACTION_STATE_BOOLEAN;
-    return xr->get_action_state_boolean(xr->session, &info, &state) == XR_SUCCESS && state.isActive && state.currentState;
-}
-
-static float xr_action_float(iw_xr_win_t *xr, XrAction action, XrPath hand)
-{
-    XrActionStateGetInfo info;
-    XrActionStateFloat state;
-    memset(&info, 0, sizeof(info));
-    memset(&state, 0, sizeof(state));
-    info.type = XR_TYPE_ACTION_STATE_GET_INFO;
-    info.action = action;
-    info.subactionPath = hand;
-    state.type = XR_TYPE_ACTION_STATE_FLOAT;
-    if (xr->get_action_state_float(xr->session, &info, &state) != XR_SUCCESS || !state.isActive) return 0.0f;
-    return state.currentState;
-}
-
-static void xr_action_vec2(iw_xr_win_t *xr, XrAction action, XrPath hand, float out[2])
-{
-    XrActionStateGetInfo info;
-    XrActionStateVector2f state;
-    out[0] = out[1] = 0.0f;
-    memset(&info, 0, sizeof(info));
-    memset(&state, 0, sizeof(state));
-    info.type = XR_TYPE_ACTION_STATE_GET_INFO;
-    info.action = action;
-    info.subactionPath = hand;
-    state.type = XR_TYPE_ACTION_STATE_VECTOR2F;
-    if (xr->get_action_state_vector2f(xr->session, &info, &state) == XR_SUCCESS && state.isActive)
-    {
-        out[0] = state.currentState.x;
-        out[1] = state.currentState.y;
-    }
-}
-
-static void xr_update_actions(iw_xr_win_t *xr)
-{
-    XrActiveActionSet active_set;
-    XrActionsSyncInfo sync_info;
-    int hand;
-    memset(&xr->actions, 0, sizeof(xr->actions));
-    if (!xr->session_running || xr->action_set == XR_NULL_HANDLE) return;
-    memset(&active_set, 0, sizeof(active_set));
-    active_set.actionSet = xr->action_set;
-    memset(&sync_info, 0, sizeof(sync_info));
-    sync_info.type = XR_TYPE_ACTIONS_SYNC_INFO;
-    sync_info.countActiveActionSets = 1;
-    sync_info.activeActionSets = &active_set;
-    if (xr->sync_actions(xr->session, &sync_info) != XR_SUCCESS) return;
-    for (hand = 0; hand < 2; ++hand)
-    {
-        iw_xr_hand_snapshot_t *snapshot = &xr->actions.hand[hand];
-        XrSpaceLocation location;
-        float trackpad[2];
-        snapshot->trigger = xr_action_float(xr, xr->trigger_action, xr->hand_paths[hand]);
-        snapshot->grip = xr_action_float(xr, xr->grip_action, xr->hand_paths[hand]);
-        xr_action_vec2(xr, xr->stick_action, xr->hand_paths[hand], snapshot->stick);
-        xr_action_vec2(xr, xr->trackpad_action, xr->hand_paths[hand], trackpad);
-        if (snapshot->stick[0] == 0.0f && snapshot->stick[1] == 0.0f)
-        {
-            snapshot->stick[0] = trackpad[0];
-            snapshot->stick[1] = trackpad[1];
-        }
-        if (xr_action_bool(xr, xr->trigger_click_action, xr->hand_paths[hand])) snapshot->trigger = 1.0f;
-        if (xr_action_bool(xr, xr->grip_click_action, xr->hand_paths[hand])) snapshot->grip = 1.0f;
-        if (snapshot->trigger > 0.5f) snapshot->buttons |= XR_BUTTON_TRIGGER;
-        if (snapshot->grip > 0.5f) snapshot->buttons |= XR_BUTTON_GRIP;
-        if (xr_action_bool(xr, xr->stick_click_action, xr->hand_paths[hand])) snapshot->buttons |= XR_BUTTON_STICK;
-        if (xr_action_bool(xr, xr->primary_action, xr->hand_paths[hand])) snapshot->buttons |= XR_BUTTON_PRIMARY;
-        if (xr_action_bool(xr, xr->secondary_action, xr->hand_paths[hand])) snapshot->buttons |= XR_BUTTON_SECONDARY;
-        if (xr_action_bool(xr, xr->menu_action, xr->hand_paths[hand])) snapshot->buttons |= XR_BUTTON_MENU;
-        memset(&location, 0, sizeof(location));
-        location.type = XR_TYPE_SPACE_LOCATION;
-        if (xr->locate_space(xr->aim_spaces[hand], xr->space, xr->frame_state.predictedDisplayTime, &location) == XR_SUCCESS &&
-            (location.locationFlags & (XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT)) ==
-            (XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT))
-        {
-            snapshot->aim_valid = true;
-            snapshot->aim_position[0] = location.pose.position.x; snapshot->aim_position[1] = location.pose.position.y; snapshot->aim_position[2] = location.pose.position.z;
-            snapshot->aim_orientation[0] = location.pose.orientation.x; snapshot->aim_orientation[1] = location.pose.orientation.y; snapshot->aim_orientation[2] = location.pose.orientation.z; snapshot->aim_orientation[3] = location.pose.orientation.w;
-        }
-        memset(&location, 0, sizeof(location));
-        location.type = XR_TYPE_SPACE_LOCATION;
-        if (xr->locate_space(xr->grip_spaces[hand], xr->space, xr->frame_state.predictedDisplayTime, &location) == XR_SUCCESS &&
-            (location.locationFlags & (XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT)) ==
-            (XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT))
-        {
-            snapshot->grip_valid = true;
-            snapshot->grip_position[0] = location.pose.position.x; snapshot->grip_position[1] = location.pose.position.y; snapshot->grip_position[2] = location.pose.position.z;
-            snapshot->grip_orientation[0] = location.pose.orientation.x; snapshot->grip_orientation[1] = location.pose.orientation.y; snapshot->grip_orientation[2] = location.pose.orientation.z; snapshot->grip_orientation[3] = location.pose.orientation.w;
-        }
-        snapshot->active = snapshot->aim_valid || snapshot->grip_valid || snapshot->trigger != 0.0f || snapshot->grip != 0.0f || snapshot->stick[0] != 0.0f || snapshot->stick[1] != 0.0f || snapshot->buttons != 0;
-        xr->actions.active |= snapshot->active;
-    }
-}
-
-qboolean IW_XRWin_GetActions(const iw_xr_win_t *xr, iw_xr_action_snapshot_t *actions)
-{
-    if (!xr || !actions) return false;
-    *actions = xr->actions;
-    return actions->active;
-}
-qboolean IW_XRWin_GetVirtualScreen(const iw_xr_win_t *xr, float position[3], float orientation[4], float *width, float *height) {
-    if (!xr || !xr->screen_follow_valid) return false;
-    if (position) { position[0] = xr->screen_pose.position.x; position[1] = xr->screen_pose.position.y; position[2] = xr->screen_pose.position.z; }
-    if (orientation) { orientation[0] = xr->screen_pose.orientation.x; orientation[1] = xr->screen_pose.orientation.y; orientation[2] = xr->screen_pose.orientation.z; orientation[3] = xr->screen_pose.orientation.w; }
-    if (width) *width = 3.6f * xr->screen_scale;
-    if (height) *height = 2.7f * xr->screen_scale;
-    return true;
-}
 qboolean IW_XRWin_HasStereoTargets(const iw_xr_win_t *xr) { (void)xr; return false; }
 qboolean IW_XRWin_BindEyeTarget(iw_xr_win_t *xr, unsigned eye) { (void)xr; (void)eye; return false; }
 qboolean IW_XRWin_GetEyeTarget(const iw_xr_win_t *xr, unsigned eye, unsigned *fbo, int *width, int *height) { (void)xr; (void)eye; if (fbo) *fbo = 0; if (width) *width = 0; if (height) *height = 0; return false; }

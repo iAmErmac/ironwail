@@ -71,6 +71,15 @@ typedef struct {
 } iw_xr_listener_pose_t;
 
 typedef struct {
+    float position[3];
+    float normal[3];
+    float u;
+    float v;
+    qboolean valid;
+    qboolean inside;
+} iw_xr_virtual_screen_hit_t;
+
+typedef struct {
     uint64_t (*monotonic_time_ns)(void *userdata);
     void (*log)(void *userdata, const char *message);
     void *userdata;

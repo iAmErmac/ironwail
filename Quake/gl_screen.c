@@ -2283,6 +2283,12 @@ void SCR_UpdateScreen (void)
 			    GL_Set2D ();
 			    Sbar_Changed ();
 			    Sbar_Draw ();
+                SCR_DrawDevStats ();
+                SCR_DrawClock ();
+                SCR_DrawSpeed ();
+                SCR_DrawFPS ();
+                if (key_dest == key_game || key_dest == key_message)
+                    Con_DrawNotify ();
 			    Draw_Flush ();
 			    R_ClearXREye ();
 			}

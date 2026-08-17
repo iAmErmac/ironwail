@@ -22,6 +22,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // view.c -- player eye positioning
 
 #include "quakedef.h"
+
+extern void VID_XR_Haptic (int hand, float amplitude, float duration_seconds);
 #include "xr_bridge.h"
 
 /*
@@ -295,6 +297,13 @@ void V_ParseDamage (void)
 	blood = MSG_ReadByte ();
 	for (i=0 ; i<3 ; i++)
 		from[i] = MSG_ReadCoord (cl.protocolflags);
+
+	if (armor > 0 || blood > 0)
+	{
+		float strength = CLAMP (0.35f, (armor + blood) * 0.03f, 1.f);
+		VID_XR_Haptic (0, strength, 0.12f);
+		VID_XR_Haptic (1, strength, 0.12f);
+	}
 
 	count = blood*0.5 + armor*0.5;
 	if (count < 10)

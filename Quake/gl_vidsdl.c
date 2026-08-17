@@ -104,12 +104,13 @@ static iw_xr_frame_snapshot_t vid_xr_snapshot;
 cvar_t vr_mode = {"vr_mode", "1", CVAR_ARCHIVE};
 cvar_t vr_render_scale = {"vr_render_scale", "1.0", CVAR_ARCHIVE};
 cvar_t vr_curved_screen = {"vr_curved_screen", "1", CVAR_ARCHIVE};
-cvar_t vr_curve_radius = {"vr_curve_radius", "6.0", CVAR_ARCHIVE};
-cvar_t vr_screen_scale = {"vr_screen_scale", "2.2", CVAR_ARCHIVE};
+cvar_t vr_curve_radius = {"vr_curve_radius", "3.0", CVAR_ARCHIVE};
+cvar_t vr_screen_scale = {"vr_screen_scale", "1.0", CVAR_ARCHIVE};
 cvar_t vr_screen_distance = {"vr_screen_distance", "2.5", CVAR_ARCHIVE};
 cvar_t vr_screen_follow = {"vr_screen_follow", "1", CVAR_ARCHIVE};
 cvar_t vr_desktop_mirror = {"vr_desktop_mirror", "1", CVAR_ARCHIVE};
 cvar_t vr_world_scale = {"vr_world_scale", "33.5", CVAR_ARCHIVE};
+cvar_t vr_player_height = {"vr_player_height", "1.7", CVAR_ARCHIVE};
 cvar_t vr_hud_scale = {"vr_hud_scale", "0.7", CVAR_ARCHIVE};
 cvar_t vr_hud_size = {"vr_hud_size", "0.35", CVAR_ARCHIVE};
 cvar_t vr_hud_distance = {"vr_hud_distance", "0.5", CVAR_ARCHIVE};
@@ -216,15 +217,23 @@ void VID_XR_Haptic(int hand, float amplitude, float duration_seconds)
 {
     if (vid_xr_backend && vid_xr_bridge && (IW_XRBridge_OwnsInput(vid_xr_bridge) || amplitude <= 0.f))
         IW_XRWin_Haptic(vid_xr_backend, hand, amplitude * CLAMP(0.f, vr_haptic_intensity.value, 1.f), duration_seconds);
-}qboolean VID_XR_GetVirtualScreen(float position[3], float orientation[4], float *width, float *height)
+}
+
+qboolean VID_XR_GetVirtualScreen(float position[3], float orientation[4], float *width, float *height)
 {
     return vid_xr_backend && IW_XRWin_GetVirtualScreen(vid_xr_backend, position, orientation, width, height);
 }
-void VID_XR_SetVirtualPointer(const float start[3], const float hit[3], qboolean active)
+qboolean VID_XR_RaycastVirtualScreen(const float origin[3], const float orientation[4], iw_xr_virtual_screen_hit_t *hit)
+{
+    return vid_xr_backend && IW_XRWin_RaycastVirtualScreen(vid_xr_backend, origin, orientation, hit);
+}
+void VID_XR_SetVirtualPointer(const float start[3], const float hit[3], qboolean active, unsigned color, float alpha, float width)
 {
     if (vid_xr_backend)
-        IW_XRWin_SetVirtualPointer(vid_xr_backend, start, hit, active);
-}qboolean VID_XR_GetStereoFrame(const iw_xr_frame_snapshot_t **snapshot)
+        IW_XRWin_SetVirtualPointer(vid_xr_backend, start, hit, active, color, alpha, width);
+}
+
+qboolean VID_XR_GetStereoFrame(const iw_xr_frame_snapshot_t **snapshot)
 {
     if (snapshot)
         *snapshot = vid_xr_stereo_frame ? &vid_xr_snapshot : NULL;
@@ -1998,7 +2007,7 @@ void	VID_Init (void)
     Cvar_RegisterVariable (&vr_screen_scale);
     Cvar_RegisterVariable (&vr_screen_distance);
     Cvar_RegisterVariable (&vr_screen_follow);
-    Cvar_RegisterVariable (&vr_desktop_mirror);    Cvar_RegisterVariable (&vr_world_scale);
+    Cvar_RegisterVariable (&vr_desktop_mirror);    Cvar_RegisterVariable (&vr_world_scale);    Cvar_RegisterVariable (&vr_player_height);
     Cvar_RegisterVariable (&vr_hud_scale);
     Cvar_RegisterVariable (&vr_hud_size);
     Cvar_RegisterVariable (&vr_hud_distance);

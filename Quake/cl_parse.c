@@ -24,6 +24,14 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // cl_parse.c  -- parse a message received from the server
 
 #include "quakedef.h"
+
+extern void VID_XR_Haptic (int hand, float amplitude, float duration_seconds);
+
+static void CL_XRPickupHaptic (void)
+{
+	VID_XR_Haptic (0, 0.8f, 0.08f);
+	VID_XR_Haptic (1, 0.8f, 0.08f);
+}
 #include "bgmusic.h"
 #include "steam.h"
 
@@ -763,10 +771,13 @@ void CL_ParseClientdata (void)
 
 	if (cl.items != i)
 	{	// set flash times
+		int gained = i & ~cl.items;
 		Sbar_Changed ();
 		for (j = 0; j < 32; j++)
 			if ( (i & (1<<j)) && !(cl.items & (1<<j)))
 				cl.item_gettime[j] = cl.time;
+		if (gained && cls.signon == SIGNONS)
+					CL_XRPickupHaptic ();
 		cl.items = i;
 		cl.stats[STAT_ITEMS] = i;
 	}
@@ -785,6 +796,8 @@ void CL_ParseClientdata (void)
 		i = 0;
 	if (cl.stats[STAT_ARMOR] != i)
 	{
+		if (i > cl.stats[STAT_ARMOR] && cls.signon == SIGNONS)
+				CL_XRPickupHaptic ();
 		cl.stats[STAT_ARMOR] = i;
 		Sbar_Changed ();
 	}
@@ -802,6 +815,8 @@ void CL_ParseClientdata (void)
 	i = MSG_ReadShort ();
 	if (cl.stats[STAT_HEALTH] != i)
 	{
+		if (i > cl.stats[STAT_HEALTH] && cls.signon == SIGNONS)
+				CL_XRPickupHaptic ();
 		cl.stats[STAT_HEALTH] = i;
 		Sbar_Changed ();
 	}
@@ -809,6 +824,8 @@ void CL_ParseClientdata (void)
 	i = MSG_ReadByte ();
 	if (cl.stats[STAT_AMMO] != i)
 	{
+		if (i > cl.stats[STAT_AMMO] && cls.signon == SIGNONS)
+				CL_XRPickupHaptic ();
 		cl.stats[STAT_AMMO] = i;
 		Sbar_Changed ();
 	}
@@ -818,7 +835,9 @@ void CL_ParseClientdata (void)
 		j = MSG_ReadByte ();
 		if (cl.stats[STAT_SHELLS+i] != j)
 		{
-			cl.stats[STAT_SHELLS+i] = j;
+			if (j > cl.stats[STAT_SHELLS+i] && cls.signon == SIGNONS)
+					CL_XRPickupHaptic ();
+		cl.stats[STAT_SHELLS+i] = j;
 			Sbar_Changed ();
 		}
 	}

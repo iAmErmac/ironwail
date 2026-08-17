@@ -449,7 +449,46 @@ qpic_t *Draw_MakePic (const char *name, int width, int height, byte *data)
 	return pic;
 }
 
-//==============================================================================
+qpic_t *Draw_MakePicRGBA (const char *name, int width, int height, byte *data)
+{
+	int flags = TEXPREF_NEAREST | TEXPREF_ALPHA | TEXPREF_PERSIST | TEXPREF_NOPICMIP | TEXPREF_PAD | TEXPREF_UNCOMPRESSED;
+	qpic_t *pic;
+	glpic_t gl;
+
+	pic = (qpic_t *) Hunk_Alloc (sizeof(qpic_t) - 4 + sizeof(glpic_t));
+	pic->width = width;
+	pic->height = height;
+	gl.gltexture = TexMgr_LoadImage (NULL, name, width, height, SRC_RGBA, data, "", (src_offset_t)data, flags);
+	gl.sl = 0;
+	gl.sh = (float)width/(float)TexMgr_PadConditional(width);
+	gl.tl = 0;
+	gl.th = (float)height/(float)TexMgr_PadConditional(height);
+	memcpy (pic->data, &gl, sizeof(glpic_t));
+
+	return pic;
+}
+qpic_t *Draw_LoadPicRGBA (const char *path)
+{
+    int width, height;
+    enum srcformat fmt;
+    byte *data = Image_LoadImage(path, &width, &height, &fmt);
+    qpic_t *pic;
+    glpic_t gl;
+    int flags = TEXPREF_NEAREST | TEXPREF_ALPHA | TEXPREF_PERSIST | TEXPREF_NOPICMIP | TEXPREF_PAD | TEXPREF_UNCOMPRESSED;
+    if (!data || fmt != SRC_RGBA) {
+        return NULL;
+    }
+    pic = (qpic_t *) Hunk_Alloc (sizeof(qpic_t) - 4 + sizeof(glpic_t));
+    pic->width = width;
+    pic->height = height;
+    gl.gltexture = TexMgr_LoadImage (NULL, path, width, height, SRC_RGBA, data, path, 0, flags);
+    gl.sl = 0;
+    gl.sh = (float)width/(float)TexMgr_PadConditional(width);
+    gl.tl = 0;
+    gl.th = (float)height/(float)TexMgr_PadConditional(height);
+    memcpy (pic->data, &gl, sizeof(glpic_t));
+    return pic;
+}//==============================================================================
 //
 //  INIT
 //
