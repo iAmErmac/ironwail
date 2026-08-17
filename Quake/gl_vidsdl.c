@@ -211,7 +211,20 @@ qboolean VID_XR_GetActions(iw_xr_action_snapshot_t *actions)
     return vid_xr_backend && vid_xr_bridge && IW_XRBridge_OwnsInput(vid_xr_bridge) &&
         IW_XRWin_GetActions(vid_xr_backend, actions);
 }
-qboolean VID_XR_GetStereoFrame(const iw_xr_frame_snapshot_t **snapshot)
+extern cvar_t vr_haptic_intensity;
+void VID_XR_Haptic(int hand, float amplitude, float duration_seconds)
+{
+    if (vid_xr_backend && vid_xr_bridge && (IW_XRBridge_OwnsInput(vid_xr_bridge) || amplitude <= 0.f))
+        IW_XRWin_Haptic(vid_xr_backend, hand, amplitude * CLAMP(0.f, vr_haptic_intensity.value, 1.f), duration_seconds);
+}qboolean VID_XR_GetVirtualScreen(float position[3], float orientation[4], float *width, float *height)
+{
+    return vid_xr_backend && IW_XRWin_GetVirtualScreen(vid_xr_backend, position, orientation, width, height);
+}
+void VID_XR_SetVirtualPointer(const float start[3], const float hit[3], qboolean active)
+{
+    if (vid_xr_backend)
+        IW_XRWin_SetVirtualPointer(vid_xr_backend, start, hit, active);
+}qboolean VID_XR_GetStereoFrame(const iw_xr_frame_snapshot_t **snapshot)
 {
     if (snapshot)
         *snapshot = vid_xr_stereo_frame ? &vid_xr_snapshot : NULL;

@@ -726,6 +726,8 @@ static void R_DrawAliasModel_Real (entity_t *e, aliasmode_t mode)
 	//
 	rs_aliaspolys += paliashdr->numtris;
 	R_SetupAliasLighting (e);
+    if (e->wheel_brightness > 0.f)
+        VectorScale(lightcolor, e->wheel_brightness, lightcolor);
 
 	//
 	// draw it

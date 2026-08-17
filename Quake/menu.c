@@ -101,7 +101,7 @@ extern cvar_t vr_laser_sight, vr_laser_beam, vr_laser_color, vr_laser_beam_width
 extern cvar_t vr_turn_mode;
 extern cvar_t vr_turn_angle;
 extern cvar_t vr_dominant_hand, vr_stabilize_mode;
-extern cvar_t vr_move_deadzone, vr_turn_deadzone;
+extern cvar_t vr_move_deadzone, vr_turn_deadzone, vr_haptic_intensity;
 
 extern char crosshair_char;
 
@@ -3144,6 +3144,7 @@ void M_Menu_Gamepad_f (void)
 		item (VR_OPT_TURN_ANGLE, "Turn Angle")				\
 		item (VR_OPT_MOVE_DEADZONE, "Move Deadzone Adjust")			\
 		item (VR_OPT_TURN_DEADZONE, "Turn Deadzone Adjust")			\
+		item (VR_OPT_HAPTIC, "Haptic Intensity")				\
 		item (SPACER, "")									\
 		item (VR_OPT_RESET, "Reset Defaults")									\
 	end_menu ()										\
@@ -3636,6 +3637,7 @@ static void M_VR_ResetOptions (void)
 	Cvar_SetValueQuick (&vr_stabilize_mode, 1.f);
 	Cvar_SetValueQuick (&vr_move_deadzone, 0.20f);
 	Cvar_SetValueQuick (&vr_turn_deadzone, 0.20f);
+		Cvar_SetValueQuick (&vr_haptic_intensity, 1.f);
 	Cvar_SetValueQuick (&vr_turn_mode, 0.f);
 	Cvar_SetValueQuick (&vr_turn_angle, 30.f);
 }
@@ -3763,6 +3765,9 @@ void M_AdjustSliders (int dir)
 		break;
 	case VR_OPT_TURN_DEADZONE:
 		Cvar_SetValueQuick (&vr_turn_deadzone, CLAMP (0.20f, vr_turn_deadzone.value + dir * 0.01f, 0.95f));
+		break;
+	case VR_OPT_HAPTIC:
+		Cvar_SetValueQuick (&vr_haptic_intensity, CLAMP (0.f, vr_haptic_intensity.value + dir * 0.05f, 1.f));
 		break;
 	case VR_SCREEN_OPT_SHAPE:
 		Cvar_SetValueQuick (&vr_curved_screen, !vr_curved_screen.value);
@@ -4247,6 +4252,9 @@ qboolean M_SetSliderValue (int option, float f)
 	case VR_OPT_TURN_DEADZONE:
 		Cvar_SetValueQuick (&vr_turn_deadzone, 0.20f + f * 0.75f);
 		return true;
+	case VR_OPT_HAPTIC:
+		Cvar_SetValueQuick (&vr_haptic_intensity, f);
+		return true;
 	case VR_SCREEN_OPT_SCALE:
 		Cvar_SetValueQuick (&vr_screen_scale, 0.5f + f * 4.5f);
 		return true;
@@ -4522,6 +4530,9 @@ static void M_Options_DrawItem (int y, int item)
 		break;
 	case VR_OPT_TURN_DEADZONE:
 		M_DrawSlider (x, y, (vr_turn_deadzone.value - 0.20f) / 0.75f, va ("%.2f", vr_turn_deadzone.value));
+		break;
+	case VR_OPT_HAPTIC:
+		M_DrawSlider (x, y, vr_haptic_intensity.value, va ("%.2f", vr_haptic_intensity.value));
 		break;
 	case VR_SCREEN_OPT_SHAPE:
 		M_Print (x, y, vr_curved_screen.value ? "Curved" : "Flat");
@@ -5371,6 +5382,7 @@ static const menukeybind_t default_keybinds[] =
 	{"menu_options",	"Options menu",			KDM_ANY},
 	{"screenshot",		"Screenshot",			KDM_ANY},
 	{"+showscores",		"Show score",			KDM_ANY},
+	{"+vr_weaponwheel", "Weapon wheel", KDM_GAMEPAD },
 	{"messagemode",		"Text chat",			KDM_KEYBOARD_AND_MOUSE},
 };
 
