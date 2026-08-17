@@ -10,8 +10,6 @@ extern cvar_t ui_mouse;
 extern cvar_t host_timescale;
 extern double host_frametime;
 extern cvar_t vr_world_scale;
-extern cvar_t vr_curved_screen;
-extern cvar_t vr_curve_radius;
 extern qboolean R_GetXRControllerAim(vec3_t forward, vec3_t right, vec3_t up);
 extern qboolean R_GetXRControllerOrigin(vec3_t origin);
 extern void R_EmitLine(const vec3_t a, const vec3_t b, uint32_t color);
@@ -27,7 +25,13 @@ static cvar_t vr_weaponwheel_modelpitch = {"vr_weaponwheel_modelpitch", "20", CV
 static cvar_t vr_weaponwheel_modelyaw = {"vr_weaponwheel_modelyaw", "-145", CVAR_ARCHIVE};
 static cvar_t vr_weaponwheel_spin = {"vr_weaponwheel_spin", "45", CVAR_ARCHIVE};
 static cvar_t vr_weaponwheel_deflection = {"vr_weaponwheel_deflection", "22.5", CVAR_ARCHIVE};
-static cvar_t vr_comfort_vignette = {"vr_comfort_vignette", "0", CVAR_ARCHIVE};
+cvar_t vr_comfort_vignette = {"vr_comfort_vignette", "0", CVAR_ARCHIVE};
+cvar_t vr_comfort_vignette_strength = {"vr_comfort_vignette_strength", "0.6", CVAR_ARCHIVE};
+cvar_t vr_mouse = {"vr_mouse", "0", CVAR_ARCHIVE};
+cvar_t vr_mouse_color = {"vr_mouse_color", "FFFFFF", CVAR_ARCHIVE};
+cvar_t vr_mouse_alpha = {"vr_mouse_alpha", "0.4", CVAR_ARCHIVE};
+cvar_t vr_aim_beam = {"vr_aim_beam", "1", CVAR_ARCHIVE};
+cvar_t vr_aim_beam_width = {"vr_aim_beam_width", "2.0", CVAR_ARCHIVE};
 
 typedef struct { int item; int impulse; const char *name; qmodel_t *model; } xr_weapon_slot_t;
 static xr_weapon_slot_t xr_weapons[16] = {
@@ -44,11 +48,11 @@ static const char *xr_builtin_model_paths[] = {
 static char xr_weapon_names[16][64];
 static char xr_weapon_models[16][MAX_QPATH];
 
-static qboolean wheel_active, wheel_bind_active, keyboard_active, keyboard_trigger, virtual_mouse_trigger, previous_main_grip, previous_offhand_grip;
-static int wheel_selection = -1, keyboard_mode, wheel_hand;
-static float keyboard_x = 0.5f, keyboard_y = 0.5f, virtual_mouse_x = 0.5f, virtual_mouse_y = 0.5f, vignette_value;
-static float virtual_mouse_last_x, virtual_mouse_last_y;
-static qboolean virtual_mouse_position_valid;
+static qboolean wheel_active, wheel_bind_active, keyboard_active, keyboard_trigger, keyboard_select, keyboard_caps, keyboard_trigger_suppressed, virtual_mouse_trigger, previous_main_grip, previous_offhand_grip;
+static int wheel_selection = -1, keyboard_mode, wheel_hand, keyboard_row, keyboard_col, keyboard_nav_x, keyboard_nav_y, menu_scroll_direction;
+static float keyboard_x = 0.5f, keyboard_y = 0.5f, virtual_mouse_x = 0.5f, virtual_mouse_y = 0.5f, vignette_value, vignette_last_yaw;
+static qpic_t *xr_vignette_pic;
+static qboolean vignette_yaw_valid;
 static double wheel_saved_timescale;
 static qboolean wheel_slowmo_active;
 static vec3_t wheel_origin, wheel_forward, wheel_right, wheel_up, pointer_start_xr, pointer_hit_xr;
@@ -154,6 +158,27 @@ static qboolean xr_keyboard_key_at(float x, float y, int *row_out, int *col_out)
     if (row < 0 || row > 4 || col < 0 || col > 9) return false;
     *row_out = row; *col_out = col; return true;
 }
+static void xr_keyboard_set_selection(int row, int col)
+{
+    keyboard_row = CLAMP(0, row, 4);
+    keyboard_col = CLAMP(0, col, 9);
+    keyboard_x = 0.03125f + ((float)keyboard_col + 0.5f) * 0.09375f;
+    keyboard_y = 0.50f + ((float)keyboard_row + 0.5f) * 0.09f;
+}
+
+static void xr_keyboard_navigate(const iw_xr_hand_snapshot_t *hand)
+{
+    int x = 0, y = 0;
+    if (!hand) return;
+    if (hand->stick[0] > 0.55f) x = 1;
+    else if (hand->stick[0] < -0.55f) x = -1;
+    if (hand->stick[1] > 0.55f) y = -1;
+    else if (hand->stick[1] < -0.55f) y = 1;
+    if ((x || y) && (x != keyboard_nav_x || y != keyboard_nav_y))
+        xr_keyboard_set_selection(keyboard_row + y, keyboard_col + x);
+    keyboard_nav_x = x;
+    keyboard_nav_y = y;
+}
 static void xr_keyboard_press(void)
 {
     static const char *letters[] = {"1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm-."};
@@ -161,69 +186,53 @@ static void xr_keyboard_press(void)
     int row, col, ch;
     if (!keyboard_active || !xr_keyboard_key_at(keyboard_x, keyboard_y, &row, &col)) return;
     if (row == 4) {
-        if (col < 2) { keyboard_mode = keyboard_mode == 1 ? 0 : 1; return; }
+        if (col == 0) {
+            if (keyboard_mode != 2) keyboard_caps = !keyboard_caps;
+            return;
+        }
+        if (col == 1) { keyboard_mode = keyboard_mode == 1 ? 0 : 1; return; }
         if (col == 2) { keyboard_mode = keyboard_mode == 2 ? 0 : 2; return; }
-        if (col > 7) { xr_keyboard_send_special(K_ENTER); return; }
+        if (col >= 8) { xr_keyboard_send_special(K_ENTER); return; }
         Char_Event(' '); return;
     }
     if (row == 2 && col == 9) { xr_keyboard_send_special(K_BACKSPACE); return; }
     ch = letters[row][col];
-    if (keyboard_mode == 1 && row > 0) ch = toupper(ch);
-    else if (keyboard_mode == 2 && row > 0) ch = symbols[(row - 1) * 10 + col];
+    if (keyboard_mode == 2 && row > 0) ch = symbols[(row - 1) * 10 + col];
+    else if ((keyboard_caps || keyboard_mode == 1) && row > 0) ch = toupper(ch);
     Char_Event(ch);
     if (keyboard_mode == 1) keyboard_mode = 0;
 }
-static void xr_keyboard_rotate(const float q[4], const float input[3], float output[3])
+
+static unsigned xr_mouse_rgb(void)
 {
-    float qv[3] = {q[0], q[1], q[2]}, cross[3], twice_cross[3];
-    cross[0] = 2.f * (qv[1] * input[2] - qv[2] * input[1]); cross[1] = 2.f * (qv[2] * input[0] - qv[0] * input[2]); cross[2] = 2.f * (qv[0] * input[1] - qv[1] * input[0]);
-    twice_cross[0] = qv[1] * cross[2] - qv[2] * cross[1]; twice_cross[1] = qv[2] * cross[0] - qv[0] * cross[2]; twice_cross[2] = qv[0] * cross[1] - qv[1] * cross[0];
-    output[0] = input[0] + q[3] * cross[0] + twice_cross[0]; output[1] = input[1] + q[3] * cross[1] + twice_cross[1]; output[2] = input[2] + q[3] * cross[2] + twice_cross[2];
+    const char *text = vr_mouse_color.string;
+    unsigned color;
+    if (*text == '#') ++text;
+    if (sscanf(text, "%x", &color) != 1) color = 0xffffff;
+    return color & 0xffffff;
 }
 
 static void xr_virtual_pointer_clear(void)
 {
     pointer_active = false;
-    VID_XR_SetVirtualPointer(NULL, NULL, false);
+    VID_XR_SetVirtualPointer(NULL, NULL, false, 0, 0.f, 1.f);
 }
 
 static void xr_virtual_pointer_update(const iw_xr_hand_snapshot_t *hand)
 {
-    float center[3], orientation[4], inverse[4], width, height;
-    float direction_local[3] = {0.f, 0.f, -1.f}, direction[3], offset[3], local_origin[3], local_direction[3], local_hit[3];
-    float distance, u, v;
+    iw_xr_virtual_screen_hit_t hit;
     xr_virtual_pointer_clear();
-    if (!hand || !hand->aim_valid || !VID_XR_GetVirtualScreen(center, orientation, &width, &height) || width <= 0.f || height <= 0.f) return;
-    xr_keyboard_rotate(hand->aim_orientation, direction_local, direction);
-    VectorSubtract(hand->aim_position, center, offset);
-    inverse[0] = -orientation[0]; inverse[1] = -orientation[1]; inverse[2] = -orientation[2]; inverse[3] = orientation[3];
-    xr_keyboard_rotate(inverse, offset, local_origin);
-    xr_keyboard_rotate(inverse, direction, local_direction);
-    if (vr_curved_screen.value != 0.f && vr_curve_radius.value > width * 0.5f) {
-        float radius = vr_curve_radius.value, a, b, c, discriminant, t0, t1, t, angle, half_angle;
-        a = local_direction[0] * local_direction[0] + local_direction[2] * local_direction[2];
-        b = 2.f * (local_origin[0] * local_direction[0] + (local_origin[2] - radius) * local_direction[2]);
-        c = local_origin[0] * local_origin[0] + (local_origin[2] - radius) * (local_origin[2] - radius) - radius * radius;
-        discriminant = b * b - 4.f * a * c;
-        if (a < 0.00001f || discriminant < 0.f) return;
-        t0 = (-b - sqrtf(discriminant)) / (2.f * a); t1 = (-b + sqrtf(discriminant)) / (2.f * a);
-        t = t0 > 0.f ? t0 : t1; if (t <= 0.f) return;
-        VectorMA(local_origin, t, local_direction, local_hit);
-        angle = asinf(CLAMP(-1.f, local_hit[0] / radius, 1.f)); half_angle = width * 0.5f / radius;
-        if (fabsf(angle) > half_angle || fabsf(local_hit[1]) > height * 0.5f) return;
-        u = 0.5f + angle / (2.f * half_angle); v = 0.5f - local_hit[1] / height;
-    } else {
-        if (fabsf(local_direction[2]) < 0.001f) return;
-        distance = -local_origin[2] / local_direction[2]; if (distance <= 0.f) return;
-        VectorMA(local_origin, distance, local_direction, local_hit);
-        if (fabsf(local_hit[0]) > width * 0.5f || fabsf(local_hit[1]) > height * 0.5f) return;
-        u = 0.5f + local_hit[0] / width; v = 0.5f - local_hit[1] / height;
-    }
-    keyboard_x = virtual_mouse_x = u; keyboard_y = virtual_mouse_y = v;
-    xr_keyboard_rotate(orientation, local_hit, offset); VectorAdd(center, offset, pointer_hit_xr);
-    VectorCopy(hand->aim_position, pointer_start_xr); pointer_active = true;
-    VID_XR_SetVirtualPointer(pointer_start_xr, pointer_hit_xr, true);
+    if ((!vr_mouse.value && hand && hand->grip <= 0.5f && !(hand->buttons & 2u)) || !hand || !hand->aim_valid ||
+        !VID_XR_RaycastVirtualScreen(hand->aim_position, hand->aim_orientation, &hit) || !hit.valid)
+        return;
+    keyboard_x = virtual_mouse_x = hit.u;
+    keyboard_y = virtual_mouse_y = hit.v;
+    VectorCopy(hit.position, pointer_hit_xr);
+    VectorCopy(hand->aim_position, pointer_start_xr);
+    pointer_active = hit.inside;
+    VID_XR_SetVirtualPointer(pointer_start_xr, pointer_hit_xr, vr_aim_beam.value != 0.f, xr_mouse_rgb(), CLAMP(0.f, vr_mouse_alpha.value, 1.f), CLAMP(0.25f, vr_aim_beam_width.value, 8.f));
 }
+
 static int xr_item_bit(const char *name)
 {
     static const struct { const char *name; int bit; } bits[] = {
@@ -316,6 +325,30 @@ static void xr_weaponwheel_reload_f(void)
     free(file);
 }
 
+static void xr_vignette_init(void)
+{
+    xr_vignette_pic = Draw_LoadPicRGBA("gfx/vignette");
+    if (xr_vignette_pic) return;
+    enum { size = 256 };
+    byte *data = (byte *) malloc(size * size * 4);
+    int x, y;
+    if (!data) return;
+    for (y = 0; y < size; ++y) {
+        for (x = 0; x < size; ++x) {
+            float nx = fabsf((x + 0.5f) / (size * 0.5f) - 1.f);
+            float ny = fabsf((y + 0.5f) / (size * 0.5f) - 1.f);
+            float d = powf(nx, 4.f) + powf(ny, 4.f);
+            float a = CLAMP(0.f, (d - 0.52f) / 0.34f, 1.f);
+            a = a * a * (3.f - 2.f * a);
+            data[(y * size + x) * 4 + 0] = 0;
+            data[(y * size + x) * 4 + 1] = 0;
+            data[(y * size + x) * 4 + 2] = 0;
+            data[(y * size + x) * 4 + 3] = (byte)(a * 255.f + 0.5f);
+        }
+    }
+    xr_vignette_pic = Draw_MakePicRGBA("xr_vignette", size, size, data);
+    free(data);
+}
 void XR_Interaction_Init(void)
 {
     Cvar_RegisterVariable(&vr_weaponwheel);
@@ -328,20 +361,27 @@ void XR_Interaction_Init(void)
     Cvar_RegisterVariable(&vr_weaponwheel_spin);
     Cvar_RegisterVariable(&vr_weaponwheel_deflection);
     Cvar_RegisterVariable(&vr_comfort_vignette);
+    Cvar_RegisterVariable(&vr_comfort_vignette_strength);
+    Cvar_RegisterVariable(&vr_mouse);
+    Cvar_RegisterVariable(&vr_mouse_color);
+    Cvar_RegisterVariable(&vr_mouse_alpha);
+    Cvar_RegisterVariable(&vr_aim_beam);
+    Cvar_RegisterVariable(&vr_aim_beam_width);
     Cmd_AddCommand("weaponwheel_reload", xr_weaponwheel_reload_f);
     Cmd_AddCommand("+vr_weaponwheel", xr_weaponwheel_bind_down);
     Cmd_AddCommand("-vr_weaponwheel", xr_weaponwheel_bind_up);
+
     xr_weaponwheel_reload_f();
 }
 
 void XR_Interaction_Shutdown(void)
 {
-    xr_wheel_close(); xr_keyboard_close(); xr_virtual_pointer_clear(); vignette_value = 0.f;
+    xr_wheel_close(); xr_keyboard_close(); xr_virtual_pointer_clear(); keyboard_trigger_suppressed = false; vignette_value = 0.f; vignette_yaw_valid = false;
 }
 
 void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
 {
-    int dominant, offhand; float move; qboolean grip, main_grip, trigger, menu_combo, both_grips;
+    int dominant, offhand; float move, yaw_delta; qboolean grip, main_grip, trigger, menu_combo, both_grips;
     if (!actions || !actions->active) { XR_Interaction_Shutdown(); return; }
     if (wheel_active && !xr_can_wheel()) xr_wheel_close();
     dominant = xr_dominant(); offhand = dominant ^ 1;
@@ -352,56 +392,87 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
       previous_main_grip = main_grip; previous_offhand_grip = offhand_grip; }
     both_grips = main_grip && (actions->hand[offhand].grip > 0.5f || (actions->hand[offhand].buttons & 2u) != 0);
     trigger = (actions->hand[1].buttons & 1u) != 0;
+    if (!trigger) keyboard_trigger_suppressed = false;
     menu_combo = main_grip && (actions->hand[dominant].buttons & 16u) != 0;
     if (keyboard_active && key_dest == key_game) xr_keyboard_close();
-    if (virtual_mouse_trigger && key_dest != key_menu) {
+    if (virtual_mouse_trigger && (key_dest != key_menu || (!vr_mouse.value && actions->hand[1].grip <= 0.5f && !(actions->hand[1].buttons & 2u))) ) {
         Key_Event(K_MOUSE1, false);
         virtual_mouse_trigger = false;
     }
     if (keyboard_active) {
+        qboolean select = (actions->hand[1].buttons & 8u) != 0;
         xr_virtual_pointer_update(&actions->hand[1]);
-        if (trigger && !keyboard_trigger) xr_keyboard_press();
+        if (pointer_active) xr_keyboard_key_at(keyboard_x, keyboard_y, &keyboard_row, &keyboard_col);
+        xr_keyboard_navigate(&actions->hand[0]);
+        if (trigger && !keyboard_trigger && pointer_active) {
+            xr_keyboard_press();
+            if (!keyboard_active) keyboard_trigger_suppressed = true;
+        } else if (select && !keyboard_select) xr_keyboard_press();
         keyboard_trigger = trigger;
+        keyboard_select = select;
         if (actions->hand[dominant].buttons & 16u) xr_keyboard_close();
     } else if (key_dest == key_menu) {
-        qboolean moved;
+        int scroll = actions->hand[1].stick[1] > 0.6f ? 1 : actions->hand[1].stick[1] < -0.6f ? -1 : 0;
+        if (scroll && scroll != menu_scroll_direction)
+            M_Keydown(scroll > 0 ? K_MWHEELUP : K_MWHEELDOWN, false);
+        menu_scroll_direction = scroll;
         if (!ui_mouse.value) Cvar_SetValueQuick(&ui_mouse, 1.f);
         xr_virtual_pointer_update(&actions->hand[1]);
-        moved = pointer_active && (!virtual_mouse_position_valid || fabsf(virtual_mouse_x - virtual_mouse_last_x) > 0.002f || fabsf(virtual_mouse_y - virtual_mouse_last_y) > 0.002f);
-        if (moved) {
-            M_Mousemove((int)(vid.width * virtual_mouse_x), (int)(vid.height * virtual_mouse_y));
-            if (!virtual_mouse_position_valid) M_Mousemove((int)(vid.width * virtual_mouse_x), (int)(vid.height * virtual_mouse_y));            virtual_mouse_last_x = virtual_mouse_x;
-            virtual_mouse_last_y = virtual_mouse_y;
-            virtual_mouse_position_valid = true;
-        }
-        if (!pointer_active) virtual_mouse_position_valid = false;
+        if (pointer_active || virtual_mouse_trigger)
+            M_MousemoveNormalized(CLAMP(0.f, virtual_mouse_x, 1.f), CLAMP(0.f, virtual_mouse_y, 1.f));
         if (trigger && !virtual_mouse_trigger && pointer_active) Key_Event(K_MOUSE1, true);
-        if ((!trigger || !pointer_active) && virtual_mouse_trigger) Key_Event(K_MOUSE1, false);
-        virtual_mouse_trigger = trigger && pointer_active;
+        if (!trigger && virtual_mouse_trigger) Key_Event(K_MOUSE1, false);
+        virtual_mouse_trigger = trigger && (pointer_active || virtual_mouse_trigger);
     } else if ((key_dest == key_console || key_dest == key_message) && Key_TextEntry() == TEXTMODE_ON) {
-        keyboard_active = true; keyboard_mode = 0; keyboard_trigger = false; xr_wheel_close();
+        menu_scroll_direction = 0;
+        keyboard_active = true; keyboard_mode = 0; keyboard_caps = false; keyboard_trigger = keyboard_select = false;
+        keyboard_nav_x = keyboard_nav_y = 0; xr_keyboard_set_selection(0, 0); xr_wheel_close();
     } else if (wheel_active && !wheel_bind_active) {
+        menu_scroll_direction = 0;
         xr_wheel_cursor_from_pose();
         xr_wheel_select(wheel_cursor[0], wheel_cursor[1]);
         xr_wheel_commit();
     } else if (wheel_active && both_grips) {
+        menu_scroll_direction = 0;
         xr_wheel_close();
     } else if (wheel_active && menu_combo) {
+        menu_scroll_direction = 0;
         xr_wheel_close();
     } else if (wheel_active) {
+        menu_scroll_direction = 0;
         xr_wheel_cursor_from_pose();
         xr_wheel_select(wheel_cursor[0], wheel_cursor[1]);
         if (!grip) xr_wheel_commit();
-    } else if (grip && !menu_combo && !both_grips) xr_wheel_open();
+    } else if (grip && !menu_combo && !both_grips) {
+        menu_scroll_direction = 0;
+        xr_wheel_open();
+    } else {
+        menu_scroll_direction = 0;
+    }
     move = sqrtf(actions->hand[offhand].stick[0] * actions->hand[offhand].stick[0] +
                  actions->hand[offhand].stick[1] * actions->hand[offhand].stick[1]);
-    if (vr_comfort_vignette.value > 0.f && key_dest == key_game && !keyboard_active && !wheel_active && move > 0.2f)
-        vignette_value += (CLAMP(0.f, vr_comfort_vignette.value, 1.f) - vignette_value) * (float)q_min(1.0, host_frametime * 8.0);
-    else vignette_value -= vignette_value * (float)q_min(1.0, host_frametime * 8.0);
+    yaw_delta = 0.f;
+    if (!vignette_yaw_valid)
+        vignette_yaw_valid = true;
+    else
+    {
+        yaw_delta = cl.viewangles[YAW] - vignette_last_yaw;
+        while (yaw_delta > 180.f) yaw_delta -= 360.f;
+        while (yaw_delta < -180.f) yaw_delta += 360.f;
+    }
+    vignette_last_yaw = cl.viewangles[YAW];
+    {
+        int vignette_mode = (int)CLAMP(0.f, vr_comfort_vignette.value, 2.f);
+        qboolean vignette_active = vignette_mode >= 1 && (move > 0.2f ||
+            (vignette_mode >= 2 && fabsf(yaw_delta) > 1.f));
+        if (vignette_active && key_dest == key_game && !keyboard_active && !wheel_active)
+                    vignette_value += (CLAMP(0.f, vr_comfort_vignette_strength.value, 1.f) - vignette_value) * (float)q_min(1.0, host_frametime * 8.0);
+        else vignette_value -= vignette_value * (float)q_min(1.0, host_frametime * 8.0);
+    }
     vignette_value = CLAMP(0.f, vignette_value, 1.f);
 }
 
-qboolean XR_Interaction_ConsumesGameplay(void) { return wheel_active || keyboard_active; }
+qboolean XR_Interaction_ConsumesGameplay(void) { return wheel_active || keyboard_active || keyboard_trigger_suppressed; }
 qboolean XR_Interaction_WheelActive(void) { return wheel_active; }
 qboolean XR_Interaction_GetVirtualPointer(float start[3], float hit[3]) { if (!pointer_active) return false; if (start) VectorCopy(pointer_start_xr, start); if (hit) VectorCopy(pointer_hit_xr, hit); return true; }
 
@@ -494,9 +565,24 @@ void XR_Interaction_DrawWorldModels(void)
     for (i = 0; i < wheel_entity_count; ++i) entities[i] = &wheel_entities[i];
     if (wheel_entity_count) R_DrawAliasModels(entities, wheel_entity_count);
 }
+static void xr_keyboard_label(int x, int y, const char *text)
+{
+    GL_SetCanvasColor(1.f, 0.72f, 0.12f, 1.f);
+    Draw_StringEx(x, y, 16, text);
+    GL_SetCanvasColor(1.f, 1.f, 1.f, 1.f);
+}
+
+static void xr_keyboard_key(int x, int y, int width, int height, qboolean selected)
+{
+    static const float normal[3] = {0.12f, 0.12f, 0.12f};
+    static const float highlight[3] = {0.26f, 0.20f, 0.08f};
+    Draw_FillEx(x, y, width, height, selected ? highlight : normal, 0.70f);
+}
+
 void XR_Interaction_Draw(void)
 {
     int i;
+    if (!xr_vignette_pic) xr_vignette_init();
     GL_SetCanvas(CANVAS_DEFAULT);
     {
         vec3_t xr_origin;
@@ -511,38 +597,68 @@ void XR_Interaction_Draw(void)
         }
         if (wheel_selection >= 0) Draw_String(cx - 56, cy + 135, xr_weapons[wheel_selection].name);
     }
+    }
     if (keyboard_active && key_dest == key_game) xr_keyboard_close();
     if (keyboard_active) {
         static const char *rows[] = {"1234567890", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM-."};
-        int left = 10, top = 120, width = 300, height = 108;
+        static const char symbols[] = "!@#$%^&*()[]{}<>?/\\|`~_=+:;\"',";
+        int left = (int)(vid.guiwidth * 0.03125f), top = (int)(vid.guiheight * 0.50f), width = (int)(vid.guiwidth * 0.9375f), height = (int)(vid.guiheight * 0.45f);
         int key_width = width / 10, key_height = height / 5, selected_row = -1, selected_col = -1;
-        GL_SetCanvas(CANVAS_MENU);
+        GL_SetCanvas(CANVAS_DEFAULT);
         xr_keyboard_key_at(keyboard_x, keyboard_y, &selected_row, &selected_col);
-        Draw_Fill(left - 6, top - 6, width + 12, height + 12, 0, 0.82f);
-        for (i = 0; i < 5; ++i) {
+        {
+            static const float background[3] = {0.05f, 0.05f, 0.05f};
+            Draw_FillEx(left - 6, top - 6, width + 12, height + 12, background, 0.70f);
+        }
+        for (i = 0; i < 4; ++i) {
             int col;
             for (col = 0; col < 10; ++col) {
                 int x = left + col * key_width, y = top + i * key_height;
                 const char *label = NULL;
                 char key[2] = {' ', '\0'};
-                if (i < 4 && col < (int)strlen(rows[i])) { key[0] = rows[i][col]; if (keyboard_mode == 1 && i > 0) key[0] = toupper(key[0]); label = key; }
-                else if (i == 2 && col == 9) label = "BKSP";
-                else if (i == 4 && col < 2) label = "SHIFT";
-                else if (i == 4 && col == 2) label = "SYM";
-                else if (i == 4 && col > 7) label = "ENTER";
-                else if (i == 4 && col == 5) label = "SPACE";
-                Draw_Fill(x + 1, y + 1, key_width - 2, key_height - 2, (i == selected_row && col == selected_col) ? 14 : 8, 0.85f);
-                if (label) Draw_String(x + (key_width - (int)strlen(label) * 8) / 2, y + (key_height - 8) / 2, label);
+                if (i < 4 && col < (int)strlen(rows[i])) {
+                    key[0] = rows[i][col];
+                    if (keyboard_mode == 2 && i > 0) key[0] = symbols[(i - 1) * 10 + col];
+                    else if (keyboard_caps || keyboard_mode == 1) key[0] = toupper(key[0]);
+                    label = key;
+                } else if (i == 2 && col == 9) label = "BKSP";
+                xr_keyboard_key(x + 1, y + 1, key_width - 2, key_height - 2, i == selected_row && col == selected_col);
+                if (label) xr_keyboard_label(x + (key_width - (int)strlen(label) * 16) / 2, y + (key_height - 16) / 2, label);
             }
         }
+        {
+            int y = top + 4 * key_height;
+            xr_keyboard_key(left + 1, y + 1, key_width - 2, key_height - 2, (selected_row == 4 && selected_col == 0) || (keyboard_caps && keyboard_mode != 2));
+            xr_keyboard_label(left + (key_width - 16) / 2, y + (key_height - 16) / 2, "^");
+            xr_keyboard_key(left + key_width + 1, y + 1, key_width - 2, key_height - 2, (selected_row == 4 && selected_col == 1) || keyboard_mode == 1);
+            xr_keyboard_label(left + key_width + (key_width - 5 * 16) / 2, y + (key_height - 16) / 2, "SHIFT");
+            xr_keyboard_key(left + 2 * key_width + 1, y + 1, key_width - 2, key_height - 2, (selected_row == 4 && selected_col == 2) || keyboard_mode == 2);
+            xr_keyboard_label(left + 2 * key_width + (key_width - 3 * 16) / 2, y + (key_height - 16) / 2, "SYM");
+            xr_keyboard_key(left + 3 * key_width + 1, y + 1, 5 * key_width - 2, key_height - 2, selected_row == 4 && selected_col >= 3 && selected_col < 8);
+            xr_keyboard_label(left + 3 * key_width + (5 * key_width - 5 * 16) / 2, y + (key_height - 16) / 2, "SPACE");
+            xr_keyboard_key(left + 8 * key_width + 1, y + 1, 2 * key_width - 2, key_height - 2, selected_row == 4 && selected_col >= 8);
+            xr_keyboard_label(left + 8 * key_width + (2 * key_width - 5 * 16) / 2, y + (key_height - 16) / 2, "ENTER");
+        }
     }
-    if (vignette_value > 0.f && !wheel_active && !keyboard_active) {
-        int edge_x = (int)(vid.guiwidth * vignette_value * 0.18f);
-        int edge_y = (int)(vid.guiheight * vignette_value * 0.18f);
-        Draw_Fill(0, 0, edge_x, vid.guiheight, 0, vignette_value);
-        Draw_Fill(vid.guiwidth - edge_x, 0, edge_x, vid.guiheight, 0, vignette_value);
-        Draw_Fill(edge_x, 0, vid.guiwidth - 2 * edge_x, edge_y, 0, vignette_value);
-        Draw_Fill(edge_x, vid.guiheight - edge_y, vid.guiwidth - 2 * edge_x, edge_y, 0, vignette_value);
+    if (pointer_active && !VID_XR_GetStereoFrame(NULL)) {
+        unsigned color = xr_mouse_rgb();
+        int x = (int)(virtual_mouse_x * vid.guiwidth + 0.5f);
+        int y = (int)(virtual_mouse_y * vid.guiheight + 0.5f);
+        GL_SetCanvas(CANVAS_DEFAULT);
+        float rgb[3] = {((color >> 16) & 255) / 255.f, ((color >> 8) & 255) / 255.f, (color & 255) / 255.f};
+        float alpha = CLAMP(0.f, vr_mouse_alpha.value, 1.f);
+        Draw_FillEx(x - 7, y - 1, 15, 3, rgb, alpha);
+        Draw_FillEx(x - 1, y - 7, 3, 15, rgb, alpha);
+        Draw_FillEx(x - 3, y - 3, 7, 7, rgb, alpha);
+        { static const float center[3] = {0.f, 0.f, 0.f}; Draw_FillEx(x - 1, y - 1, 3, 3, center, alpha); }
     }
-}
-}
+    if (vignette_value > 0.f && !wheel_active && !keyboard_active && xr_vignette_pic) {
+        static const float black[3] = {0.f, 0.f, 0.f};
+        const float alpha = CLAMP(0.f, vignette_value, 1.f);
+        const float overscan_x = vid.guiwidth * 0.16f;
+        const float overscan_y = vid.guiheight * 0.16f;
+        Draw_SubPic((int)-overscan_x, (int)-overscan_y,
+                     (int)(vid.guiwidth + overscan_x * 2.f),
+                     (int)(vid.guiheight + overscan_y * 2.f),
+                     xr_vignette_pic, 0, 0, 1, 1, black, alpha);
+    }}

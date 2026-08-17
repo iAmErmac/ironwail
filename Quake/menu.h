@@ -69,6 +69,7 @@ void M_Init (void);
 void M_Keydown (int key, qboolean repeat);
 void M_Charinput (int key);
 void M_Mousemove (int x, int y);
+void M_MousemoveNormalized (float u, float v);
 enum textmode_t M_TextEntry (void);
 qboolean M_WaitingForKeyBinding (void);
 qboolean M_WantsConsole (float *alpha);

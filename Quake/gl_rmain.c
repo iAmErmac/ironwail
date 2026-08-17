@@ -69,7 +69,7 @@ extern qboolean SV_BoxInPVS (vec3_t mins, vec3_t maxs, byte *pvs, mnode_t *node)
 // screen size info
 //
 refdef_t	r_refdef;
-extern cvar_t vr_world_scale;
+extern cvar_t vr_world_scale, vr_player_height;
 extern cvar_t vr_laser_sight, vr_laser_beam, vr_laser_color, vr_laser_beam_width, vr_laser_beam_alpha, vr_laser_alpha, vr_laser_sight_scale, vr_laser_hide_melee;
 extern qboolean VID_XR_GetActions(iw_xr_action_snapshot_t *actions);
 static qboolean r_xr_eye_pass;
@@ -89,6 +89,9 @@ static qboolean r_xr_asymmetric_projection;
 static iw_xr_fov_t r_xr_fov;
 static qboolean r_xr_head_anchor_valid;
 static qboolean r_xr_sync_player_yaw;
+static char r_xr_anchor_mapname[MAX_QPATH];
+static qboolean r_xr_anchor_origin_valid;
+static vec3_t r_xr_anchor_origin;
 static float r_xr_recenter_yaw;
 static qboolean r_xr_recenter_to_head;
 static float r_xr_head_anchor_yaw;
@@ -2740,7 +2743,29 @@ void R_SetXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye)
 
 	if (!snapshot || eye >= 2)
 		return;
-
+	/* Re-anchor after server map changes and large player teleports. */
+	if (strcmp (r_xr_anchor_mapname, cl.mapname) != 0)
+	{
+		q_strlcpy (r_xr_anchor_mapname, cl.mapname, sizeof (r_xr_anchor_mapname));
+		r_xr_head_anchor_valid = false;
+		r_xr_sync_player_yaw = false;
+		r_xr_view_basis_valid = false;
+		r_xr_anchor_origin_valid = false;
+	}
+	if (cl.viewentity > 0 && cl.viewentity < cl.num_entities)
+	{
+		vec3_t origin_delta;
+		VectorSubtract (cl_entities[cl.viewentity].origin, r_xr_anchor_origin, origin_delta);
+		if (r_xr_anchor_origin_valid &&
+			(fabsf (origin_delta[0]) > 128.f || fabsf (origin_delta[1]) > 128.f || fabsf (origin_delta[2]) > 128.f))
+		{
+			r_xr_head_anchor_valid = false;
+			r_xr_sync_player_yaw = false;
+			r_xr_view_basis_valid = false;
+		}
+		VectorCopy (cl_entities[cl.viewentity].origin, r_xr_anchor_origin);
+		r_xr_anchor_origin_valid = true;
+	}
 	R_XRHeadAngles (&snapshot->views[0], &head_pitch, &head_yaw, &head_roll);
 	if (!r_xr_head_anchor_valid)
 	{
@@ -2770,6 +2795,7 @@ void R_SetXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye)
 	r_refdef.viewangles[PITCH] = head_pitch;
 	r_refdef.viewangles[ROLL] = head_roll;
 
+	r_refdef.vieworg[2] += (CLAMP (0.5f, vr_player_height.value, 2.5f) - cl.viewheight / q_max (vr_world_scale.value, 0.01f)) * vr_world_scale.value;
 	VectorCopy (r_refdef.vieworg, r_xr_center_vieworg);
 
 	dx = snapshot->views[1].position[0] - snapshot->views[0].position[0];

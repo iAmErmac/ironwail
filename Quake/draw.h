@@ -52,6 +52,8 @@ qpic_t *Draw_PicFromWad2 (const char *name, unsigned int texflags);
 qpic_t *Draw_PicFromWad (const char *name);
 qpic_t *Draw_CachePic (const char *path);
 qpic_t *Draw_TryCachePic (const char *path, unsigned int texflags);
+qpic_t *Draw_MakePicRGBA (const char *name, int width, int height, byte *data);
+qpic_t *Draw_LoadPicRGBA (const char *path);
 void Draw_Flush (void);
 void Draw_NewGame (void);
 

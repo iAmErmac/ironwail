@@ -15,6 +15,7 @@ cvar_t vr_turn_angle = {"vr_turn_angle", "30", CVAR_ARCHIVE};
 cvar_t vr_move_deadzone = {"vr_move_deadzone", "0.20", CVAR_ARCHIVE};
 cvar_t vr_turn_deadzone = {"vr_turn_deadzone", "0.20", CVAR_ARCHIVE};
 cvar_t vr_haptic_intensity = {"vr_haptic_intensity", "1", CVAR_ARCHIVE};
+cvar_t vr_player_speed = {"vr_player_speed", "100", CVAR_ARCHIVE};
 
 static qboolean xr_key_state[15];
 static qboolean xr_owns_input, xr_main_trigger_previous;
@@ -85,6 +86,7 @@ void XR_Input_Init(void)
     Cvar_RegisterVariable(&vr_move_deadzone);
     Cvar_RegisterVariable(&vr_turn_deadzone);
     Cvar_RegisterVariable(&vr_haptic_intensity);
+    Cvar_RegisterVariable(&vr_player_speed);
     XR_Interaction_Init();
 
 }
@@ -202,8 +204,8 @@ qboolean XR_Input_Move(usercmd_t *cmd)
     {
         float scale = (length - deadzone) / (1.0f - deadzone);
         scale /= length;
-        cmd->sidemove += cl_sidespeed.value * x * scale;
-        cmd->forwardmove += cl_forwardspeed.value * y * scale;
+        cmd->sidemove += cl_sidespeed.value * x * scale * CLAMP(0.f, vr_player_speed.value, 300.f) * 0.01f;
+        cmd->forwardmove += cl_forwardspeed.value * y * scale * CLAMP(0.f, vr_player_speed.value, 300.f) * 0.01f;
     }
     return true;
 }

@@ -88,6 +88,7 @@ extern cvar_t vr_mode, vr_render_scale;
 extern cvar_t vr_curved_screen;
 extern cvar_t vr_curve_radius;
 extern cvar_t vr_screen_scale;
+extern cvar_t vr_mouse, vr_mouse_color, vr_mouse_alpha, vr_aim_beam, vr_aim_beam_width;
 extern cvar_t vr_screen_distance, vr_screen_follow;
 extern cvar_t vr_desktop_mirror;
 extern cvar_t vr_world_scale;
@@ -101,7 +102,7 @@ extern cvar_t vr_laser_sight, vr_laser_beam, vr_laser_color, vr_laser_beam_width
 extern cvar_t vr_turn_mode;
 extern cvar_t vr_turn_angle;
 extern cvar_t vr_dominant_hand, vr_stabilize_mode;
-extern cvar_t vr_move_deadzone, vr_turn_deadzone, vr_haptic_intensity;
+extern cvar_t vr_move_deadzone, vr_turn_deadzone, vr_haptic_intensity, vr_comfort_vignette, vr_comfort_vignette_strength;
 
 extern char crosshair_char;
 
@@ -3144,7 +3145,9 @@ void M_Menu_Gamepad_f (void)
 		item (VR_OPT_TURN_ANGLE, "Turn Angle")				\
 		item (VR_OPT_MOVE_DEADZONE, "Move Deadzone Adjust")			\
 		item (VR_OPT_TURN_DEADZONE, "Turn Deadzone Adjust")			\
-		item (VR_OPT_HAPTIC, "Haptic Intensity")				\
+		item (VR_OPT_COMFORT_VIGNETTE, "Comfort Vignette")                \
+		item (VR_OPT_VIGNETTE_STRENGTH, "Vignette Strength")        \
+		item (VR_OPT_HAPTIC, "Haptic Intensity")                \
 		item (SPACER, "")									\
 		item (VR_OPT_RESET, "Reset Defaults")									\
 	end_menu ()										\
@@ -3154,6 +3157,10 @@ void M_Menu_Gamepad_f (void)
 		item (VR_SCREEN_OPT_SCALE, "Scale")						\
 		item (VR_SCREEN_OPT_DISTANCE, "Distance")					\
 		item (VR_SCREEN_OPT_RADIUS, "Curve Radius")					\
+		item (VR_SCREEN_OPT_MOUSE, "Virtual Mouse")						\
+		item (VR_SCREEN_OPT_BEAM, "Aim Beam")									\
+		item (VR_SCREEN_OPT_BEAM_WIDTH, "Aim Beam Width")							\
+		item (VR_SCREEN_OPT_POINTER_ALPHA, "Pointer Alpha")					\
 		item (SPACER, "")									\
 		item (VR_SCREEN_OPT_RESET, "Reset Defaults")								\
 	end_menu ()										\
@@ -3637,7 +3644,9 @@ static void M_VR_ResetOptions (void)
 	Cvar_SetValueQuick (&vr_stabilize_mode, 1.f);
 	Cvar_SetValueQuick (&vr_move_deadzone, 0.20f);
 	Cvar_SetValueQuick (&vr_turn_deadzone, 0.20f);
-		Cvar_SetValueQuick (&vr_haptic_intensity, 1.f);
+		Cvar_SetValueQuick (&vr_comfort_vignette, 0.f);
+    Cvar_SetValueQuick (&vr_comfort_vignette_strength, 0.6f);
+    Cvar_SetValueQuick (&vr_haptic_intensity, 1.f);
 	Cvar_SetValueQuick (&vr_turn_mode, 0.f);
 	Cvar_SetValueQuick (&vr_turn_angle, 30.f);
 }
@@ -3645,12 +3654,16 @@ static void M_VR_ResetOptions (void)
 static void M_VR_ResetScreen (void)
 {
 	Cvar_SetValueQuick (&vr_curved_screen, 1.f);
-	Cvar_SetValueQuick (&vr_screen_scale, 2.2f);
+	Cvar_SetValueQuick (&vr_screen_scale, 1.f);
 	Cvar_SetValueQuick (&vr_screen_distance, 2.5f);
 	Cvar_SetValueQuick (&vr_screen_follow, 1.f);
-	Cvar_SetValueQuick (&vr_curve_radius, 6.f);
+	Cvar_SetValueQuick (&vr_curve_radius, 3.f);
+	Cvar_SetValueQuick (&vr_mouse, 0.f);
+	Cvar_SetValueQuick (&vr_aim_beam, 1.f);
+	Cvar_SetValueQuick (&vr_aim_beam_width, 2.f);
+	Cvar_SetValueQuick (&vr_mouse_alpha, 0.4f);
+	Cvar_Set ("vr_mouse_color", "FFFFFF");
 }
-
 static void M_VR_ResetHUD (void)
 {
 	Cvar_SetValueQuick (&vr_hud_size, 0.35f);
@@ -3766,6 +3779,12 @@ void M_AdjustSliders (int dir)
 	case VR_OPT_TURN_DEADZONE:
 		Cvar_SetValueQuick (&vr_turn_deadzone, CLAMP (0.20f, vr_turn_deadzone.value + dir * 0.01f, 0.95f));
 		break;
+	case VR_OPT_COMFORT_VIGNETTE:
+		Cvar_SetValueQuick (&vr_comfort_vignette, CLAMP (0.f, vr_comfort_vignette.value + dir, 2.f));
+		break;
+	case VR_OPT_VIGNETTE_STRENGTH:
+		Cvar_SetValueQuick (&vr_comfort_vignette_strength, CLAMP (0.f, vr_comfort_vignette_strength.value + dir * 0.05f, 1.f));
+		break;
 	case VR_OPT_HAPTIC:
 		Cvar_SetValueQuick (&vr_haptic_intensity, CLAMP (0.f, vr_haptic_intensity.value + dir * 0.05f, 1.f));
 		break;
@@ -3783,6 +3802,17 @@ void M_AdjustSliders (int dir)
 		break;
 	case VR_SCREEN_OPT_RADIUS:
 		Cvar_SetValueQuick (&vr_curve_radius, CLAMP (1.f, vr_curve_radius.value + dir * 0.01f, 20.f));
+		break;	case VR_SCREEN_OPT_MOUSE:
+		Cvar_SetValueQuick (&vr_mouse, !vr_mouse.value);
+		break;
+	case VR_SCREEN_OPT_BEAM:
+		Cvar_SetValueQuick (&vr_aim_beam, !vr_aim_beam.value);
+		break;
+	case VR_SCREEN_OPT_BEAM_WIDTH:
+		Cvar_SetValueQuick (&vr_aim_beam_width, CLAMP (0.25f, vr_aim_beam_width.value + dir * 0.1f, 8.f));
+		break;
+	case VR_SCREEN_OPT_POINTER_ALPHA:
+		Cvar_SetValueQuick (&vr_mouse_alpha, CLAMP (0.f, vr_mouse_alpha.value + dir * 0.05f, 1.f));
 		break;
 	case VR_HUD_OPT_SCALE:
 		Cvar_SetValueQuick (&vr_hud_size, CLAMP (0.1f, vr_hud_size.value + dir * 0.01f, 2.f));
@@ -4252,6 +4282,9 @@ qboolean M_SetSliderValue (int option, float f)
 	case VR_OPT_TURN_DEADZONE:
 		Cvar_SetValueQuick (&vr_turn_deadzone, 0.20f + f * 0.75f);
 		return true;
+	case VR_OPT_VIGNETTE_STRENGTH:
+		Cvar_SetValueQuick (&vr_comfort_vignette_strength, f);
+		return true;
 	case VR_OPT_HAPTIC:
 		Cvar_SetValueQuick (&vr_haptic_intensity, f);
 		return true;
@@ -4263,6 +4296,11 @@ qboolean M_SetSliderValue (int option, float f)
 		return true;
 	case VR_SCREEN_OPT_RADIUS:
 		Cvar_SetValueQuick (&vr_curve_radius, 1.f + f * 19.f);
+		return true;	case VR_SCREEN_OPT_BEAM_WIDTH:
+		Cvar_SetValueQuick (&vr_aim_beam_width, 0.25f + f * 7.75f);
+		return true;
+	case VR_SCREEN_OPT_POINTER_ALPHA:
+		Cvar_SetValueQuick (&vr_mouse_alpha, f);
 		return true;
 	case VR_HUD_OPT_SCALE:
 		Cvar_SetValueQuick (&vr_hud_size, 0.1f + f * 1.9f);
@@ -4531,6 +4569,12 @@ static void M_Options_DrawItem (int y, int item)
 	case VR_OPT_TURN_DEADZONE:
 		M_DrawSlider (x, y, (vr_turn_deadzone.value - 0.20f) / 0.75f, va ("%.2f", vr_turn_deadzone.value));
 		break;
+	case VR_OPT_COMFORT_VIGNETTE:
+		M_Print (x, y, vr_comfort_vignette.value >= 2.f ? "Move and Turn" : (vr_comfort_vignette.value >= 1.f ? "Move Only" : "Off"));
+		break;
+	case VR_OPT_VIGNETTE_STRENGTH:
+		M_DrawSlider (x, y, vr_comfort_vignette_strength.value, va ("%.2f", vr_comfort_vignette_strength.value));
+		break;
 	case VR_OPT_HAPTIC:
 		M_DrawSlider (x, y, vr_haptic_intensity.value, va ("%.2f", vr_haptic_intensity.value));
 		break;
@@ -4548,6 +4592,17 @@ static void M_Options_DrawItem (int y, int item)
 		break;
 	case VR_SCREEN_OPT_RADIUS:
 		M_DrawSlider (x, y, (vr_curve_radius.value - 1.f) / 19.f, va ("%.2f", vr_curve_radius.value));
+		break;	case VR_SCREEN_OPT_MOUSE:
+		M_Print (x, y, vr_mouse.value ? "On" : "Off");
+		break;
+	case VR_SCREEN_OPT_BEAM:
+		M_Print (x, y, vr_aim_beam.value ? "On" : "Off");
+		break;
+	case VR_SCREEN_OPT_BEAM_WIDTH:
+		M_DrawSlider (x, y, (vr_aim_beam_width.value - 0.25f) / 7.75f, va ("%.2f", vr_aim_beam_width.value));
+		break;
+	case VR_SCREEN_OPT_POINTER_ALPHA:
+		M_DrawSlider (x, y, vr_mouse_alpha.value, va ("%.2f", vr_mouse_alpha.value));
 		break;
 	case VR_HUD_OPT_SCALE:
 		M_DrawSlider (x, y, (vr_hud_size.value - 0.1f) / 1.9f, va ("%.2f", vr_hud_size.value));
@@ -5870,6 +5925,17 @@ void M_Keys_Key (int k)
 	case K_KP_ENTER:
 	case K_ABUTTON:
 	case K_MOUSE1:
+		if (k == K_MOUSE1 && m_mousey >= keysmenu.y + 28 && m_mousey < keysmenu.y + 48)
+		{
+			int devicemask = m_mousex < 160 ? KDM_KEYBOARD_AND_MOUSE : KDM_GAMEPAD;
+			if (keysmenu.devicemask != devicemask)
+			{
+				M_ThrottledSound ("misc/menu1.wav");
+				keysmenu.devicemask = devicemask;
+				M_Keys_Populate ();
+			}
+			return;
+		}
 		M_List_ClearSearch (&keysmenu.list);
 		M_ThrottledSound ("misc/menu2.wav");
 		bind_grab = true;
@@ -6060,9 +6126,7 @@ void M_Quit_Key (int key)
 
 	case K_ENTER:
 	case K_KP_ENTER:
-#if defined(ANDROID_GLES3)
-	case K_MOUSE1:
-#endif
+case K_MOUSE1:
 	case K_ABUTTON:
 		IN_DeactivateForConsole();
 		key_dest = key_console;
@@ -7989,20 +8053,8 @@ void M_Keydown (int key, qboolean repeat)
 }
 
 
-void M_Mousemove (int screenx, int screeny)
+static void M_MousemoveCanvas (float x, float y)
 {
-	drawtransform_t transform;
-	float x, y;
-
-	if (bind_grab || !ui_mouse.value)
-		return;
-
-	Draw_GetCanvasTransform (CANVAS_MENU, &transform);
-	x = (screenx - glx) * 2.f / (float) glwidth - 1.f;
-	y = (screeny - gly) * 2.f / (float) glheight - 1.f;
-	y = -y;
-	x = (x - transform.offset[0]) / transform.scale[0];
-	y = (y - transform.offset[1]) / transform.scale[1];
 	m_mousex = x;
 	m_mousey = y;
 
@@ -8091,7 +8143,36 @@ void M_Mousemove (int screenx, int screeny)
 	}
 }
 
+void M_Mousemove (int screenx, int screeny)
+{
+	drawtransform_t transform;
+	float x, y;
 
+	if (bind_grab || !ui_mouse.value)
+		return;
+
+	Draw_GetCanvasTransform (CANVAS_MENU, &transform);
+	x = (screenx - glx) * 2.f / (float) glwidth - 1.f;
+	y = (screeny - gly) * 2.f / (float) glheight - 1.f;
+	y = -y;
+	x = (x - transform.offset[0]) / transform.scale[0];
+	y = (y - transform.offset[1]) / transform.scale[1];
+	M_MousemoveCanvas (x, y);
+}
+
+void M_MousemoveNormalized (float u, float v)
+{
+	drawtransform_t transform;
+	float x, y;
+
+	if (bind_grab || !ui_mouse.value)
+		return;
+
+	Draw_GetCanvasTransform (CANVAS_MENU, &transform);
+	x = ((u * 2.f - 1.f) - transform.offset[0]) / transform.scale[0];
+	y = ((1.f - v * 2.f) - transform.offset[1]) / transform.scale[1];
+	M_MousemoveCanvas (x, y);
+}
 void M_Charinput (int key)
 {
 	switch (M_GetBaseState (m_state))

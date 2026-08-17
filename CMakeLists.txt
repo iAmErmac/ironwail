@@ -116,15 +116,36 @@ endif()
 
 target_compile_definitions(ironwail PRIVATE $<$<CONFIG:Debug>:DEBUG=1> $<$<NOT:$<CONFIG:Debug>>:NDEBUG=1> USE_SDL2 USE_CODEC_WAVE)
 
-set(IRONWAIL_PAK_FILE "${CMAKE_CURRENT_SOURCE_DIR}/Quake/ironwail.pak" CACHE FILEPATH "Ironwail engine pak to copy beside the executable" )
-if (EXISTS ${IRONWAIL_PAK_FILE})
+set(IRONWAIL_PAK_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Misc/pak" CACHE PATH "Ironwail pak source directory" )
+set(IRONWAIL_PAK_BUILDER "${IRONWAIL_PAK_SOURCE_DIR}/build_pak.ps1")
+set(IRONWAIL_PAK_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/ironwail.pak")
+if (EXISTS "${IRONWAIL_PAK_BUILDER}")
     add_custom_command(TARGET ironwail POST_BUILD
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${IRONWAIL_PAK_BUILDER}"
+            -Source "${IRONWAIL_PAK_SOURCE_DIR}"
+            -Output "${IRONWAIL_PAK_GENERATED}"
+            -Files "gfx/menumods.lmp;gfx/p_skill.lmp;gfx/skillmenu.lmp;gfx/sp_maps.lmp;default.cfg"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${IRONWAIL_PAK_FILE}
-            $<TARGET_FILE_DIR:ironwail>/ironwail.pak
+            "${IRONWAIL_PAK_GENERATED}"
+            "$<TARGET_FILE_DIR:ironwail>/ironwail.pak"
         VERBATIM)
 else()
-    message(WARNING "Ironwail pak was not found; the executable will build without engine package data.")
+    message(WARNING "Ironwail pak builder was not found; the executable will use no generated engine pak.")
+endif()
+set(IRONWAIL_VR_PAK_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Misc/vr_pak" CACHE PATH "Ironwail VR pak source directory" )
+set(IRONWAIL_VR_PAK_BUILDER "${IRONWAIL_VR_PAK_SOURCE_DIR}/build_pak.ps1")
+set(IRONWAIL_VR_PAK_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/ironwail_vr.pak")
+if (EXISTS "${IRONWAIL_VR_PAK_BUILDER}")
+    add_custom_command(TARGET ironwail POST_BUILD
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${IRONWAIL_VR_PAK_BUILDER}"
+            -Source "${IRONWAIL_VR_PAK_SOURCE_DIR}"
+            -Output "${IRONWAIL_VR_PAK_GENERATED}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${IRONWAIL_VR_PAK_GENERATED}"
+            "$<TARGET_FILE_DIR:ironwail>/ironwail_vr.pak"
+        VERBATIM)
+else()
+    message(WARNING "Ironwail VR pak builder was not found; VR asset pak will not be generated.")
 endif()
 if (IW_ENABLE_OPENXR AND IRONWAIL_OPENXR_LOADER_DLL)
     add_custom_command(TARGET ironwail POST_BUILD
