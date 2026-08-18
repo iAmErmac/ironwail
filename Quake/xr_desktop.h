@@ -17,7 +17,6 @@ void IW_XRWin_Destroy(iw_xr_win_t *xr);
 iw_xr_result_t IW_XRWin_Probe(iw_xr_win_t *xr, iw_xr_bridge_t *bridge, uint64_t deadline_ns, const char **reason);
 iw_xr_result_t IW_XRWin_Pump(iw_xr_win_t *xr, iw_xr_bridge_t *bridge);
 qboolean IW_XRWin_GetActions(const iw_xr_win_t *xr, iw_xr_action_snapshot_t *actions);
-qboolean IW_XRWin_GetVirtualScreen(const iw_xr_win_t *xr, float position[3], float orientation[4], float *width, float *height);
 qboolean IW_XRWin_RaycastVirtualScreen(const iw_xr_win_t *xr, const float origin[3], const float orientation[4], iw_xr_virtual_screen_hit_t *hit);
 void IW_XRWin_SetVirtualPointer(iw_xr_win_t *xr, const float start[3], const float hit[3], qboolean active, unsigned color, float alpha, float width);
 void IW_XRWin_Haptic(iw_xr_win_t *xr, int hand, float amplitude, float duration_seconds);

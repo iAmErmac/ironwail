@@ -115,7 +115,7 @@ cvar_t vr_hud_scale = {"vr_hud_scale", "0.7", CVAR_ARCHIVE};
 cvar_t vr_hud_size = {"vr_hud_size", "0.35", CVAR_ARCHIVE};
 cvar_t vr_hud_distance = {"vr_hud_distance", "0.5", CVAR_ARCHIVE};
 cvar_t vr_hud_yoffset = {"vr_hud_yoffset", "0", CVAR_ARCHIVE};
-cvar_t vr_hud_render_yoffset = {"vr_hud_render_yoffset", "0", CVAR_ARCHIVE};
+cvar_t vr_hud_render_yoffset = {"vr_hud_render_yoffset", "-0.1", CVAR_ARCHIVE};
 cvar_t vr_dominant_hand = {"vr_dominant_hand", "0", CVAR_ARCHIVE};
 cvar_t vr_stabilize_mode = {"vr_stabilize_mode", "1", CVAR_ARCHIVE};
 cvar_t vr_weapon_pitch = {"vr_weapon_pitch", "-45", CVAR_ARCHIVE};
@@ -147,7 +147,7 @@ static void VID_XRLog (void *userdata, const char *message)
 {
     (void)userdata;
     if (message)
-        Con_SafePrintf ("[OpenXR] %s\n", message);
+        Con_DPrintf ("[OpenXR] %s\n", message);
 }
 
 static iw_xr_result_t VID_XRNullProbe (iw_xr_bridge_t *bridge, uint64_t deadline_ns, const char **reason)
@@ -169,7 +169,7 @@ static void VID_ApplyEarlyVRCvars(void)
         if (!q_strcasecmp(com_argv[i], "+vr_render_scale"))
         {
             Cvar_SetValueQuick(&vr_render_scale, Q_atof(com_argv[i + 1]));
-            Con_SafePrintf("OpenXR startup vr_render_scale=%.2f\n", vr_render_scale.value);
+            Con_DPrintf("OpenXR startup vr_render_scale=%.2f\n", vr_render_scale.value);
         }
     }
 }
@@ -219,10 +219,6 @@ void VID_XR_Haptic(int hand, float amplitude, float duration_seconds)
         IW_XRWin_Haptic(vid_xr_backend, hand, amplitude * CLAMP(0.f, vr_haptic_intensity.value, 1.f), duration_seconds);
 }
 
-qboolean VID_XR_GetVirtualScreen(float position[3], float orientation[4], float *width, float *height)
-{
-    return vid_xr_backend && IW_XRWin_GetVirtualScreen(vid_xr_backend, position, orientation, width, height);
-}
 qboolean VID_XR_RaycastVirtualScreen(const float origin[3], const float orientation[4], iw_xr_virtual_screen_hit_t *hit)
 {
     return vid_xr_backend && IW_XRWin_RaycastVirtualScreen(vid_xr_backend, origin, orientation, hit);
@@ -233,6 +229,17 @@ void VID_XR_SetVirtualPointer(const float start[3], const float hit[3], qboolean
         IW_XRWin_SetVirtualPointer(vid_xr_backend, start, hit, active, color, alpha, width);
 }
 
+qboolean VID_XR_GetHeadPosition(float position[3])
+{
+    const iw_xr_frame_snapshot_t *snapshot;
+    if (!vid_xr_frame_active || vid_xr_snapshot.view_count < 2 || !position)
+        return false;
+    snapshot = &vid_xr_snapshot;
+    position[0] = 0.5f * (snapshot->views[0].position[0] + snapshot->views[1].position[0]);
+    position[1] = 0.5f * (snapshot->views[0].position[1] + snapshot->views[1].position[1]);
+    position[2] = 0.5f * (snapshot->views[0].position[2] + snapshot->views[1].position[2]);
+    return true;
+}
 qboolean VID_XR_GetStereoFrame(const iw_xr_frame_snapshot_t **snapshot)
 {
     if (snapshot)
@@ -269,6 +276,16 @@ void VID_XR_Pump (void)
     }
     if (vid_xr_bridge)
         IW_XRBridge_Pump (vid_xr_bridge);
+    if (vid_xr_backend && vid_xr_bridge && IW_XRBridge_OwnsPresentation (vid_xr_bridge) && !vid_xr_frame_active)
+    {
+        iw_xr_frame_snapshot_t snapshot;
+        if (IW_XRWin_BeginFrame (vid_xr_backend, &snapshot))
+        {
+            vid_xr_frame_active = true;
+            vid_xr_frame_should_render = snapshot.should_render;
+            vid_xr_snapshot = snapshot;
+        }
+    }
 }
 
 viddef_t	vid;				// global video state
@@ -1698,10 +1715,7 @@ void GL_BeginRendering (int *x, int *y, int *width, int *height)
 	GL_ClearBufferBindings ();
 	GL_ClearCachedProgram ();
 
-	vid_xr_frame_active = false;
-	vid_xr_frame_should_render = false;
-	vid_xr_stereo_frame = false;
-	memset(&vid_xr_snapshot, 0, sizeof(vid_xr_snapshot));
+    vid_xr_stereo_frame = false;
     if (vid_xr_backend)
         IW_XRWin_SetScreenCurve (vid_xr_backend, vr_curved_screen.value != 0, vr_curve_radius.value);
     if (vid_xr_backend)
@@ -1709,21 +1723,17 @@ void GL_BeginRendering (int *x, int *y, int *width, int *height)
     if (vid_xr_backend)
         IW_XRWin_SetHUDGeometry (vid_xr_backend, vr_hud_size.value, vr_hud_distance.value, vr_hud_yoffset.value);
     if (vid_xr_backend && vid_xr_bridge && IW_XRBridge_OwnsPresentation (vid_xr_bridge))
-	{
-		iw_xr_frame_snapshot_t snapshot;
-		if (IW_XRWin_BeginFrame (vid_xr_backend, &snapshot))
-		{
-			vid_xr_frame_active = true;
-            vid_xr_frame_should_render = snapshot.should_render;
-            vid_xr_snapshot = snapshot;
-            vid_xr_stereo_frame = snapshot.should_render && snapshot.view_count >= 2 && key_dest == key_game && !cl.paused && !con_forcedup && cl.intermission == 0 && IW_XRWin_HasStereoTargets(vid_xr_backend);
+    {
+        if (vid_xr_frame_active)
+        {
+            vid_xr_stereo_frame = vid_xr_frame_should_render && vid_xr_snapshot.view_count >= 2 && key_dest == key_game && !cl.paused && !con_forcedup && cl.intermission == 0 && IW_XRWin_HasStereoTargets(vid_xr_backend);
             IW_XRWin_SetStereoSubmission(vid_xr_backend, vid_xr_stereo_frame);
-            if (snapshot.should_render && !vid_xr_stereo_frame)
+            if (vid_xr_frame_should_render && !vid_xr_stereo_frame)
                 IW_XRWin_BindFrameTarget(vid_xr_backend);
             if (!vid_xr_stereo_frame)
                 GL_SetFrameBufferSize (vid.width, vid.height);
-		}
-	}
+        }
+    }
 
 	GL_AcquireFrameResources ();
 #if defined(ANDROID_GLES3)
@@ -1766,6 +1776,9 @@ void GL_EndRendering (void)
 		iw_xr_result_t xr_result = IW_XRWin_EndFrame (vid_xr_backend, true);
 		if (xr_result != IW_XR_RESULT_OK)
 			IW_XRBridge_SetFailure (vid_xr_bridge, xr_result, "OpenXR frame submission failed");
+		vid_xr_frame_active = false;
+		vid_xr_frame_should_render = false;
+		memset (&vid_xr_snapshot, 0, sizeof (vid_xr_snapshot));
 	}
 	GL_ReleaseFrameResources ();
 
@@ -2188,7 +2201,7 @@ putenv (vid_center);	/* SDL_putenv is problematic in versions <= 1.2.9 */
 		if (vid_xr_bridge)
 		{
 			iw_xr_result_t xr_result = IW_XRBridge_Initialize (vid_xr_bridge, VID_XRNullProbe);
-			Con_SafePrintf ("[OpenXR] probe result=%d state=%d duration=%.2f ms reason=%s\n",
+			Con_DPrintf ("[OpenXR] probe result=%d state=%d duration=%.2f ms reason=%s\n",
 				xr_result, IW_XRBridge_State (vid_xr_bridge),
 				IW_XRBridge_ProbeDurationNs (vid_xr_bridge) / 1000000.0,
 				IW_XRBridge_FailureReason (vid_xr_bridge));

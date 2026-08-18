@@ -6,6 +6,7 @@
 
 extern qboolean VID_XR_GetActions(iw_xr_action_snapshot_t *actions);
 extern cvar_t vr_dominant_hand;
+extern cvar_t vr_world_scale;
 extern cvar_t vr_stabilize_mode;
 extern void R_XRAdjustYaw(float delta);
 extern void VID_XR_Haptic(int hand, float amplitude, float duration_seconds);
@@ -16,15 +17,46 @@ cvar_t vr_move_deadzone = {"vr_move_deadzone", "0.20", CVAR_ARCHIVE};
 cvar_t vr_turn_deadzone = {"vr_turn_deadzone", "0.20", CVAR_ARCHIVE};
 cvar_t vr_haptic_intensity = {"vr_haptic_intensity", "1", CVAR_ARCHIVE};
 cvar_t vr_player_speed = {"vr_player_speed", "100", CVAR_ARCHIVE};
+cvar_t vr_smooth_stairs = {"vr_smooth_stairs", "1", CVAR_ARCHIVE};
+cvar_t vr_roomscale = {"vr_roomscale", "1", CVAR_ARCHIVE};
+cvar_t vr_teleport = {"vr_teleport", "0", CVAR_ARCHIVE};
+cvar_t vr_teleport_range = {"vr_teleport_range", "400", CVAR_ARCHIVE};
+cvar_t vr_teleport_speed = {"vr_teleport_speed", "2800", CVAR_ARCHIVE};
+cvar_t vr_teleport_beam_color = {"vr_teleport_beam_color", "00FFFF", CVAR_ARCHIVE};
+cvar_t vr_teleport_beam_alpha = {"vr_teleport_beam_alpha", "0.6", CVAR_ARCHIVE};
+cvar_t vr_teleport_auto_jump = {"vr_teleport_auto_jump", "0", CVAR_ARCHIVE};
 
 static qboolean xr_key_state[15];
-static qboolean xr_owns_input, xr_main_trigger_previous;
+static qboolean xr_owns_input, xr_main_trigger_previous, xr_cutscene_skip_previous;
 static qboolean xr_turn_held;
 static float xr_smooth_turn_rate;
 static double xr_menu_repeat_time[4];
+static qboolean xr_roomscale_position_valid;
+static float xr_roomscale_position[3];
+static qboolean xr_teleport_aiming, xr_teleport_target_valid, xr_dash_active, xr_dash_auto_jump;
+static iw_xr_hand_t xr_teleport_hand = IW_XR_HAND_COUNT;
+static vec3_t xr_teleport_start, xr_teleport_ray_end, xr_teleport_target;
+static float xr_dash_last_distance, xr_dash_jump_delay;
+static int xr_dash_blocked_frames;
+
+iw_xr_hand_t XR_Input_PhysicalHandForRole(xr_hand_role_t role)
+{
+    iw_xr_hand_t mainhand = vr_dominant_hand.value != 0.f ? IW_XR_HAND_LEFT : IW_XR_HAND_RIGHT;
+    return role == XR_HAND_OFFHAND ? (mainhand == IW_XR_HAND_LEFT ? IW_XR_HAND_RIGHT : IW_XR_HAND_LEFT) : mainhand;
+}
+
+xr_hand_role_t XR_Input_RoleForPhysicalHand(iw_xr_hand_t hand)
+{
+    return hand == XR_Input_PhysicalHandForRole(XR_HAND_MAINHAND) ? XR_HAND_MAINHAND : XR_HAND_OFFHAND;
+}
+
+const iw_xr_hand_snapshot_t *XR_Input_HandForRole(const iw_xr_action_snapshot_t *actions, xr_hand_role_t role)
+{
+    return actions ? &actions->hand[XR_Input_PhysicalHandForRole(role)] : NULL;
+}
 
 static void XR_Input_MenuHaptic(void) {
-    int offhand = vr_dominant_hand.value != 0.f ? 1 : 0;
+    iw_xr_hand_t offhand = XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND);
     VID_XR_Haptic(offhand, 0.22f, 0.025f);
 }
 
@@ -87,6 +119,14 @@ void XR_Input_Init(void)
     Cvar_RegisterVariable(&vr_turn_deadzone);
     Cvar_RegisterVariable(&vr_haptic_intensity);
     Cvar_RegisterVariable(&vr_player_speed);
+    Cvar_RegisterVariable(&vr_smooth_stairs);
+    Cvar_RegisterVariable(&vr_roomscale);
+    Cvar_RegisterVariable(&vr_teleport);
+    Cvar_RegisterVariable(&vr_teleport_range);
+    Cvar_RegisterVariable(&vr_teleport_speed);
+    Cvar_RegisterVariable(&vr_teleport_beam_color);
+    Cvar_RegisterVariable(&vr_teleport_beam_alpha);
+    Cvar_RegisterVariable(&vr_teleport_auto_jump);
     XR_Interaction_Init();
 
 }
@@ -102,14 +142,253 @@ void XR_Input_Shutdown(void)
     }
     xr_owns_input = false;
     xr_turn_held = false;
+    xr_roomscale_position_valid = false;
+    xr_teleport_aiming = false;
+    xr_teleport_target_valid = false;
+    xr_teleport_hand = IW_XR_HAND_COUNT;
+    xr_dash_active = false;
+    xr_dash_auto_jump = false;
+    xr_dash_jump_delay = 0.f;
     XR_Interaction_Shutdown();
+}
+
+static qboolean XR_Input_CanTeleport(void)
+{
+    return vr_teleport.value != 0.f && sv.active && !sv.paused &&
+        svs.maxclients == 1 && cl.maxclients <= 1 && key_dest == key_game;
+}
+
+static void XR_Input_UpdateTeleportAim(iw_xr_hand_t hand)
+{
+    edict_t *player;
+    qcvm_t *oldvm;
+    vec3_t forward, ray_end, candidate;
+    const float bias_sin = 0.5f, bias_cos = 0.8660254f;
+    trace_t hit;
+
+    xr_teleport_target_valid = false;
+    if (!XR_Input_CanTeleport() || !svs.clients[0].active || !svs.clients[0].edict ||
+        !R_GetXRHandTrackingPose(hand, xr_teleport_start, NULL, NULL, NULL) ||
+        !R_GetXRHandAimPose(hand, NULL, forward, NULL, NULL))
+        return;
+    player = svs.clients[0].edict;
+    if (player->free || player->v.health <= 0.f)
+        return;
+    {
+        float planar = sqrtf(forward[0] * forward[0] + forward[1] * forward[1]);
+        float vertical = forward[2];
+        float rotated_planar;
+        if (planar <= 0.001f)
+            return;
+        rotated_planar = planar * bias_cos + vertical * bias_sin;
+        forward[0] *= rotated_planar / planar;
+        forward[1] *= rotated_planar / planar;
+        forward[2] = vertical * bias_cos - planar * bias_sin;
+    }
+    VectorMA(xr_teleport_start, CLAMP(64.f, vr_teleport_range.value, 800.f), forward, ray_end);
+    PR_PushQCVM(&sv.qcvm, &oldvm);
+    hit = SV_Move(xr_teleport_start, vec3_origin, vec3_origin, ray_end, MOVE_NORMAL, player);
+    VectorCopy(hit.endpos, xr_teleport_ray_end);
+
+    if (hit.fraction < 1.f && hit.plane.normal[2] >= 0.7f)
+    {
+        VectorCopy(hit.endpos, candidate);
+        candidate[2] -= player->v.mins[2];
+        VectorSubtract(player->v.origin, candidate, ray_end);
+        if (VectorLength(ray_end) > 8.f)
+        {
+                VectorCopy(candidate, xr_teleport_target);
+            xr_teleport_target_valid = true;
+        }
+    }
+    PR_PopQCVM(oldvm);
+}
+
+static qboolean XR_Input_TeleportNeedsJump(edict_t *player)
+{
+    static const float samples[] = {0.25f, 0.50f, 0.75f};
+    qcvm_t *oldvm;
+    vec3_t start, end, point;
+    float source_floor, target_floor, trace_top;
+    int i;
+
+    if (!player)
+        return false;
+    source_floor = player->v.origin[2] + player->v.mins[2];
+    target_floor = xr_teleport_target[2] + player->v.mins[2];
+    if (target_floor > source_floor + 8.f)
+        return true;
+    trace_top = q_max(player->v.origin[2], xr_teleport_target[2]) + 48.f;
+    PR_PushQCVM(&sv.qcvm, &oldvm);
+    for (i = 0; i < Q_COUNTOF(samples); ++i)
+    {
+        trace_t hit;
+        float expected_floor;
+
+        VectorSubtract(xr_teleport_target, player->v.origin, point);
+        point[2] = 0.f;
+        VectorMA(player->v.origin, samples[i], point, start);
+        start[2] = trace_top;
+        VectorCopy(start, end);
+        end[2] = trace_top - 160.f;
+        hit = SV_Move(start, vec3_origin, vec3_origin, end, MOVE_NORMAL, player);
+        expected_floor = source_floor + (target_floor - source_floor) * samples[i];
+        if (hit.fraction == 1.f || hit.endpos[2] < expected_floor - 16.f)
+        {
+            PR_PopQCVM(oldvm);
+            return true;
+        }
+    }
+    PR_PopQCVM(oldvm);
+    return false;
+}
+static void XR_Input_UpdateTeleport(const iw_xr_action_snapshot_t *actions, iw_xr_hand_t hand)
+{
+    float x, y, deadzone;
+    qboolean aiming;
+
+    if (!actions || !XR_Input_CanTeleport())
+    {
+        xr_teleport_aiming = false;
+        xr_teleport_target_valid = false;
+    xr_teleport_hand = IW_XR_HAND_COUNT;
+        return;
+    }
+    x = actions->hand[hand].stick[0];
+    y = actions->hand[hand].stick[1];
+    deadzone = CLAMP(0.f, vr_move_deadzone.value, 0.95f);
+    aiming = x * x + y * y > deadzone * deadzone;
+    if (aiming)
+    {
+        xr_teleport_aiming = true;
+        xr_teleport_hand = hand;
+        XR_Input_UpdateTeleportAim(hand);
+    }
+    else if (xr_teleport_aiming)
+    {
+        xr_teleport_aiming = false;
+        if (xr_teleport_target_valid)
+        {
+            xr_dash_active = true;
+            xr_dash_auto_jump = vr_teleport_auto_jump.value != 0.f && XR_Input_TeleportNeedsJump(svs.clients[0].edict);
+            xr_dash_jump_delay = 0.f;
+            xr_dash_last_distance = FLT_MAX;
+            xr_dash_blocked_frames = 0;
+            VID_XR_Haptic(0, 0.45f, 0.04f);
+            VID_XR_Haptic(1, 0.45f, 0.04f);
+        }
+        xr_teleport_target_valid = false;
+    }
+}
+
+void XR_Input_ApplyDash(void)
+{
+    edict_t *player;
+    vec3_t delta;
+    float distance, speed;
+
+    if (!xr_dash_active)
+        return;
+    if (!XR_Input_CanTeleport() || !svs.clients[0].active || !svs.clients[0].edict)
+    {
+        xr_dash_active = false;
+        return;
+    }
+    player = svs.clients[0].edict;
+    if (player->free || player->v.health <= 0.f)
+    {
+        xr_dash_active = false;
+        return;
+    }
+    if (xr_dash_auto_jump)
+    {
+        player->v.flags = (int)player->v.flags & ~FL_ONGROUND;
+        player->v.groundentity = 0;
+        player->v.velocity[2] = 270.f;
+        xr_dash_auto_jump = false;
+        xr_dash_jump_delay = 0.10f;
+        return;
+    }
+    if (xr_dash_jump_delay > 0.f)
+    {
+        xr_dash_jump_delay = q_max(0.f, xr_dash_jump_delay - host_frametime);
+        return;
+    }
+    VectorSubtract(xr_teleport_target, player->v.origin, delta);
+    delta[2] = 0.f;
+    distance = VectorLength(delta);
+    if (distance < q_max(4.f, host_frametime * CLAMP(800.f, vr_teleport_speed.value, 6000.f)))
+    {
+        xr_dash_active = false;
+        xr_dash_jump_delay = 0.f;
+        player->v.velocity[0] = player->v.velocity[1] = player->v.velocity[2] = 0.f;
+        return;
+    }
+    if (distance >= xr_dash_last_distance - 1.f)
+    {
+        if (++xr_dash_blocked_frames >= 3)
+        {
+            xr_dash_active = false;
+            xr_dash_jump_delay = 0.f;
+            return;
+        }
+    }
+    else
+        xr_dash_blocked_frames = 0;
+    xr_dash_last_distance = distance;
+    speed = CLAMP(800.f, vr_teleport_speed.value, 6000.f);
+    VectorScale(delta, speed / distance, player->v.velocity);
+    player->v.velocity[2] = 0.f;
+}
+
+qboolean XR_Input_IsDashing(void)
+{
+    return xr_dash_active;
+}
+
+qboolean XR_Input_IsTeleportAiming(void)
+{
+    return xr_teleport_aiming;
+}
+
+qboolean XR_Input_HasTeleportTarget(void)
+{
+    return xr_teleport_target_valid;
+}
+
+qboolean XR_Input_GetTeleportAim(vec3_t start, vec3_t target)
+{
+    if (!xr_teleport_aiming)
+        return false;
+    if (start && !R_GetXRHandTrackingPose(xr_teleport_hand, start, NULL, NULL, NULL)) VectorCopy(xr_teleport_start, start);
+    if (target) VectorCopy(xr_teleport_ray_end, target);
+    return true;
+}
+void XR_Input_PrepareInputGrab(void)
+{
+    iw_xr_action_snapshot_t actions;
+    iw_xr_hand_t dominant, offhand;
+    if (!VID_XR_GetActions(&actions)) return;
+    dominant = XR_Input_PhysicalHandForRole(XR_HAND_MAINHAND);
+    offhand = XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND);
+    xr_key_state[0] = (actions.hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) != 0;
+    xr_key_state[1] = (actions.hand[offhand].buttons & IW_XR_BUTTON_TRIGGER) != 0;
+    xr_key_state[2] = (actions.hand[dominant].buttons & IW_XR_BUTTON_PRIMARY) != 0;
+    xr_key_state[3] = (actions.hand[dominant].buttons & IW_XR_BUTTON_SECONDARY) != 0;
+    xr_key_state[4] = (actions.hand[offhand].buttons & IW_XR_BUTTON_PRIMARY) != 0;
+    xr_key_state[5] = (actions.hand[offhand].buttons & IW_XR_BUTTON_SECONDARY) != 0;
+    xr_key_state[6] = (actions.hand[dominant].buttons & IW_XR_BUTTON_STICK) != 0;
+    xr_key_state[7] = (actions.hand[offhand].buttons & IW_XR_BUTTON_STICK) != 0;
+    xr_key_state[8] = (actions.hand[IW_XR_HAND_LEFT].buttons & IW_XR_BUTTON_MENU) != 0 || (actions.hand[IW_XR_HAND_RIGHT].buttons & IW_XR_BUTTON_MENU) != 0;
+    xr_key_state[13] = actions.hand[offhand].grip > 0.5f || (actions.hand[offhand].buttons & IW_XR_BUTTON_GRIP) != 0;
+    xr_key_state[14] = actions.hand[dominant].grip > 0.5f || (actions.hand[dominant].buttons & IW_XR_BUTTON_GRIP) != 0;
 }
 
 void XR_Input_Update(void)
 {
     iw_xr_action_snapshot_t actions;
-    int dominant = vr_dominant_hand.value != 0 ? 0 : 1;
-    int offhand = dominant ^ 1;
+    iw_xr_hand_t dominant = XR_Input_PhysicalHandForRole(XR_HAND_MAINHAND);
+    iw_xr_hand_t offhand = XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND);
     float turn;
     xr_owns_input = VID_XR_GetActions(&actions);
     if (!xr_owns_input)
@@ -117,10 +396,16 @@ void XR_Input_Update(void)
         XR_Input_Shutdown();
         return;
     }
-    XR_Input_Key(14, K_RGRIP, (actions.hand[1].grip > 0.5f || (actions.hand[1].buttons & 2u)) != 0);
+    XR_Input_Key(14, K_RGRIP, (actions.hand[dominant].grip > 0.5f || (actions.hand[dominant].buttons & IW_XR_BUTTON_GRIP)) != 0);
     XR_Interaction_Update(&actions);
-    if ((actions.hand[dominant].buttons & 1u) && !xr_main_trigger_previous) VID_XR_Haptic(dominant, 0.30f, 0.025f);
-    xr_main_trigger_previous = (actions.hand[dominant].buttons & 1u) != 0;
+    {
+        qboolean cutscene_skip = (CL_InCutscene() || cl.intermission) && (((actions.hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) != 0) || ((actions.hand[dominant].buttons & IW_XR_BUTTON_PRIMARY) != 0));
+        if (cutscene_skip && !xr_cutscene_skip_previous) Key_Event(K_ENTER, true);
+        xr_cutscene_skip_previous = cutscene_skip;
+    }
+    XR_Input_UpdateTeleport(&actions, offhand);
+    if ((actions.hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) && !xr_main_trigger_previous) VID_XR_Haptic(dominant, 0.30f, 0.025f);
+    xr_main_trigger_previous = (actions.hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) != 0;
     if (XR_Interaction_ConsumesGameplay()) {
         XR_Input_Key(0, K_RTRIGGER, false);
         XR_Input_Key(1, K_LTRIGGER, false);
@@ -132,21 +417,22 @@ void XR_Input_Update(void)
         XR_Input_Key(7, K_LTHUMB, false);
         XR_Input_Key(8, K_ESCAPE, false);
         xr_turn_held = false;
+        xr_roomscale_position_valid = false;
         return;
     }
-    XR_Input_Key(0, K_RTRIGGER, (actions.hand[dominant].buttons & 1u) != 0);
-    XR_Input_Key(1, K_LTRIGGER, (actions.hand[offhand].buttons & 1u) != 0);
-    XR_Input_Key(13, K_LGRIP, (!vr_stabilize_mode.value || (actions.hand[dominant].grip <= 0.5f && (actions.hand[dominant].buttons & 2u) == 0)) && (actions.hand[offhand].grip > 0.5f || (actions.hand[offhand].buttons & 2u)));
+    XR_Input_Key(0, K_RTRIGGER, (actions.hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) != 0);
+    XR_Input_Key(1, K_LTRIGGER, (actions.hand[offhand].buttons & IW_XR_BUTTON_TRIGGER) != 0);
+    XR_Input_Key(13, K_LGRIP, (!vr_stabilize_mode.value || (actions.hand[dominant].grip <= 0.5f && (actions.hand[dominant].buttons & IW_XR_BUTTON_GRIP) == 0)) && (actions.hand[offhand].grip > 0.5f || (actions.hand[offhand].buttons & IW_XR_BUTTON_GRIP)));
 
     {
-        qboolean menu_toggle = (actions.hand[0].buttons & 32u) != 0 || (actions.hand[1].buttons & 32u) != 0 ||
-            ((actions.hand[dominant].buttons & (2u | 16u)) == (2u | 16u));
-        XR_Input_Key(2, K_ABUTTON, (actions.hand[dominant].buttons & 8u) != 0);
-        XR_Input_Key(3, K_BBUTTON, !menu_toggle && (actions.hand[dominant].buttons & 16u) != 0);
-        XR_Input_Key(4, K_XBUTTON, (actions.hand[offhand].buttons & 8u) != 0);
-        XR_Input_Key(5, K_YBUTTON, (actions.hand[offhand].buttons & 16u) != 0);
-        XR_Input_Key(6, K_RTHUMB, (actions.hand[dominant].buttons & 4u) != 0);
-        XR_Input_Key(7, K_LTHUMB, (actions.hand[offhand].buttons & 4u) != 0);
+        qboolean menu_toggle = (actions.hand[IW_XR_HAND_LEFT].buttons & IW_XR_BUTTON_MENU) != 0 || (actions.hand[IW_XR_HAND_RIGHT].buttons & IW_XR_BUTTON_MENU) != 0 ||
+            ((actions.hand[dominant].buttons & (IW_XR_BUTTON_GRIP | IW_XR_BUTTON_SECONDARY)) == (IW_XR_BUTTON_GRIP | IW_XR_BUTTON_SECONDARY));
+        XR_Input_Key(2, K_ABUTTON, (actions.hand[dominant].buttons & IW_XR_BUTTON_PRIMARY) != 0);
+        XR_Input_Key(3, K_BBUTTON, !menu_toggle && (actions.hand[dominant].buttons & IW_XR_BUTTON_SECONDARY) != 0);
+        XR_Input_Key(4, K_XBUTTON, (actions.hand[offhand].buttons & IW_XR_BUTTON_PRIMARY) != 0);
+        XR_Input_Key(5, K_YBUTTON, (actions.hand[offhand].buttons & IW_XR_BUTTON_SECONDARY) != 0);
+        XR_Input_Key(6, K_RTHUMB, (actions.hand[dominant].buttons & IW_XR_BUTTON_STICK) != 0);
+        XR_Input_Key(7, K_LTHUMB, (actions.hand[offhand].buttons & IW_XR_BUTTON_STICK) != 0);
         XR_Input_Key(8, K_ESCAPE, menu_toggle);
     }
 
@@ -162,6 +448,7 @@ void XR_Input_Update(void)
         XR_Input_MenuKey(11, K_DOWNARROW, vertical && y < 0.0f);
         XR_Input_MenuKey(12, K_UPARROW, vertical && y > 0.0f);
         xr_turn_held = false;
+        xr_roomscale_position_valid = false;
         return;
     }
     XR_Input_Key(9, K_LEFTARROW, false);
@@ -189,18 +476,83 @@ qboolean XR_Input_OwnsInput(void)
     return xr_owns_input;
 }
 
+qboolean XR_Input_UsesRoomscale(void)
+{
+    return xr_owns_input && vr_roomscale.value != 0.f;
+}
+
+static void XR_Input_ApplyRoomscaleDelta (const float delta[3])
+{
+    edict_t *player;
+    qcvm_t *oldvm;
+    vec3_t end, moved;
+    trace_t trace;
+
+    if (!sv.active || sv.paused || svs.maxclients != 1 || !svs.clients[0].active || !svs.clients[0].edict)
+        return;
+    player = svs.clients[0].edict;
+    if (player->free || player->v.health <= 0)
+        return;
+    PR_PushQCVM (&sv.qcvm, &oldvm);
+    VectorMA (player->v.origin, vr_world_scale.value, delta, end);
+    trace = SV_Move (player->v.origin, player->v.mins, player->v.maxs, end, MOVE_NORMAL, player);
+    VectorSubtract (trace.endpos, player->v.origin, moved);
+    VectorCopy (trace.endpos, player->v.origin);
+    SV_LinkEdict (player, false);
+    PR_PopQCVM (oldvm);
+    if (cl.viewentity > 0 && cl.viewentity < cl.num_entities)
+    {
+        entity_t *view = &cl_entities[cl.viewentity];
+        VectorAdd (view->origin, moved, view->origin);
+        VectorAdd (view->msg_origins[0], moved, view->msg_origins[0]);
+        VectorAdd (view->msg_origins[1], moved, view->msg_origins[1]);
+    }
+}
+
 qboolean XR_Input_Move(usercmd_t *cmd)
 {
     iw_xr_action_snapshot_t actions;
-    int offhand = vr_dominant_hand.value != 0 ? 1 : 0;
+    iw_xr_hand_t offhand = XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND);
     float x, y, length, deadzone;
-    if (!cmd || !xr_owns_input || !VID_XR_GetActions(&actions))
+    if (!cmd || !xr_owns_input)
         return false;
-    x = actions.hand[offhand].stick[0];
-    y = actions.hand[offhand].stick[1];
+    if (VID_XR_GetActions (&actions))
+    {
+        x = actions.hand[offhand].stick[0];
+        y = actions.hand[offhand].stick[1];
+    }
+    else
+    {
+        x = y = 0.f;
+    }
     length = sqrtf(x * x + y * y);
     deadzone = CLAMP(0.0f, vr_move_deadzone.value, 0.95f);
-    if (length > deadzone)
+    if (vr_roomscale.value != 0.f && cl.maxclients <= 1 && host_frametime > 0.f)
+    {
+        float head_position[3], xr_delta[3], quake_delta[3];
+        if (VID_XR_GetHeadPosition (head_position))
+        {
+            if (xr_roomscale_position_valid)
+            {
+                xr_delta[0] = head_position[0] - xr_roomscale_position[0];
+                xr_delta[1] = head_position[1] - xr_roomscale_position[1];
+                xr_delta[2] = head_position[2] - xr_roomscale_position[2];
+                if (R_XRTransformRoomscaleDelta (xr_delta, quake_delta))
+                {
+                    if (sqrtf (quake_delta[0] * quake_delta[0] + quake_delta[1] * quake_delta[1]) < 0.5f)
+                        XR_Input_ApplyRoomscaleDelta (quake_delta);
+                }
+            }
+            xr_roomscale_position[0] = head_position[0];
+            xr_roomscale_position[1] = head_position[1];
+            xr_roomscale_position[2] = head_position[2];
+            xr_roomscale_position_valid = true;
+        }
+        else
+            xr_roomscale_position_valid = false;
+    }
+
+    if (vr_teleport.value == 0.f && length > deadzone)
     {
         float scale = (length - deadzone) / (1.0f - deadzone);
         scale /= length;
