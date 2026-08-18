@@ -1,5 +1,8 @@
 #include "quakedef.h"
 #include "xr_desktop.h"
+#include "xr_virtual_screen.h"
+#include "xr_math.h"
+#include "xr_action_schema.h"
 extern cvar_t vr_render_scale;
 extern cvar_t vr_screen_follow;
 
@@ -74,7 +77,7 @@ XrSwapchain swapchain;
     iw_xr_frame_snapshot_t frame_snapshot;
     iw_xr_action_snapshot_t actions;
     XrActionSet action_set;
-    XrPath hand_paths[2];
+    XrPath hand_paths[IW_XR_HAND_COUNT];
     XrAction aim_action;
     XrAction grip_pose_action;
     XrAction trigger_action;
@@ -88,8 +91,8 @@ XrSwapchain swapchain;
     XrAction secondary_action;
     XrAction menu_action;
     XrAction haptic_action;
-    XrSpace aim_spaces[2];
-    XrSpace grip_spaces[2];
+    XrSpace aim_spaces[IW_XR_HAND_COUNT];
+    XrSpace grip_spaces[IW_XR_HAND_COUNT];
 
 #define XR_WIN_PROC(type, name) type name;
     PFN_xrGetInstanceProcAddr get_instance_proc_addr;
@@ -131,6 +134,7 @@ XrSwapchain swapchain;
     PFN_xrGetActionStateBoolean get_action_state_boolean;
     PFN_xrGetActionStateFloat get_action_state_float;
     PFN_xrGetActionStateVector2f get_action_state_vector2f;
+    PFN_xrGetActionStatePose get_action_state_pose;
     PFN_xrCreateActionSpace create_action_space;
     PFN_xrLocateSpace locate_space;
     PFN_xrApplyHapticFeedback apply_haptic_feedback;
@@ -204,19 +208,12 @@ static const char *xr_result_name(XrResult result)
     }
 }
 
-static float xr_dot3 (const float a[3], const float b[3]) { return a[0]*b[0] + a[1]*b[1] + a[2]*b[2]; }
-static void xr_cross3 (const float a[3], const float b[3], float o[3]) { o[0]=a[1]*b[2]-a[2]*b[1]; o[1]=a[2]*b[0]-a[0]*b[2]; o[2]=a[0]*b[1]-a[1]*b[0]; }
-static qboolean xr_normalize3 (float v[3]) { float l=sqrtf(xr_dot3(v,v)); if(l<0.0001f)return false; v[0]/=l;v[1]/=l;v[2]/=l;return true; }static void xr_rotate3 (const XrQuaternionf *q, const float v[3], float out[3])
+static void xr_rotate3 (const XrQuaternionf *q, const float v[3], float out[3])
 {
     float qv[3] = { q->x, q->y, q->z }, t[3], c[3];
-    xr_cross3 (qv, v, t); t[0] *= 2.0f; t[1] *= 2.0f; t[2] *= 2.0f;
-    xr_cross3 (qv, t, c);
+    IW_XRMath_Cross3 (qv, v, t); t[0] *= 2.0f; t[1] *= 2.0f; t[2] *= 2.0f;
+    IW_XRMath_Cross3 (qv, t, c);
     out[0] = v[0] + q->w * t[0] + c[0]; out[1] = v[1] + q->w * t[1] + c[1]; out[2] = v[2] + q->w * t[2] + c[2];
-}
-static void xr_rotate_inverse3 (const XrQuaternionf *q, const float v[3], float out[3])
-{
-    XrQuaternionf inverse = { -q->x, -q->y, -q->z, q->w };
-    xr_rotate3(&inverse, v, out);
 }
 static XrQuaternionf xr_quaternion_from_basis(const float x[3], const float y[3], const float z[3])
 {
@@ -247,20 +244,16 @@ static XrPosef xr_pointer_pose(const float start[3], const float hit[3], const f
     pose.position.y = (start[1] + hit[1]) * 0.5f;
     pose.position.z = (start[2] + hit[2]) * 0.5f;
     x[0] = hit[0] - start[0]; x[1] = hit[1] - start[1]; x[2] = hit[2] - start[2];
-    length = sqrtf(xr_dot3(x, x));
+    length = sqrtf(IW_XRMath_Dot3(x, x));
     if (length < 0.01f) { pose.orientation.w = 1.f; return pose; }
     x[0] /= length; x[1] /= length; x[2] /= length;
     view[0] = eye[0] - pose.position.x; view[1] = eye[1] - pose.position.y; view[2] = eye[2] - pose.position.z;
-    if (!xr_normalize3(view)) { view[0] = 0.f; view[1] = 0.f; view[2] = -1.f; }
-    xr_cross3(view, x, y);
-    if (!xr_normalize3(y)) { y[0] = 0.f; y[1] = 1.f; y[2] = 0.f; xr_cross3(y, x, y); xr_normalize3(y); }
-    xr_cross3(x, y, z); xr_normalize3(z);
+    if (!IW_XRMath_Normalize3(view)) { view[0] = 0.f; view[1] = 0.f; view[2] = -1.f; }
+    IW_XRMath_Cross3(view, x, y);
+    if (!IW_XRMath_Normalize3(y)) { y[0] = 0.f; y[1] = 1.f; y[2] = 0.f; IW_XRMath_Cross3(y, x, y); IW_XRMath_Normalize3(y); }
+    IW_XRMath_Cross3(x, y, z); IW_XRMath_Normalize3(z);
     pose.orientation = xr_quaternion_from_basis(x, y, z);
     return pose;
-}
-static float xr_yaw_delta (float a, float b)
-{
-    float d = a - b; while (d > 180.0f) d -= 360.0f; while (d < -180.0f) d += 360.0f; return d;
 }
 static XrPosef xr_cylinder_pose(const XrPosef *screen_pose, float radius)
 {
@@ -343,7 +336,7 @@ static void xr_update_screen_pose (iw_xr_win_t *xr, const XrView *views, uint32_
     center.y /= (float)view_count;
     center.z /= (float)view_count;
     forward[1] = 0.0f;
-    if (!xr_normalize3 (forward))
+    if (!IW_XRMath_Normalize3 (forward))
     {
         forward[0] = 0.0f;
         forward[1] = 0.0f;
@@ -492,6 +485,7 @@ static qboolean xr_load_instance(iw_xr_win_t *xr, const char **reason)
     XR_LOAD_INSTANCE(xrGetActionStateBoolean, get_action_state_boolean);
     XR_LOAD_INSTANCE(xrGetActionStateFloat, get_action_state_float);
     XR_LOAD_INSTANCE(xrGetActionStateVector2f, get_action_state_vector2f);
+    XR_LOAD_INSTANCE(xrGetActionStatePose, get_action_state_pose);
     XR_LOAD_INSTANCE(xrCreateActionSpace, create_action_space);
     XR_LOAD_INSTANCE(xrLocateSpace, locate_space);
     XR_LOAD_INSTANCE(xrApplyHapticFeedback, apply_haptic_feedback);
@@ -509,14 +503,6 @@ static qboolean xr_load_instance(iw_xr_win_t *xr, const char **reason)
 }
 
 
-#define XR_HAND_LEFT 0
-#define XR_HAND_RIGHT 1
-#define XR_BUTTON_TRIGGER 1u
-#define XR_BUTTON_GRIP 2u
-#define XR_BUTTON_STICK 4u
-#define XR_BUTTON_PRIMARY 8u
-#define XR_BUTTON_SECONDARY 16u
-#define XR_BUTTON_MENU 32u
 
 static qboolean xr_create_action(iw_xr_win_t *xr, XrActionType type, const char *name, const char *localized_name, XrAction *action)
 {
@@ -639,8 +625,8 @@ static qboolean xr_create_actions(iw_xr_win_t *xr)
     XrActionSpaceCreateInfo space_info;
     int hand;
 
-    if (xr->string_to_path(xr->instance, "/user/hand/left", &xr->hand_paths[XR_HAND_LEFT]) != XR_SUCCESS ||
-        xr->string_to_path(xr->instance, "/user/hand/right", &xr->hand_paths[XR_HAND_RIGHT]) != XR_SUCCESS)
+    if (xr->string_to_path(xr->instance, "/user/hand/left", &xr->hand_paths[IW_XR_HAND_LEFT]) != XR_SUCCESS ||
+        xr->string_to_path(xr->instance, "/user/hand/right", &xr->hand_paths[IW_XR_HAND_RIGHT]) != XR_SUCCESS)
         return false;
     memset(&set_info, 0, sizeof(set_info));
     set_info.type = XR_TYPE_ACTION_SET_CREATE_INFO;
@@ -926,16 +912,11 @@ iw_xr_result_t IW_XRWin_Probe(iw_xr_win_t *xr, iw_xr_bridge_t *bridge, uint64_t 
     }    memset(&space_info, 0, sizeof(space_info));
     space_info.type = XR_TYPE_REFERENCE_SPACE_CREATE_INFO;
     space_info.poseInReferenceSpace.orientation.w = 1.0f;
-    space_info.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
+    space_info.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
     result = xr->create_reference_space(xr->session, &space_info, &xr->space);
     if (result != XR_SUCCESS)
     {
-        space_info.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_STAGE;
-        result = xr->create_reference_space(xr->session, &space_info, &xr->space);
-    }
-    if (result != XR_SUCCESS)
-    {
-        space_info.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
+        space_info.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
         result = xr->create_reference_space(xr->session, &space_info, &xr->space);
     }
     if (result != XR_SUCCESS)
@@ -1088,12 +1069,16 @@ iw_xr_result_t IW_XRWin_Pump(iw_xr_win_t *xr, iw_xr_bridge_t *bridge)
             xr->session_state = changed->state;
             if (changed->state == XR_SESSION_STATE_STOPPING && xr->session_running)
             {
+                IW_XRWin_Haptic(xr, 0, 0.f, 0.f);
+                IW_XRWin_Haptic(xr, 1, 0.f, 0.f);
                 xr->end_session(xr->session);
                 xr->session_running = false;
                 IW_XRBridge_SetFailure(bridge, IW_XR_RESULT_UNAVAILABLE, "OpenXR session stopped");
             }
             else if (changed->state == XR_SESSION_STATE_LOSS_PENDING)
             {
+                IW_XRWin_Haptic(xr, 0, 0.f, 0.f);
+                IW_XRWin_Haptic(xr, 1, 0.f, 0.f);
                 IW_XRBridge_SetFailure(bridge, IW_XR_RESULT_FAILED, "OpenXR session loss pending");
                 return IW_XR_RESULT_FAILED;
             }
@@ -1220,6 +1205,19 @@ static float xr_action_float(iw_xr_win_t *xr, XrAction action, XrPath hand)
     return state.currentState;
 }
 
+static qboolean xr_action_pose_active(iw_xr_win_t *xr, XrAction action, XrPath hand)
+{
+    XrActionStateGetInfo info;
+    XrActionStatePose state;
+    memset(&info, 0, sizeof(info));
+    memset(&state, 0, sizeof(state));
+    info.type = XR_TYPE_ACTION_STATE_GET_INFO;
+    info.action = action;
+    info.subactionPath = hand;
+    state.type = XR_TYPE_ACTION_STATE_POSE;
+    return xr->get_action_state_pose(xr->session, &info, &state) == XR_SUCCESS && state.isActive;
+}
+
 static void xr_action_vec2(iw_xr_win_t *xr, XrAction action, XrPath hand, float out[2])
 {
     XrActionStateGetInfo info;
@@ -1268,15 +1266,16 @@ static void xr_update_actions(iw_xr_win_t *xr)
         }
         if (xr_action_bool(xr, xr->trigger_click_action, xr->hand_paths[hand])) snapshot->trigger = 1.0f;
         if (xr_action_bool(xr, xr->grip_click_action, xr->hand_paths[hand])) snapshot->grip = 1.0f;
-        if (snapshot->trigger > 0.5f) snapshot->buttons |= XR_BUTTON_TRIGGER;
-        if (snapshot->grip > 0.5f) snapshot->buttons |= XR_BUTTON_GRIP;
-        if (xr_action_bool(xr, xr->stick_click_action, xr->hand_paths[hand])) snapshot->buttons |= XR_BUTTON_STICK;
-        if (xr_action_bool(xr, xr->primary_action, xr->hand_paths[hand])) snapshot->buttons |= XR_BUTTON_PRIMARY;
-        if (xr_action_bool(xr, xr->secondary_action, xr->hand_paths[hand])) snapshot->buttons |= XR_BUTTON_SECONDARY;
-        if (xr_action_bool(xr, xr->menu_action, xr->hand_paths[hand])) snapshot->buttons |= XR_BUTTON_MENU;
+        if (snapshot->trigger > 0.5f) snapshot->buttons |= IW_XR_BUTTON_TRIGGER;
+        if (snapshot->grip > 0.5f) snapshot->buttons |= IW_XR_BUTTON_GRIP;
+        if (xr_action_bool(xr, xr->stick_click_action, xr->hand_paths[hand])) snapshot->buttons |= IW_XR_BUTTON_STICK;
+        if (xr_action_bool(xr, xr->primary_action, xr->hand_paths[hand])) snapshot->buttons |= IW_XR_BUTTON_PRIMARY;
+        if (xr_action_bool(xr, xr->secondary_action, xr->hand_paths[hand])) snapshot->buttons |= IW_XR_BUTTON_SECONDARY;
+        if (xr_action_bool(xr, xr->menu_action, xr->hand_paths[hand])) snapshot->buttons |= IW_XR_BUTTON_MENU;
         memset(&location, 0, sizeof(location));
         location.type = XR_TYPE_SPACE_LOCATION;
-        if (xr->locate_space(xr->aim_spaces[hand], xr->space, xr->frame_state.predictedDisplayTime, &location) == XR_SUCCESS &&
+        if (xr_action_pose_active(xr, xr->aim_action, xr->hand_paths[hand]) &&
+            xr->locate_space(xr->aim_spaces[hand], xr->space, xr->frame_state.predictedDisplayTime, &location) == XR_SUCCESS &&
             (location.locationFlags & (XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT)) ==
             (XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT))
         {
@@ -1286,7 +1285,8 @@ static void xr_update_actions(iw_xr_win_t *xr)
         }
         memset(&location, 0, sizeof(location));
         location.type = XR_TYPE_SPACE_LOCATION;
-        if (xr->locate_space(xr->grip_spaces[hand], xr->space, xr->frame_state.predictedDisplayTime, &location) == XR_SUCCESS &&
+        if (xr_action_pose_active(xr, xr->grip_pose_action, xr->hand_paths[hand]) &&
+            xr->locate_space(xr->grip_spaces[hand], xr->space, xr->frame_state.predictedDisplayTime, &location) == XR_SUCCESS &&
             (location.locationFlags & (XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT)) ==
             (XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT))
         {
@@ -1305,84 +1305,35 @@ qboolean IW_XRWin_GetActions(const iw_xr_win_t *xr, iw_xr_action_snapshot_t *act
     *actions = xr->actions;
     return actions->active;
 }
-qboolean IW_XRWin_GetVirtualScreen(const iw_xr_win_t *xr, float position[3], float orientation[4], float *width, float *height) {
-    if (!xr || !xr->screen_follow_valid) return false;
-    if (position) { position[0] = xr->screen_pose.position.x; position[1] = xr->screen_pose.position.y; position[2] = xr->screen_pose.position.z; }
-    if (orientation) { orientation[0] = xr->screen_pose.orientation.x; orientation[1] = xr->screen_pose.orientation.y; orientation[2] = xr->screen_pose.orientation.z; orientation[3] = xr->screen_pose.orientation.w; }
-    if (width) *width = 2.97f * xr->screen_scale;
-    if (height) *height = 2.2275f * xr->screen_scale;
+static qboolean xr_get_virtual_screen(const iw_xr_win_t *xr, iw_xr_virtual_screen_t *screen)
+{
+    XrPosef pose;
+    if (!xr || !screen || !xr->screen_follow_valid) return false;
+    memset(screen, 0, sizeof(*screen));
+    pose = xr->screen_pose;
+    screen->width = 2.97f * xr->screen_scale;
+    screen->height = 2.2275f * xr->screen_scale;
+    screen->curved = xr->curved_screen && xr->cylinder_supported && xr->curve_radius > 1.2f;
+    screen->curve_radius = screen->curved ? xr->curve_radius : 0.f;
+    if (screen->curved) pose = xr_cylinder_pose(&xr->screen_pose, xr->curve_radius);
+    screen->position[0] = pose.position.x;
+    screen->position[1] = pose.position.y;
+    screen->position[2] = pose.position.z;
+    screen->orientation[0] = pose.orientation.x;
+    screen->orientation[1] = pose.orientation.y;
+    screen->orientation[2] = pose.orientation.z;
+    screen->orientation[3] = pose.orientation.w;
     return true;
 }
 
 qboolean IW_XRWin_RaycastVirtualScreen(const iw_xr_win_t *xr, const float origin[3], const float orientation[4], iw_xr_virtual_screen_hit_t *hit)
 {
-    XrQuaternionf ray_orientation;
-    float direction[3] = { 0.f, 0.f, -1.f }, offset[3], local_origin[3], local_direction[3], local_hit[3];
-    float width, height, distance, u, v;
-    qboolean curved;
-    if (hit) memset(hit, 0, sizeof(*hit));
-    if (!xr || !origin || !orientation || !hit || !xr->screen_follow_valid) return false;
-    ray_orientation.x = orientation[0]; ray_orientation.y = orientation[1]; ray_orientation.z = orientation[2]; ray_orientation.w = orientation[3];
-    xr_rotate3(&ray_orientation, direction, direction);
-    width = 2.97f * xr->screen_scale;
-    height = 2.2275f * xr->screen_scale;
-    curved = xr->curved_screen && xr->cylinder_supported && xr->curve_radius > 1.2f;
-    if (curved) {
-        XrPosef cylinder_pose = xr_cylinder_pose(&xr->screen_pose, xr->curve_radius);
-        float radius = xr->curve_radius, a, b, c, discriminant, t0, t1, angle, half_angle;
-        offset[0] = origin[0] - cylinder_pose.position.x;
-        offset[1] = origin[1] - cylinder_pose.position.y;
-        offset[2] = origin[2] - cylinder_pose.position.z;
-        xr_rotate_inverse3(&cylinder_pose.orientation, offset, local_origin);
-        xr_rotate_inverse3(&cylinder_pose.orientation, direction, local_direction);
-        a = local_direction[0] * local_direction[0] + local_direction[2] * local_direction[2];
-        b = 2.f * (local_origin[0] * local_direction[0] + local_origin[2] * local_direction[2]);
-        c = local_origin[0] * local_origin[0] + local_origin[2] * local_origin[2] - radius * radius;
-        discriminant = b * b - 4.f * a * c;
-        if (a < 0.00001f || discriminant < 0.f) return false;
-        t0 = (-b - sqrtf(discriminant)) / (2.f * a);
-        t1 = (-b + sqrtf(discriminant)) / (2.f * a);
-        distance = t0 > 0.0001f ? t0 : t1;
-        if (distance <= 0.0001f) return false;
-        local_hit[0] = local_origin[0] + local_direction[0] * distance;
-        local_hit[1] = local_origin[1] + local_direction[1] * distance;
-        local_hit[2] = local_origin[2] + local_direction[2] * distance;
-        angle = atan2f(local_hit[0], -local_hit[2]);
-        half_angle = width * 0.5f / radius;
-        u = 0.5f + angle / (2.f * half_angle);
-        hit->normal[0] = -local_hit[0] / radius;
-        hit->normal[1] = 0.f;
-        hit->normal[2] = -local_hit[2] / radius;
-        xr_rotate3(&cylinder_pose.orientation, local_hit, offset);
-        hit->position[0] = cylinder_pose.position.x + offset[0];
-        hit->position[1] = cylinder_pose.position.y + offset[1];
-        hit->position[2] = cylinder_pose.position.z + offset[2];
-        xr_rotate3(&cylinder_pose.orientation, hit->normal, offset);
-    } else {
-        offset[0] = origin[0] - xr->screen_pose.position.x;
-        offset[1] = origin[1] - xr->screen_pose.position.y;
-        offset[2] = origin[2] - xr->screen_pose.position.z;
-        xr_rotate_inverse3(&xr->screen_pose.orientation, offset, local_origin);
-        xr_rotate_inverse3(&xr->screen_pose.orientation, direction, local_direction);
-        if (fabsf(local_direction[2]) < 0.0001f) return false;
-        distance = -local_origin[2] / local_direction[2];
-        if (distance <= 0.0001f) return false;
-        local_hit[0] = local_origin[0] + local_direction[0] * distance;
-        local_hit[1] = local_origin[1] + local_direction[1] * distance;
-        local_hit[2] = local_origin[2] + local_direction[2] * distance;
-        u = 0.5f + local_hit[0] / width;
-        hit->normal[0] = 0.f; hit->normal[1] = 0.f; hit->normal[2] = -1.f;
-        xr_rotate3(&xr->screen_pose.orientation, local_hit, offset);
-        hit->position[0] = xr->screen_pose.position.x + offset[0];
-        hit->position[1] = xr->screen_pose.position.y + offset[1];
-        hit->position[2] = xr->screen_pose.position.z + offset[2];
-        xr_rotate3(&xr->screen_pose.orientation, hit->normal, offset);
+    iw_xr_virtual_screen_t screen;
+    if (!xr_get_virtual_screen(xr, &screen)) {
+        if (hit) memset(hit, 0, sizeof(*hit));
+        return false;
     }
-    hit->normal[0] = offset[0]; hit->normal[1] = offset[1]; hit->normal[2] = offset[2];
-    v = 0.5f - local_hit[1] / height;
-    hit->u = u; hit->v = v; hit->valid = true;
-    hit->inside = u >= 0.f && u <= 1.f && v >= 0.f && v <= 1.f;
-    return true;
+    return IW_XRVirtualScreen_Raycast(&screen, origin, orientation, hit);
 }
 void IW_XRWin_SetVirtualPointer(iw_xr_win_t *xr, const float start[3], const float hit[3], qboolean active, unsigned color, float alpha, float width)
 {
@@ -1401,7 +1352,7 @@ void IW_XRWin_Haptic(iw_xr_win_t *xr, int hand, float amplitude, float duration_
 {
     XrHapticActionInfo info;
     XrHapticVibration vibration;
-    if (!xr || hand < 0 || hand > 1 || xr->session == XR_NULL_HANDLE || xr->haptic_action == XR_NULL_HANDLE || !xr->apply_haptic_feedback)
+    if (!xr || hand < 0 || hand >= IW_XR_HAND_COUNT || xr->session == XR_NULL_HANDLE || xr->haptic_action == XR_NULL_HANDLE || !xr->apply_haptic_feedback)
         return;
     memset(&info, 0, sizeof(info));
     memset(&vibration, 0, sizeof(vibration));
@@ -1754,8 +1705,11 @@ void IW_XRWin_RequestRecenter(iw_xr_win_t *xr)
 
 void IW_XRWin_Shutdown(iw_xr_win_t *xr)
 {
+    int hand;
     if (!xr)
         return;
+    for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand)
+        IW_XRWin_Haptic(xr, hand, 0.f, 0.f);
     if (xr->frame_running)
         IW_XRWin_EndFrame(xr, false);
     if (xr->session_running && xr->end_session)
@@ -1774,7 +1728,6 @@ void IW_XRWin_Destroy(iw_xr_win_t *xr) { (void)xr; }
 iw_xr_result_t IW_XRWin_Probe(iw_xr_win_t *xr, iw_xr_bridge_t *bridge, uint64_t deadline_ns, const char **reason) { (void)xr; (void)bridge; (void)deadline_ns; if (reason) *reason = "OpenXR backend not compiled"; return IW_XR_RESULT_UNAVAILABLE; }
 iw_xr_result_t IW_XRWin_Pump(iw_xr_win_t *xr, iw_xr_bridge_t *bridge) { (void)xr; (void)bridge; return IW_XR_RESULT_UNAVAILABLE; }
 qboolean IW_XRWin_GetActions(const iw_xr_win_t *xr, iw_xr_action_snapshot_t *actions) { (void)xr; if (actions) memset(actions, 0, sizeof(*actions)); return false; }
-qboolean IW_XRWin_GetVirtualScreen(const iw_xr_win_t *xr, float position[3], float orientation[4], float *width, float *height) { (void)xr; (void)position; (void)orientation; (void)width; (void)height; return false; }
 qboolean IW_XRWin_RaycastVirtualScreen(const iw_xr_win_t *xr, const float origin[3], const float orientation[4], iw_xr_virtual_screen_hit_t *hit) { (void)xr; (void)origin; (void)orientation; if (hit) memset(hit, 0, sizeof(*hit)); return false; }
 void IW_XRWin_SetVirtualPointer(iw_xr_win_t *xr, const float start[3], const float hit[3], qboolean active, unsigned color, float alpha, float width) { (void)xr; (void)start; (void)hit; (void)active; (void)color; (void)alpha; (void)width; }
 qboolean IW_XRWin_BeginFrame(iw_xr_win_t *xr, iw_xr_frame_snapshot_t *snapshot) { (void)xr; (void)snapshot; return false; }

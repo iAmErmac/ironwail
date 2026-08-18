@@ -22,6 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #include "quakedef.h"
+#include "xr_input.h"
 #include "q_ctype.h"
 
 #define	STRINGTEMP_BUFFERS		1024
@@ -179,7 +180,7 @@ static void PF_makevectors (void)
 {
 	AngleVectors (G_VECTOR(OFS_PARM0), pr_global_struct->v_forward, pr_global_struct->v_right, pr_global_struct->v_up);
 	if (PF_UseXRControllerAim ())
-		R_GetXRControllerAim (pr_global_struct->v_forward, pr_global_struct->v_right, pr_global_struct->v_up);
+		R_GetXRMainHandWeaponPose (NULL, pr_global_struct->v_forward, pr_global_struct->v_right, pr_global_struct->v_up);
 }
 
 /*
@@ -209,7 +210,7 @@ static void PF_setorigin (void)
 
 	e = G_EDICT(OFS_PARM0);
 	org = G_VECTOR(OFS_PARM1);
-	if (!PF_IsXRLocalProjectile (e) || !R_GetXRControllerOrigin (e->v.origin))
+	if (!PF_IsXRLocalProjectile (e) || !R_GetXRMainHandWeaponPose (e->v.origin, NULL, NULL, NULL))
 		VectorCopy (org, e->v.origin);
 	SV_LinkEdict (e, false);
 }
@@ -736,7 +737,7 @@ static void PF_traceline (void)
 	if (PF_UseXRControllerAim ())
 	{
 		vec3_t controller_origin, trace_delta;
-		if (R_GetXRControllerOrigin (controller_origin))
+		if (R_GetXRMainHandWeaponPose (controller_origin, NULL, NULL, NULL))
 		{
 			VectorSubtract (v2, v1, trace_delta);
 			VectorCopy (controller_origin, v1);
@@ -1432,7 +1433,7 @@ static void PF_aim (void)
 	speed = G_FLOAT(OFS_PARM1);
 	(void) speed; /* variable set but not used */
 
-	if (!PF_UseXRControllerAim () || !R_GetXRControllerOrigin (start))
+	if (!PF_UseXRControllerAim () || !R_GetXRMainHandWeaponPose (start, NULL, NULL, NULL))
 	{
 		VectorCopy (ent->v.origin, start);
 		start[2] += 20;

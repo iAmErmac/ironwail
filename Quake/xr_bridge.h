@@ -24,6 +24,12 @@ typedef enum {
     IW_XR_RESULT_FAILED = 4
 } iw_xr_result_t;
 
+typedef enum {
+    IW_XR_HAND_LEFT = 0,
+    IW_XR_HAND_RIGHT = 1,
+    IW_XR_HAND_COUNT = 2
+} iw_xr_hand_t;
+
 typedef struct {
     float left;
     float right;
@@ -61,7 +67,7 @@ typedef struct {
 
 typedef struct {
     qboolean active;
-    iw_xr_hand_snapshot_t hand[2];
+    iw_xr_hand_snapshot_t hand[IW_XR_HAND_COUNT];
 } iw_xr_action_snapshot_t;
 
 typedef struct {

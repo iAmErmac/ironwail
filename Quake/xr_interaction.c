@@ -3,15 +3,15 @@
 #include "keys.h"
 #include "menu.h"
 #include "xr_interaction.h"
+#include "xr_input.h"
+#include "xr_action_schema.h"
 #include "json.h"
 
-extern cvar_t vr_dominant_hand;
 extern cvar_t ui_mouse;
 extern cvar_t host_timescale;
 extern double host_frametime;
 extern cvar_t vr_world_scale;
-extern qboolean R_GetXRControllerAim(vec3_t forward, vec3_t right, vec3_t up);
-extern qboolean R_GetXRControllerOrigin(vec3_t origin);
+extern cvar_t vr_teleport_beam_color, vr_teleport_beam_alpha;
 extern void R_EmitLine(const vec3_t a, const vec3_t b, uint32_t color);
 extern entity_t *CL_NewTempEntity(void);
 extern void VID_XR_Haptic(int hand, float amplitude, float duration_seconds);
@@ -48,7 +48,7 @@ static const char *xr_builtin_model_paths[] = {
 static char xr_weapon_names[16][64];
 static char xr_weapon_models[16][MAX_QPATH];
 
-static qboolean wheel_active, wheel_bind_active, keyboard_active, keyboard_trigger, keyboard_select, keyboard_caps, keyboard_trigger_suppressed, virtual_mouse_trigger, previous_main_grip, previous_offhand_grip;
+static qboolean wheel_active, wheel_bind_active, keyboard_active, keyboard_trigger, keyboard_select, keyboard_caps, keyboard_trigger_suppressed, virtual_mouse_trigger;
 static int wheel_selection = -1, keyboard_mode, wheel_hand, keyboard_row, keyboard_col, keyboard_nav_x, keyboard_nav_y, menu_scroll_direction;
 static float keyboard_x = 0.5f, keyboard_y = 0.5f, virtual_mouse_x = 0.5f, virtual_mouse_y = 0.5f, vignette_value, vignette_last_yaw;
 static qpic_t *xr_vignette_pic;
@@ -65,7 +65,7 @@ static double wheel_spin_time;
 
 static void xr_weaponwheel_reload_f(void);
 static void xr_weaponwheel_resolve_models(void);
-static int xr_dominant(void) { return vr_dominant_hand.value != 0.f ? 0 : 1; }
+static iw_xr_hand_t xr_mainhand(void) { return XR_Input_PhysicalHandForRole(XR_HAND_MAINHAND); }
 static void xr_weaponwheel_bind_down(void) { wheel_bind_active = true; }
 static void xr_weaponwheel_bind_up(void) { wheel_bind_active = false; }
 
@@ -91,11 +91,10 @@ static void xr_wheel_open(void)
     if (!xr_can_wheel() || wheel_active) return;
     xr_weaponwheel_reload_f();
     xr_weaponwheel_resolve_models();
-    if (!R_GetXRControllerOrigin(wheel_origin) || !R_GetXRControllerAim(wheel_forward, wheel_right, wheel_up)) return;
+    if (!R_GetXRMainHandWeaponPose(wheel_origin, NULL, NULL, NULL) || !R_GetXRMainHandWeaponPose(NULL, wheel_forward, wheel_right, wheel_up)) return;
     wheel_active = true;
-    wheel_hand = xr_dominant();
+    wheel_hand = xr_mainhand();
     VID_XR_Haptic(wheel_hand, 0.35f, 0.03f);
-    Con_Printf("XR weapon wheel opened on %s hand\\n", xr_dominant() == 0 ? "left" : "right");
     wheel_cursor[0] = wheel_cursor[1] = 0.f;
     wheel_selection = -1;
     if (cl.maxclients <= 1 && vr_weaponwheel_slowmo.value > 0.f && vr_weaponwheel_slowmo.value < 1.f) {
@@ -109,7 +108,7 @@ static void xr_wheel_cursor_from_pose(void)
 {
     vec3_t forward, right, up;
     float scale = sinf(DEG2RAD(CLAMP(5.f, vr_weaponwheel_deflection.value, 60.f)));
-    if (!R_GetXRControllerAim(forward, right, up) || scale <= 0.01f) return;
+    if (!R_GetXRMainHandWeaponPose(NULL, forward, right, up) || scale <= 0.01f) return;
     wheel_cursor[0] = CLAMP(-1.f, DotProduct(forward, wheel_right) / scale, 1.f);
     wheel_cursor[1] = CLAMP(-1.f, DotProduct(forward, wheel_up) / scale, 1.f);
 }
@@ -222,7 +221,7 @@ static void xr_virtual_pointer_update(const iw_xr_hand_snapshot_t *hand)
 {
     iw_xr_virtual_screen_hit_t hit;
     xr_virtual_pointer_clear();
-    if ((!vr_mouse.value && hand && hand->grip <= 0.5f && !(hand->buttons & 2u)) || !hand || !hand->aim_valid ||
+    if ((!vr_mouse.value && hand && hand->grip <= 0.5f && !(hand->buttons & IW_XR_BUTTON_GRIP)) || !hand || !hand->aim_valid ||
         !VID_XR_RaycastVirtualScreen(hand->aim_position, hand->aim_orientation, &hit) || !hit.valid)
         return;
     keyboard_x = virtual_mouse_x = hit.u;
@@ -383,41 +382,39 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
 {
     int dominant, offhand; float move, yaw_delta; qboolean grip, main_grip, trigger, menu_combo, both_grips;
     if (!actions || !actions->active) { XR_Interaction_Shutdown(); return; }
+    if (key_dest != key_game) wheel_bind_active = false;
     if (wheel_active && !xr_can_wheel()) xr_wheel_close();
-    dominant = xr_dominant(); offhand = dominant ^ 1;
-    main_grip = actions->hand[dominant].grip > 0.5f || (actions->hand[dominant].buttons & 2u) != 0;
+    dominant = XR_Input_PhysicalHandForRole(XR_HAND_MAINHAND); offhand = XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND);
+    main_grip = actions->hand[dominant].grip > 0.5f || (actions->hand[dominant].buttons & IW_XR_BUTTON_GRIP) != 0;
     grip = wheel_bind_active;
-    { qboolean offhand_grip = actions->hand[offhand].grip > 0.5f || (actions->hand[offhand].buttons & 2u) != 0;
-      if (main_grip != previous_main_grip || offhand_grip != previous_offhand_grip) Con_Printf("XR grips: main=%d offhand=%d dominant=%s\\n", main_grip, offhand_grip, dominant == 0 ? "left" : "right");
-      previous_main_grip = main_grip; previous_offhand_grip = offhand_grip; }
-    both_grips = main_grip && (actions->hand[offhand].grip > 0.5f || (actions->hand[offhand].buttons & 2u) != 0);
-    trigger = (actions->hand[1].buttons & 1u) != 0;
+    both_grips = main_grip && (actions->hand[offhand].grip > 0.5f || (actions->hand[offhand].buttons & IW_XR_BUTTON_GRIP) != 0);
+    trigger = (actions->hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) != 0;
     if (!trigger) keyboard_trigger_suppressed = false;
-    menu_combo = main_grip && (actions->hand[dominant].buttons & 16u) != 0;
+    menu_combo = main_grip && (actions->hand[dominant].buttons & IW_XR_BUTTON_SECONDARY) != 0;
     if (keyboard_active && key_dest == key_game) xr_keyboard_close();
-    if (virtual_mouse_trigger && (key_dest != key_menu || (!vr_mouse.value && actions->hand[1].grip <= 0.5f && !(actions->hand[1].buttons & 2u))) ) {
+    if (virtual_mouse_trigger && (key_dest != key_menu || (!vr_mouse.value && actions->hand[dominant].grip <= 0.5f && !(actions->hand[dominant].buttons & IW_XR_BUTTON_GRIP))) ) {
         Key_Event(K_MOUSE1, false);
         virtual_mouse_trigger = false;
     }
     if (keyboard_active) {
-        qboolean select = (actions->hand[1].buttons & 8u) != 0;
-        xr_virtual_pointer_update(&actions->hand[1]);
+        qboolean select = (actions->hand[dominant].buttons & IW_XR_BUTTON_PRIMARY) != 0;
+        xr_virtual_pointer_update(&actions->hand[dominant]);
         if (pointer_active) xr_keyboard_key_at(keyboard_x, keyboard_y, &keyboard_row, &keyboard_col);
-        xr_keyboard_navigate(&actions->hand[0]);
+        xr_keyboard_navigate(&actions->hand[offhand]);
         if (trigger && !keyboard_trigger && pointer_active) {
             xr_keyboard_press();
             if (!keyboard_active) keyboard_trigger_suppressed = true;
         } else if (select && !keyboard_select) xr_keyboard_press();
         keyboard_trigger = trigger;
         keyboard_select = select;
-        if (actions->hand[dominant].buttons & 16u) xr_keyboard_close();
+        if (actions->hand[dominant].buttons & IW_XR_BUTTON_SECONDARY) xr_keyboard_close();
     } else if (key_dest == key_menu) {
-        int scroll = actions->hand[1].stick[1] > 0.6f ? 1 : actions->hand[1].stick[1] < -0.6f ? -1 : 0;
+        int scroll = actions->hand[dominant].stick[1] > 0.6f ? 1 : actions->hand[dominant].stick[1] < -0.6f ? -1 : 0;
         if (scroll && scroll != menu_scroll_direction)
             M_Keydown(scroll > 0 ? K_MWHEELUP : K_MWHEELDOWN, false);
         menu_scroll_direction = scroll;
         if (!ui_mouse.value) Cvar_SetValueQuick(&ui_mouse, 1.f);
-        xr_virtual_pointer_update(&actions->hand[1]);
+        xr_virtual_pointer_update(&actions->hand[dominant]);
         if (pointer_active || virtual_mouse_trigger)
             M_MousemoveNormalized(CLAMP(0.f, virtual_mouse_x, 1.f), CLAMP(0.f, virtual_mouse_y, 1.f));
         if (trigger && !virtual_mouse_trigger && pointer_active) Key_Event(K_MOUSE1, true);
@@ -448,6 +445,7 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
         xr_wheel_open();
     } else {
         menu_scroll_direction = 0;
+        xr_virtual_pointer_clear();
     }
     move = sqrtf(actions->hand[offhand].stick[0] * actions->hand[offhand].stick[0] +
                  actions->hand[offhand].stick[1] * actions->hand[offhand].stick[1]);
@@ -463,7 +461,7 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
     vignette_last_yaw = cl.viewangles[YAW];
     {
         int vignette_mode = (int)CLAMP(0.f, vr_comfort_vignette.value, 2.f);
-        qboolean vignette_active = vignette_mode >= 1 && (move > 0.2f ||
+        qboolean vignette_active = vignette_mode >= 1 && (move > 0.2f || XR_Input_IsTeleportAiming() || XR_Input_IsDashing() ||
             (vignette_mode >= 2 && fabsf(yaw_delta) > 1.f));
         if (vignette_active && key_dest == key_game && !keyboard_active && !wheel_active)
                     vignette_value += (CLAMP(0.f, vr_comfort_vignette_strength.value, 1.f) - vignette_value) * (float)q_min(1.0, host_frametime * 8.0);
@@ -496,9 +494,21 @@ void XR_Interaction_AddWorldEntities(void)
 {
     vec3_t hub, cursor, slot, a, b, forward, right, up, angles;
     float worldscale, distance, radius, targetsize, biggest;
-    int i;
+    int i, teleport_rgb = 0;
+    uint32_t teleport_color;
     wheel_entity_count = 0;
-    if (!wheel_active || !R_GetXRControllerOrigin(wheel_origin) || !R_GetXRControllerAim(forward, right, up)) return;
+    sscanf(vr_teleport_beam_color.string, "%x", &teleport_rgb);
+    teleport_color = ((uint32_t)(CLAMP(0.f, vr_teleport_beam_alpha.value, 1.f) * 255.f) << 24) | ((uint32_t)(teleport_rgb & 0xff) << 16) | ((uint32_t)(teleport_rgb & 0xff00)) | ((uint32_t)((teleport_rgb >> 16) & 0xff));
+    if (XR_Input_GetTeleportAim(a, b))
+    {
+        { vec3_t previous, point, delta; int segment;
+          VectorCopy(a, previous); VectorSubtract(b, a, delta);
+          for (segment = 1; segment <= 12; ++segment) { float t = (float)segment / 12.f; VectorMA(a, t, delta, point); point[2] += 0.035f * VectorLength(delta) * (4.f * t * (1.f - t)); R_EmitLine(previous, point, teleport_color); VectorCopy(point, previous); } }
+        R_SetXRTeleportMarker(b, XR_Input_HasTeleportTarget(), teleport_color);
+    }
+    else
+        R_SetXRTeleportMarker(NULL, false, 0);
+    if (!wheel_active || !R_GetXRMainHandWeaponPose(wheel_origin, NULL, NULL, NULL) || !R_GetXRMainHandWeaponPose(NULL, forward, right, up)) return;
     worldscale = CLAMP(1.f, vr_world_scale.value, 60.f);
     distance = vr_weaponwheel_distance.value * worldscale;
     radius = vr_weaponwheel_radius.value * worldscale;
@@ -586,7 +596,7 @@ void XR_Interaction_Draw(void)
     GL_SetCanvas(CANVAS_DEFAULT);
     {
         vec3_t xr_origin;
-        if (wheel_active && !R_GetXRControllerOrigin(xr_origin)) {
+        if (wheel_active && !R_GetXRMainHandWeaponPose(xr_origin, NULL, NULL, NULL)) {
         int cx = vid.guiwidth / 2, cy = vid.guiheight / 2;
         Draw_Fill(cx - 155, cy - 155, 310, 310, 0, 0.55f);
         for (i = 0; i < (int)xr_weapon_count; ++i) {

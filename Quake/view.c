@@ -25,6 +25,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 extern void VID_XR_Haptic (int hand, float amplitude, float duration_seconds);
 #include "xr_bridge.h"
+#include "xr_input.h"
 
 /*
 
@@ -114,6 +115,9 @@ V_CalcBob
 float V_CalcBob (void)
 {
 	float	bob;
+
+    if (XR_Input_OwnsInput ())
+        return 0.f;
 	float	cycle;
 
 	if (!cl_bobcycle.value) /* Avoid divide-by-zero, don't bob */
@@ -779,6 +783,7 @@ void V_CalcRefdef (void)
 	vec3_t		forward, right, up;
 	vec3_t		angles;
 	float		bob;
+
 	static float oldz = 0;
 
 	V_DriftPitch ();
@@ -880,7 +885,7 @@ void V_CalcRefdef (void)
 //johnfitz
 
 // smooth out stair step ups
-	if (!noclip_anglehack && cl.onground && ent->origin[2] - oldz > 0) //johnfitz -- added exception for noclip
+	if (!XR_Input_OwnsInput () && !noclip_anglehack && cl.onground && ent->origin[2] - oldz > 0) //johnfitz -- added exception for noclip
 	//FIXME: noclip_anglehack is set on the server, so in a nonlocal game this won't work.
 	{
 		float steptime;

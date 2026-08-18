@@ -24,6 +24,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "xr_bridge.h"
 #include "xr_interaction.h"
+#include "xr_input.h"
 #if defined(ANDROID_GLES3)
 #include "gl_gles_ubo.h"
 #include "gl_gles_vao.h"
@@ -69,9 +70,11 @@ extern qboolean SV_BoxInPVS (vec3_t mins, vec3_t maxs, byte *pvs, mnode_t *node)
 // screen size info
 //
 refdef_t	r_refdef;
-extern cvar_t vr_world_scale, vr_player_height;
+extern cvar_t vr_world_scale, vr_player_height, vr_roomscale, vr_smooth_stairs;
 extern cvar_t vr_laser_sight, vr_laser_beam, vr_laser_color, vr_laser_beam_width, vr_laser_beam_alpha, vr_laser_alpha, vr_laser_sight_scale, vr_laser_hide_melee;
 extern qboolean VID_XR_GetActions(iw_xr_action_snapshot_t *actions);
+extern qboolean XR_Input_GetTeleportAim(vec3_t start, vec3_t target);
+
 static qboolean r_xr_eye_pass;
 static unsigned r_xr_eye_index;static GLuint r_xr_final_fbo;
 static int r_xr_final_width;
@@ -96,15 +99,24 @@ static float r_xr_recenter_yaw;
 static qboolean r_xr_recenter_to_head;
 static float r_xr_head_anchor_yaw;
 static float r_xr_game_anchor_yaw;
+static float r_xr_ipd;
 static qboolean r_xr_view_basis_valid;
 static vec3_t r_xr_forward, r_xr_right, r_xr_up;
-static vec3_t r_xr_center_vieworg;
+static vec3_t r_xr_center_vieworg, r_xr_head_anchor_position;
+static qboolean r_xr_stair_smooth_valid;
+static float r_xr_stair_smooth_z;
+static double r_xr_stair_smooth_time;
+static double r_xr_stair_ground_time;
 static qboolean r_xr_viewmodel_orientation_valid;
 static vec3_t r_xr_viewmodel_forward, r_xr_viewmodel_right, r_xr_viewmodel_up;
 static qboolean r_xr_controller_aim_valid;
 static vec3_t r_xr_controller_forward, r_xr_controller_right, r_xr_controller_up, r_xr_controller_origin;
-static qboolean r_xr_laser_valid, r_xr_pointer_valid;
-static vec3_t r_xr_laser_start, r_xr_laser_end, r_xr_pointer_start, r_xr_pointer_end;
+static qboolean r_xr_hand_tracking_valid[IW_XR_HAND_COUNT], r_xr_hand_aim_valid[IW_XR_HAND_COUNT];
+static vec3_t r_xr_hand_tracking_origin[IW_XR_HAND_COUNT], r_xr_hand_tracking_forward[IW_XR_HAND_COUNT], r_xr_hand_tracking_right[IW_XR_HAND_COUNT], r_xr_hand_tracking_up[IW_XR_HAND_COUNT];
+static vec3_t r_xr_hand_aim_origin[IW_XR_HAND_COUNT], r_xr_hand_aim_forward[IW_XR_HAND_COUNT], r_xr_hand_aim_right[IW_XR_HAND_COUNT], r_xr_hand_aim_up[IW_XR_HAND_COUNT];
+static qboolean r_xr_laser_valid, r_xr_pointer_valid, r_xr_teleport_marker_valid;
+static vec3_t r_xr_laser_start, r_xr_laser_end, r_xr_pointer_start, r_xr_pointer_end, r_xr_teleport_marker_origin;
+static uint32_t r_xr_teleport_marker_color;
 qboolean R_GetXRViewmodelMatrix (entity_t *e, float matrix[16], const vec3_t origin, unsigned char scale)
 {
 	vec3_t forward, up;
@@ -145,22 +157,57 @@ qboolean R_GetXRViewmodelMatrix (entity_t *e, float matrix[16], const vec3_t ori
 	matrix[15] = 1.f;
 	return true;
 }
-qboolean R_GetXRControllerAim (vec3_t forward, vec3_t right, vec3_t up)
+qboolean R_GetXRHandPose (iw_xr_hand_t hand, vec3_t origin, vec3_t forward, vec3_t right, vec3_t up)
 {
-	if (!r_xr_controller_aim_valid)
-		return false;
-	VectorCopy (r_xr_controller_forward, forward);
-	VectorCopy (r_xr_controller_right, right);
-	VectorCopy (r_xr_controller_up, up);
-	return true;
+    if (hand < 0 || hand >= IW_XR_HAND_COUNT || !r_xr_hand_aim_valid[hand]) return false;
+    if (origin) VectorCopy(r_xr_hand_aim_origin[hand], origin);
+    if (forward) VectorCopy(r_xr_hand_aim_forward[hand], forward);
+    if (right) VectorCopy(r_xr_hand_aim_right[hand], right);
+    if (up) VectorCopy(r_xr_hand_aim_up[hand], up);
+    return true;
 }
-qboolean R_GetXRControllerOrigin (vec3_t origin)
+
+qboolean R_GetXRHandAim (iw_xr_hand_t hand, vec3_t origin, vec3_t forward)
 {
-	if (!r_xr_controller_aim_valid)
-		return false;
-	VectorCopy (r_xr_controller_origin, origin);
-	return true;
+    return R_GetXRHandPose(hand, origin, forward, NULL, NULL);
 }
+
+qboolean R_GetXRHandTrackingPose (iw_xr_hand_t hand, vec3_t origin, vec3_t forward, vec3_t right, vec3_t up)
+{
+    if (hand < 0 || hand >= IW_XR_HAND_COUNT || !r_xr_hand_tracking_valid[hand]) return false;
+    if (origin) VectorCopy(r_xr_hand_tracking_origin[hand], origin);
+    if (forward) VectorCopy(r_xr_hand_tracking_forward[hand], forward);
+    if (right) VectorCopy(r_xr_hand_tracking_right[hand], right);
+    if (up) VectorCopy(r_xr_hand_tracking_up[hand], up);
+    return true;
+}
+
+qboolean R_GetXRHandAimPose (iw_xr_hand_t hand, vec3_t origin, vec3_t forward, vec3_t right, vec3_t up)
+{
+    return R_GetXRHandPose(hand, origin, forward, right, up);
+}
+
+qboolean R_GetXRMainHandWeaponPose (vec3_t origin, vec3_t forward, vec3_t right, vec3_t up)
+{
+    if (!r_xr_controller_aim_valid)
+        return false;
+    if (origin) VectorCopy(r_xr_controller_origin, origin);
+    if (forward) VectorCopy(r_xr_controller_forward, forward);
+    if (right) VectorCopy(r_xr_controller_right, right);
+    if (up) VectorCopy(r_xr_controller_up, up);
+    return true;
+}
+
+void R_SetXRTeleportMarker (const vec3_t origin, qboolean active, uint32_t color)
+{
+	r_xr_teleport_marker_valid = active;
+	if (active && origin) { VectorCopy (origin, r_xr_teleport_marker_origin); r_xr_teleport_marker_color = color; }
+}
+static void R_XRToQuakePosition (const float xr[3], float quake[3]);
+static void R_XRRotateYaw (float vector[3], float yaw);
+static void R_XRRotateOrientation (const float orientation[4], const float in[3], float out[3]);
+
+
 static uint32_t R_XRLaserColor (float alpha)
 {
 	const char *s = vr_laser_color.string;
@@ -203,7 +250,7 @@ static void R_XRPrepareLaser (void)
 	if (r_xr_eye_index != 0)
 		return;
 	r_xr_laser_valid = false;
-	if (!r_xr_controller_aim_valid || (!vr_laser_sight.value && !vr_laser_beam.value) || R_XRLaserHiddenForMelee ())
+    if (!r_xr_controller_aim_valid || (!vr_laser_sight.value && !vr_laser_beam.value) || R_XRLaserHiddenForMelee ())
 		return;
 	VectorCopy (r_xr_controller_origin, r_xr_laser_start);
 	VectorMA (r_xr_laser_start, 8192.f, r_xr_controller_forward, target);
@@ -274,6 +321,16 @@ qboolean R_GetXRCanvasOffset (float *x, float *y)
 	*y = -(top + bottom) / (top - bottom);
 	return true;
 }
+float R_GetXRMessageOffset (void)
+{
+	float left, right;
+	if (!r_xr_eye_pass || r_xr_ipd <= 0.f)
+		return 0.f;
+	left = tanf (r_xr_fov.left);
+	 right = tanf (r_xr_fov.right);
+	return (r_xr_eye_index == 0 ? 1.f : -1.f) * r_xr_ipd * 160.f / (0.1f * (right - left));
+}
+
 
 
 void R_XRRecenter (void)
@@ -299,6 +356,19 @@ void R_XRAdjustYaw (float delta)
 	if (r_xr_head_anchor_valid)
 		r_xr_game_anchor_yaw += delta;
 }
+static void R_XRToQuakePosition (const float xr[3], float quake[3]);
+static void R_XRRotateYaw (float vector[3], float yaw);
+qboolean R_XRTransformRoomscaleDelta (const float xr[3], float quake[3])
+{
+    float yaw;
+    if (!xr || !quake)
+        return false;
+    R_XRToQuakePosition (xr, quake);
+    yaw = r_xr_head_anchor_valid ? r_xr_game_anchor_yaw - r_xr_head_anchor_yaw : cl.viewangles[YAW];
+    R_XRRotateYaw (quake, yaw);
+    return true;
+}
+
 
 static void R_XRToQuakePosition (const float xr[3], float quake[3]);
 
@@ -364,9 +434,10 @@ static void R_XRHeadAngles (const iw_xr_view_t *view, float *pitch, float *yaw, 
 }
 static void R_XRToQuakePosition (const float xr[3], float quake[3])
 {
-	quake[0] = -xr[2];
-	quake[1] = -xr[0];
-	quake[2] = xr[1];
+	float x = xr[0], y = xr[1], z = xr[2];
+	quake[0] = -z;
+	quake[1] = -x;
+	quake[2] = y;
 }
 
 static void R_XRRotateYaw (float vector[3], float yaw)
@@ -1775,6 +1846,22 @@ static void R_XRDrawLaserBeam (void)
 		glDrawElements (GL_TRIANGLES, countof (idx), GL_UNSIGNED_SHORT, ofs);
 	}
 }
+static void R_XRDrawTeleportMarker (void)
+{
+    debugvert_t verts[32]; uint16_t idx[96]; GLuint buf; GLbyte *ofs; int i;
+    const float outer_radius = 13.333f, inner_radius = 12.833f;
+    if (!r_xr_teleport_marker_valid) return;
+    for (i = 0; i < 16; ++i) { float a = (float)i * 2.f * (float)M_PI / 16.f; int next = (i + 1) % 16; VectorCopy(r_xr_teleport_marker_origin, verts[i * 2].pos); VectorCopy(r_xr_teleport_marker_origin, verts[i * 2 + 1].pos); verts[i * 2].pos[0] += cosf(a) * outer_radius; verts[i * 2].pos[1] += sinf(a) * outer_radius; verts[i * 2 + 1].pos[0] += cosf(a) * inner_radius; verts[i * 2 + 1].pos[1] += sinf(a) * inner_radius; verts[i * 2].pos[2] += 0.15f; verts[i * 2 + 1].pos[2] += 0.15f; verts[i * 2].color = verts[i * 2 + 1].color = r_xr_teleport_marker_color; idx[i * 6] = (uint16_t)(i * 2); idx[i * 6 + 1] = (uint16_t)(next * 2); idx[i * 6 + 2] = (uint16_t)(i * 2 + 1); idx[i * 6 + 3] = (uint16_t)(i * 2 + 1); idx[i * 6 + 4] = (uint16_t)(next * 2); idx[i * 6 + 5] = (uint16_t)(next * 2 + 1); }
+    GL_UseProgram(glprogs.debug3d); GL_SetState(GLS_BLEND_ALPHA | GLS_NO_ZWRITE | GLS_CULL_NONE | GLS_ATTRIBS(2)); GL_UploadTransient(GL_ARRAY_BUFFER, verts, sizeof(verts), buf, ofs, "xr teleport marker"); GL_BindBuffer(GL_ARRAY_BUFFER, buf);
+#if defined(ANDROID_GLES3)
+    GLESVAO_BindDynamic();
+#endif
+    GL_VertexAttribPointerFunc(0, 3, GL_FLOAT, GL_FALSE, sizeof(verts[0]), ofs + offsetof(debugvert_t, pos)); GL_VertexAttribPointerFunc(1, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(verts[0]), ofs + offsetof(debugvert_t, color));
+#if defined(ANDROID_GLES3)
+    GLESVAO_UseLayout(GLES_LAYOUT_DEBUG, "xr teleport marker", buf, buf, GL_UNSIGNED_SHORT);
+#endif
+    GL_UploadTransient(GL_ELEMENT_ARRAY_BUFFER, idx, sizeof(idx), buf, ofs, "xr teleport marker"); GL_BindBuffer(GL_ELEMENT_ARRAY_BUFFER, buf); GL_PerfCountDraws(1); glDrawElements(GL_TRIANGLES, countof(idx), GL_UNSIGNED_SHORT, ofs);
+}
 /*
 ================
 R_EmitLine
@@ -2480,7 +2567,8 @@ void R_RenderScene (void)
 	R_EndTranslucency ();
 
 	R_DrawViewModel (); //johnfitz -- moved here from R_RenderView -- il8r -- moved for oit reasons
-	R_XRDrawLaserBeam ();
+R_XRDrawLaserBeam ();
+	R_XRDrawTeleportMarker ();
 
 	R_FlushDebugGeometry ();
 
@@ -2584,7 +2672,6 @@ void R_WarpScaleView (void)
 R_RenderView
 ================
 */
-extern cvar_t vr_dominant_hand;
 extern cvar_t vr_stabilize_mode;
 extern cvar_t vr_weapon_pitch, vr_weapon_xoffset, vr_weapon_yoffset, vr_weapon_zoffset;
 
@@ -2623,6 +2710,30 @@ static void R_XRWeaponAngles(const float forward[3], const float right[3], const
 	R_XRNormalizeAngles(&angles[PITCH], &angles[YAW], &angles[ROLL]);
 }
 
+static void R_XRTransformHandPose(const iw_xr_frame_snapshot_t *snapshot, const float position_xr[3], const float orientation_xr[4], vec3_t origin, vec3_t forward, vec3_t right, vec3_t up)
+{
+    const float xr_forward[3] = {0.f, 0.f, -1.f};
+    const float xr_right[3] = {1.f, 0.f, 0.f};
+    const float xr_up[3] = {0.f, 1.f, 0.f};
+    float delta_xr[3], delta[3], rotated[3];
+    float yaw = r_xr_game_anchor_yaw - r_xr_head_anchor_yaw;
+    delta_xr[0] = position_xr[0] - 0.5f * (snapshot->views[0].position[0] + snapshot->views[1].position[0]);
+    delta_xr[1] = position_xr[1] - 0.5f * (snapshot->views[0].position[1] + snapshot->views[1].position[1]);
+    delta_xr[2] = position_xr[2] - 0.5f * (snapshot->views[0].position[2] + snapshot->views[1].position[2]);
+    R_XRToQuakePosition(delta_xr, delta);
+    R_XRRotateYaw(delta, yaw);
+    VectorMA(r_xr_center_vieworg, vr_world_scale.value, delta, origin);
+    R_XRRotateOrientation(orientation_xr, xr_forward, rotated);
+    R_XRToQuakePosition(rotated, forward);
+    R_XRRotateYaw(forward, yaw);
+    R_XRRotateOrientation(orientation_xr, xr_right, rotated);
+    R_XRToQuakePosition(rotated, right);
+    R_XRRotateYaw(right, yaw);
+    R_XRRotateOrientation(orientation_xr, xr_up, rotated);
+    R_XRToQuakePosition(rotated, up);
+    R_XRRotateYaw(up, yaw);
+}
+
 static void R_XRApplyWeaponPose(const iw_xr_frame_snapshot_t *snapshot)
 {
 	const float xr_forward[3] = { 0.f, 0.f, -1.f };
@@ -2636,10 +2747,29 @@ static void R_XRApplyWeaponPose(const iw_xr_frame_snapshot_t *snapshot)
 	const float *hand_position, *hand_orientation, *offhand_position;
 
 	r_xr_controller_aim_valid = false;
+	memset (r_xr_hand_aim_valid, 0, sizeof (r_xr_hand_aim_valid));
+    memset (r_xr_hand_tracking_valid, 0, sizeof (r_xr_hand_tracking_valid));
 	if (!snapshot || !VID_XR_GetActions(&actions))
 		return;
-	dominant = vr_dominant_hand.value != 0 ? 0 : 1;
-	offhand = dominant ^ 1;
+	{
+		int i;
+		for (i = 0; i < IW_XR_HAND_COUNT; ++i)
+		{
+			iw_xr_hand_snapshot_t *h = &actions.hand[i];
+			if (h->grip_valid)
+			{
+				R_XRTransformHandPose(snapshot, h->grip_position, h->grip_orientation, r_xr_hand_tracking_origin[i], r_xr_hand_tracking_forward[i], r_xr_hand_tracking_right[i], r_xr_hand_tracking_up[i]);
+				r_xr_hand_tracking_valid[i] = true;
+			}
+			if (h->aim_valid)
+			{
+				R_XRTransformHandPose(snapshot, h->aim_position, h->aim_orientation, r_xr_hand_aim_origin[i], r_xr_hand_aim_forward[i], r_xr_hand_aim_right[i], r_xr_hand_aim_up[i]);
+				r_xr_hand_aim_valid[i] = true;
+			}
+		}
+	}
+	dominant = XR_Input_PhysicalHandForRole(XR_HAND_MAINHAND);
+    offhand = XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND);
 	hand = &actions.hand[dominant];
 	if (!hand->grip_valid && !hand->aim_valid)
 		return;
@@ -2666,7 +2796,7 @@ static void R_XRApplyWeaponPose(const iw_xr_frame_snapshot_t *snapshot)
 
 	R_XRRotateOrientation(hand_orientation, xr_forward, forward_xr);
 	VectorCopy(forward_xr, dominant_forward_xr);
-	if (vr_stabilize_mode.value != 0 && (actions.hand[offhand].grip_valid || actions.hand[offhand].aim_valid) && (actions.hand[dominant].grip > 0.5f || (actions.hand[dominant].buttons & 2u)) && (actions.hand[offhand].grip > 0.5f || (actions.hand[offhand].buttons & 2u)))
+	if (vr_stabilize_mode.value != 0 && (actions.hand[offhand].grip_valid || actions.hand[offhand].aim_valid) && (actions.hand[dominant].grip > 0.5f || (actions.hand[dominant].buttons & IW_XR_BUTTON_GRIP)) && (actions.hand[offhand].grip > 0.5f || (actions.hand[offhand].buttons & IW_XR_BUTTON_GRIP)))
 	{
 		float dx = offhand_position[0] - hand_position[0];
 		float dy = offhand_position[1] - hand_position[1];
@@ -2776,6 +2906,10 @@ void R_SetXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye)
 			r_xr_sync_player_yaw = false;
 		}
 		r_xr_head_anchor_yaw = head_yaw;
+
+		r_xr_head_anchor_position[0] = 0.5f * (snapshot->views[0].position[0] + snapshot->views[1].position[0]);
+		r_xr_head_anchor_position[1] = 0.5f * (snapshot->views[0].position[1] + snapshot->views[1].position[1]);
+		r_xr_head_anchor_position[2] = 0.5f * (snapshot->views[0].position[2] + snapshot->views[1].position[2]);
 		r_xr_game_anchor_yaw = r_refdef.viewangles[YAW];
 		r_xr_head_anchor_valid = true;
 	}
@@ -2792,16 +2926,49 @@ void R_SetXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye)
 	r_xr_view_basis_valid = true;
 
 	r_refdef.viewangles[YAW] = r_xr_game_anchor_yaw + (head_yaw - r_xr_head_anchor_yaw);
+
+	cl.viewangles[YAW] = r_refdef.viewangles[YAW];
 	r_refdef.viewangles[PITCH] = head_pitch;
 	r_refdef.viewangles[ROLL] = head_roll;
 
 	r_refdef.vieworg[2] += (CLAMP (0.5f, vr_player_height.value, 2.5f) - cl.viewheight / q_max (vr_world_scale.value, 0.01f)) * vr_world_scale.value;
+	if (vr_roomscale.value != 0.f && sv.active && svs.maxclients == 1 &&
+		svs.clients[0].active && svs.clients[0].edict && cl.viewentity > 0 && cl.viewentity < cl.num_entities)
+	{
+		vec3_t server_delta;
+		VectorSubtract (svs.clients[0].edict->v.origin, cl_entities[cl.viewentity].origin, server_delta);
+		VectorAdd (r_refdef.vieworg, server_delta, r_refdef.vieworg);
+	}
+	if (cl.onground)
+		r_xr_stair_ground_time = cl.time;
+	if (vr_smooth_stairs.value == 0.f || cl.time - r_xr_stair_ground_time > 0.12)
+	{
+		r_xr_stair_smooth_z = r_refdef.vieworg[2];
+		r_xr_stair_smooth_time = cl.time;
+		r_xr_stair_smooth_valid = true;
+	}
+	else if (!r_xr_stair_smooth_valid)
+	{
+		r_xr_stair_smooth_z = r_refdef.vieworg[2];
+		r_xr_stair_smooth_time = cl.time;
+		r_xr_stair_smooth_valid = true;
+	}
+	else
+	{
+		double stair_dt = CLAMP (0.0, cl.time - r_xr_stair_smooth_time, 0.1);
+		r_xr_stair_smooth_time = cl.time;
+		if (r_xr_stair_smooth_z < r_refdef.vieworg[2])
+			r_xr_stair_smooth_z = CLAMP (r_refdef.vieworg[2] - 18.f, r_xr_stair_smooth_z + (float)stair_dt * 160.f, r_refdef.vieworg[2]);
+		else if (r_xr_stair_smooth_z > r_refdef.vieworg[2])
+			r_xr_stair_smooth_z = CLAMP (r_refdef.vieworg[2], r_xr_stair_smooth_z - (float)stair_dt * 160.f, r_refdef.vieworg[2] + 18.f);
+		r_refdef.vieworg[2] = r_xr_stair_smooth_z;
+	}
 	VectorCopy (r_refdef.vieworg, r_xr_center_vieworg);
-
 	dx = snapshot->views[1].position[0] - snapshot->views[0].position[0];
 	dy = snapshot->views[1].position[1] - snapshot->views[0].position[1];
 	dz = snapshot->views[1].position[2] - snapshot->views[0].position[2];
 	ipd = sqrtf (dx * dx + dy * dy + dz * dz);
+	r_xr_ipd = ipd;
 	separation = vr_world_scale.value * ipd * (0.5f - (float)eye);
 	VectorMA (r_refdef.vieworg, -separation, r_xr_right, r_refdef.vieworg);
 

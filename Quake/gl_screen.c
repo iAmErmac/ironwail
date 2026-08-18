@@ -24,6 +24,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // screen.c -- master for refresh, status bar, console, chat, notify, etc
 
 #include "quakedef.h"
+#include "xr_input.h"
+extern void VID_XR_Pump (void);
 #include "steam.h"
 #include "xr_interaction.h"
 #include <time.h>
@@ -268,7 +270,7 @@ static void SCR_DrawCenterStringBG (int y, float alpha)
 	{
 	case 1:
 		len = (scr_center_maxcols + 3) & ~1;
-		x = (320 - len * 8) / 2;
+		x = (320 - len * 8) / 2 + (int)R_GetXRMessageOffset ();
 		GL_PushCanvasColor (1.f, 1.f, 1.f, alpha * scr_menubgalpha.value);
 		M_DrawTextBox (x - 8, y - 12, len, lines + 1);
 		GL_PopCanvasColor ();
@@ -276,7 +278,7 @@ static void SCR_DrawCenterStringBG (int y, float alpha)
 
 	case 2:
 		len = scr_center_maxcols + 2;
-		x = (320 - len* 8) / 2;
+		x = (320 - len* 8) / 2 + (int)R_GetXRMessageOffset ();
 		Draw_PartialFadeScreen (x, x + len * 8, y - 4, y + lines * 8 + 4, alpha);
 		break;
 
@@ -336,7 +338,8 @@ void SCR_DrawCenterString (void) //actually do the drawing
 		for (l=0 ; start[l] ; l++)
 			if (start[l] == '\n')
 				break;
-		x = (320 - l*8)/2;	//johnfitz -- 320x200 coordinate system
+		x = (320 - l*8)/2 + (int)R_GetXRMessageOffset ();
+        //johnfitz -- 320x200 coordinate system
 		for (j=0 ; j<l ; j++, x+=8)
 		{
 			Draw_Character (x, y, start[j]);	//johnfitz -- stretch overlays
@@ -2022,7 +2025,6 @@ int SCR_ModalMessage (const char *text, float timeout) //johnfitz -- timeout
 // draw a fresh screen
 	scr_drawdialog = true;
 	SCR_UpdateScreen ();
-	scr_drawdialog = false;
 
 	S_ClearBuffer ();		// so dma doesn't loop current sound
 
@@ -2030,9 +2032,13 @@ int SCR_ModalMessage (const char *text, float timeout) //johnfitz -- timeout
 	time2 = 0.0f; //johnfitz -- timeout
 
 	Key_BeginInputGrab ();
+	XR_Input_PrepareInputGrab ();
 	do
 	{
 		Sys_SendKeyEvents ();
+		VID_XR_Pump ();
+		XR_Input_Update ();
+		SCR_UpdateScreen ();
 		Key_GetGrabbedInput (&lastkey, &lastchar);
 		Sys_Sleep (16);
 		if (timeout) time2 = Sys_DoubleTime (); //johnfitz -- zero timeout means wait forever.
@@ -2045,6 +2051,7 @@ int SCR_ModalMessage (const char *text, float timeout) //johnfitz -- timeout
 		 lastkey != K_MOUSE4 &&
 		 time2 <= time1);
 	Key_EndInputGrab ();
+	scr_drawdialog = false;
 
 //	SCR_UpdateScreen (); //johnfitz -- commented out
 

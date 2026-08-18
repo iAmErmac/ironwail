@@ -91,7 +91,7 @@ extern cvar_t vr_screen_scale;
 extern cvar_t vr_mouse, vr_mouse_color, vr_mouse_alpha, vr_aim_beam, vr_aim_beam_width;
 extern cvar_t vr_screen_distance, vr_screen_follow;
 extern cvar_t vr_desktop_mirror;
-extern cvar_t vr_world_scale;
+extern cvar_t vr_world_scale, vr_roomscale, vr_teleport, vr_teleport_range, vr_teleport_speed, vr_teleport_auto_jump, vr_teleport_beam_alpha, vr_teleport_beam_color;
 extern cvar_t vr_hud_scale;
 extern cvar_t vr_hud_size;
 extern cvar_t vr_hud_distance;
@@ -102,7 +102,7 @@ extern cvar_t vr_laser_sight, vr_laser_beam, vr_laser_color, vr_laser_beam_width
 extern cvar_t vr_turn_mode;
 extern cvar_t vr_turn_angle;
 extern cvar_t vr_dominant_hand, vr_stabilize_mode;
-extern cvar_t vr_move_deadzone, vr_turn_deadzone, vr_haptic_intensity, vr_comfort_vignette, vr_comfort_vignette_strength;
+extern cvar_t vr_move_deadzone, vr_turn_deadzone, vr_haptic_intensity, vr_comfort_vignette, vr_comfort_vignette_strength, vr_player_speed, vr_smooth_stairs;
 
 extern char crosshair_char;
 
@@ -3139,6 +3139,8 @@ void M_Menu_Gamepad_f (void)
 		item (VR_OPT_LASER, "Laser Sight")				\
 		item (VR_OPT_MIRROR, "Desktop Mirror")					\
 		item (VR_OPT_WORLD_SCALE, "World Scale")					\
+        item (VR_OPT_PLAYER_SPEED, "Player Speed")                 \
+        item (VR_OPT_SMOOTH_STAIRS, "Smooth Stairs")              \
 		item (VR_OPT_CONTROLLER_SCHEME, "Controller Scheme")			\
 		item (VR_OPT_TWO_HANDED, "Two Handed Weapon")				\
 		item (VR_OPT_TURN_MODE, "Turn Mode")					\
@@ -3147,6 +3149,10 @@ void M_Menu_Gamepad_f (void)
 		item (VR_OPT_TURN_DEADZONE, "Turn Deadzone Adjust")			\
 		item (VR_OPT_COMFORT_VIGNETTE, "Comfort Vignette")                \
 		item (VR_OPT_VIGNETTE_STRENGTH, "Vignette Strength")        \
+		item (VR_OPT_ROOMSCALE, "Roomscale Movement")                \
+		item (VR_OPT_TELEPORT, "Teleport Movement")                 \
+		item (VR_OPT_TELEPORT_AUTO_JUMP, "Teleport Auto Jump")        \
+		item (VR_OPT_TELEPORT_BEAM_ALPHA, "Teleport Beam Alpha")      \
 		item (VR_OPT_HAPTIC, "Haptic Intensity")                \
 		item (SPACER, "")									\
 		item (VR_OPT_RESET, "Reset Defaults")									\
@@ -3640,6 +3646,15 @@ static void M_VR_ResetOptions (void)
 	Cvar_SetValueQuick (&vr_render_scale, 1.f);
 	Cvar_SetValueQuick (&vr_desktop_mirror, 1.f);
 	Cvar_SetValueQuick (&vr_world_scale, 33.5f);
+    Cvar_SetValueQuick (&vr_player_speed, 100.f);
+    Cvar_SetValueQuick (&vr_smooth_stairs, 1.f);
+	Cvar_SetValueQuick (&vr_roomscale, 1.f);
+	Cvar_SetValueQuick (&vr_teleport, 0.f);
+	Cvar_SetValueQuick (&vr_teleport_range, 400.f);
+	Cvar_SetValueQuick (&vr_teleport_speed, 1600.f);
+	Cvar_SetValueQuick (&vr_teleport_auto_jump, 0.f);
+	Cvar_SetValueQuick (&vr_teleport_beam_alpha, 0.6f);
+	Cvar_Set ("vr_teleport_beam_color", "00FFFF");
 	Cvar_SetValueQuick (&vr_dominant_hand, 0.f);
 	Cvar_SetValueQuick (&vr_stabilize_mode, 1.f);
 	Cvar_SetValueQuick (&vr_move_deadzone, 0.20f);
@@ -3670,7 +3685,7 @@ static void M_VR_ResetHUD (void)
 	Cvar_SetValueQuick (&vr_hud_scale, 0.7f);
 	Cvar_SetValueQuick (&vr_hud_distance, 0.5f);
 	Cvar_SetValueQuick (&vr_hud_yoffset, 0.f);
-    Cvar_SetValueQuick (&vr_hud_render_yoffset, 0.f);
+    Cvar_SetValueQuick (&vr_hud_render_yoffset, -0.1f);
 }
 
 static void M_VR_ResetLaser (void)
@@ -3760,6 +3775,24 @@ void M_AdjustSliders (int dir)
 		break;
 	case VR_OPT_WORLD_SCALE:
 		Cvar_SetValueQuick (&vr_world_scale, CLAMP (10.f, vr_world_scale.value + dir * 0.01f, 100.f));
+		break;
+	case VR_OPT_PLAYER_SPEED:
+		Cvar_SetValueQuick (&vr_player_speed, CLAMP (0.f, vr_player_speed.value + dir * 10.f, 300.f));
+		break;
+	case VR_OPT_SMOOTH_STAIRS:
+		Cvar_SetValueQuick (&vr_smooth_stairs, !vr_smooth_stairs.value);
+		break;
+	case VR_OPT_ROOMSCALE:
+		Cvar_SetValueQuick (&vr_roomscale, !vr_roomscale.value);
+		break;
+	case VR_OPT_TELEPORT:
+		Cvar_SetValueQuick (&vr_teleport, !vr_teleport.value);
+		break;
+	case VR_OPT_TELEPORT_AUTO_JUMP:
+		Cvar_SetValueQuick (&vr_teleport_auto_jump, !vr_teleport_auto_jump.value);
+		break;
+	case VR_OPT_TELEPORT_BEAM_ALPHA:
+		Cvar_SetValueQuick (&vr_teleport_beam_alpha, CLAMP (0.f, vr_teleport_beam_alpha.value + dir * 0.05f, 1.f));
 		break;
 	case VR_OPT_CONTROLLER_SCHEME:
 		Cvar_SetValueQuick (&vr_dominant_hand, !vr_dominant_hand.value);
@@ -4273,6 +4306,9 @@ qboolean M_SetSliderValue (int option, float f)
 	case VR_OPT_WORLD_SCALE:
 		Cvar_SetValueQuick (&vr_world_scale, 10.f + f * 90.f);
 		return true;
+	case VR_OPT_PLAYER_SPEED:
+		Cvar_SetValueQuick (&vr_player_speed, f * 300.f);
+		return true;
 	case VR_OPT_TURN_ANGLE:
 		Cvar_SetValueQuick (&vr_turn_angle, 1.f + f * 89.f);
 		return true;
@@ -4284,6 +4320,9 @@ qboolean M_SetSliderValue (int option, float f)
 		return true;
 	case VR_OPT_VIGNETTE_STRENGTH:
 		Cvar_SetValueQuick (&vr_comfort_vignette_strength, f);
+		return true;
+	case VR_OPT_TELEPORT_BEAM_ALPHA:
+		Cvar_SetValueQuick (&vr_teleport_beam_alpha, f);
 		return true;
 	case VR_OPT_HAPTIC:
 		Cvar_SetValueQuick (&vr_haptic_intensity, f);
@@ -4548,8 +4587,26 @@ static void M_Options_DrawItem (int y, int item)
 	case VR_OPT_MIRROR:
 		M_DrawCheckbox (x, y, vr_desktop_mirror.value);
 		break;
+	case VR_OPT_ROOMSCALE:
+		M_DrawCheckbox (x, y, vr_roomscale.value);
+		break;
+	case VR_OPT_TELEPORT:
+		M_DrawCheckbox (x, y, vr_teleport.value);
+		break;
+	case VR_OPT_TELEPORT_AUTO_JUMP:
+		M_DrawCheckbox (x, y, vr_teleport_auto_jump.value);
+		break;
+	case VR_OPT_TELEPORT_BEAM_ALPHA:
+		M_DrawSlider (x, y, vr_teleport_beam_alpha.value, va ("%.2f", vr_teleport_beam_alpha.value));
+		break;
 	case VR_OPT_WORLD_SCALE:
 		M_DrawSlider (x, y, (vr_world_scale.value - 10.f) / 90.f, va ("%.2f", vr_world_scale.value));
+		break;
+	case VR_OPT_PLAYER_SPEED:
+		M_DrawSlider (x, y, vr_player_speed.value / 300.f, va ("%.0f", vr_player_speed.value));
+		break;
+	case VR_OPT_SMOOTH_STAIRS:
+		M_DrawCheckbox (x, y, vr_smooth_stairs.value);
 		break;
 	case VR_OPT_TURN_MODE:
 		M_Print (x, y, vr_turn_mode.value ? "Smooth Turn" : "Snap Turn");

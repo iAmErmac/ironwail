@@ -961,6 +961,7 @@ void Host_ServerFrame (void)
 	SV_RunClients ();
 
 // move things around and think
+	XR_Input_ApplyDash ();
 // always pause in single player if in console or menus
 	if (!sv.paused && (svs.maxclients > 1 || key_dest == key_game) )
 		SV_Physics ();
@@ -1251,20 +1252,24 @@ void _Host_Frame (double time)
 	CL_AccumulateCmd ();
 
 	//Run the server+networking (client->server->client), at a different rate from everyt
-	if (accumtime >= host_netinterval)
 	{
-		float realframetime = host_frametime;
-		if (host_netinterval)
+		qboolean xr_roomscale_frame = sv.active && svs.maxclients == 1 && XR_Input_UsesRoomscale ();
+		if (xr_roomscale_frame)
+			accumtime = 0.0;
+		if (xr_roomscale_frame || accumtime >= host_netinterval)
 		{
-			host_frametime = q_max(accumtime, (double)host_netinterval);
-			accumtime -= host_frametime;
-			if (host_timescale.value > 0)
-				host_frametime *= host_timescale.value;
-			else if (host_framerate.value)
-				host_frametime = host_framerate.value;
-		}
-		else
-			accumtime -= host_netinterval;
+			float realframetime = host_frametime;
+			if (host_netinterval && !xr_roomscale_frame)
+			{
+				host_frametime = q_max(accumtime, (double)host_netinterval);
+				accumtime -= host_frametime;
+				if (host_timescale.value > 0)
+					host_frametime *= host_timescale.value;
+				else if (host_framerate.value)
+					host_frametime = host_framerate.value;
+			}
+			else if (!xr_roomscale_frame)
+				accumtime -= host_netinterval;
 		CL_SendCmd ();
 		if (sv.active)
 		{
@@ -1275,6 +1280,7 @@ void _Host_Frame (double time)
 		host_frametime = realframetime;
 		Cbuf_Waited();
 		ranserver = true;
+	}
 	}
 
 // fetch results from server
