@@ -40,6 +40,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #if defined(ANDROID_GLES3)
 #include <dlfcn.h>
 #include "android_gles.h"
+#include "android_lifecycle.h"
 #include "android_render_target.h"
 #include "gl_gles_vao.h"
 #include "gl_gles_stream.h"
@@ -207,28 +208,48 @@ static void VID_XRRetry_f (void)
         IW_XRBridge_State (vid_xr_bridge), IW_XRBridge_FailureReason (vid_xr_bridge));
 }
 
+#if defined(ANDROID_GLES3)
+qboolean VID_XR_GetActions(iw_xr_action_snapshot_t *actions) { return IW_Android_GetXRActions(actions); }
+#else
 qboolean VID_XR_GetActions(iw_xr_action_snapshot_t *actions)
 {
     return vid_xr_backend && vid_xr_bridge && IW_XRBridge_OwnsInput(vid_xr_bridge) &&
         IW_XRWin_GetActions(vid_xr_backend, actions);
 }
+#endif
 extern cvar_t vr_haptic_intensity;
+#if defined(ANDROID_GLES3)
+void VID_XR_Haptic(int hand, float amplitude, float duration_seconds) { IW_Android_Haptic(hand, amplitude, duration_seconds); }
+#else
 void VID_XR_Haptic(int hand, float amplitude, float duration_seconds)
 {
     if (vid_xr_backend && vid_xr_bridge && (IW_XRBridge_OwnsInput(vid_xr_bridge) || amplitude <= 0.f))
         IW_XRWin_Haptic(vid_xr_backend, hand, amplitude * CLAMP(0.f, vr_haptic_intensity.value, 1.f), duration_seconds);
 }
+#endif
 
 qboolean VID_XR_RaycastVirtualScreen(const float origin[3], const float orientation[4], iw_xr_virtual_screen_hit_t *hit)
 {
+#if defined(ANDROID_GLES3)
+    return IW_Android_RaycastVirtualScreen(origin, orientation, hit);
+#else
     return vid_xr_backend && IW_XRWin_RaycastVirtualScreen(vid_xr_backend, origin, orientation, hit);
+#endif
 }
 void VID_XR_SetVirtualPointer(const float start[3], const float hit[3], qboolean active, unsigned color, float alpha, float width)
 {
-    if (vid_xr_backend)
-        IW_XRWin_SetVirtualPointer(vid_xr_backend, start, hit, active, color, alpha, width);
+#if defined(ANDROID_GLES3)
+    IW_Android_SetVirtualPointer(start, hit, active, color, alpha, width);
+#else
+    if (vid_xr_backend) IW_XRWin_SetVirtualPointer(vid_xr_backend, start, hit, active, color, alpha, width);
+#endif
 }
-
+#if defined(ANDROID_GLES3)
+qboolean VID_XR_GetHeadPosition(float position[3])
+{
+    return IW_Android_GetXRHeadPosition(position);
+}
+#else
 qboolean VID_XR_GetHeadPosition(float position[3])
 {
     const iw_xr_frame_snapshot_t *snapshot;
@@ -240,22 +261,65 @@ qboolean VID_XR_GetHeadPosition(float position[3])
     position[2] = 0.5f * (snapshot->views[0].position[2] + snapshot->views[1].position[2]);
     return true;
 }
+#endif
+#if defined(ANDROID_GLES3)
+qboolean VID_XR_GetStereoFrame(const iw_xr_frame_snapshot_t **snapshot)
+{
+    const iw_xr_frame_snapshot_t *frame = NULL;
+    if (key_dest != key_game || cl.paused || con_forcedup || cl.intermission != 0 || cls.demoplayback || CL_InCutscene())
+    {
+        if (snapshot)
+            *snapshot = NULL;
+        return false;
+    }
+    if (!IW_Android_GetXRStereoFrame(&frame) || !frame || !frame->should_render || frame->view_count < 2)
+    {
+        if (snapshot)
+            *snapshot = NULL;
+        return false;
+    }
+    if (snapshot)
+        *snapshot = frame;
+    return true;
+}
+#else
 qboolean VID_XR_GetStereoFrame(const iw_xr_frame_snapshot_t **snapshot)
 {
     if (snapshot)
         *snapshot = vid_xr_stereo_frame ? &vid_xr_snapshot : NULL;
     return vid_xr_stereo_frame;
 }
+#endif
+#if defined(ANDROID_GLES3)
+qboolean VID_XR_BeginEye(unsigned eye, unsigned *fbo, int *width, int *height)
+{
+    return IW_Android_BeginXREye(eye, fbo, width, height);
+}
+#else
 qboolean VID_XR_BeginEye(unsigned eye, unsigned *fbo, int *width, int *height)
 {
     return vid_xr_stereo_frame && IW_XRWin_BindEyeTarget(vid_xr_backend, eye) && IW_XRWin_GetEyeTarget(vid_xr_backend, eye, fbo, width, height);
 }
+#endif
+#if defined(ANDROID_GLES3)
+qboolean VID_XR_BeginHUD(unsigned *fbo, int *width, int *height)
+{
+    return IW_Android_BeginXRHUD(fbo, width, height);
+}
+#else
 qboolean VID_XR_BeginHUD(unsigned *fbo, int *width, int *height)
 {
     return vid_xr_stereo_frame &&
         IW_XRWin_BindFrameTarget (vid_xr_backend) &&
         IW_XRWin_GetFrameTarget (vid_xr_backend, fbo, width, height);
 }
+#endif
+#if defined(ANDROID_GLES3)
+void VID_XR_EndEye(unsigned eye)
+{
+    IW_Android_EndXREye(eye);
+}
+#else
 void VID_XR_EndEye(unsigned eye)
 {
     if (vid_xr_stereo_frame && eye == 0 && vr_desktop_mirror.value != 0)
@@ -265,6 +329,7 @@ void VID_XR_EndEye(unsigned eye)
         IW_XRWin_MirrorEye (vid_xr_backend, eye, width, height);
     }
 }
+#endif
 void VID_XR_Pump (void)
 {
     iw_xr_result_t result;
@@ -1726,7 +1791,7 @@ void GL_BeginRendering (int *x, int *y, int *width, int *height)
     {
         if (vid_xr_frame_active)
         {
-            vid_xr_stereo_frame = vid_xr_frame_should_render && vid_xr_snapshot.view_count >= 2 && key_dest == key_game && !cl.paused && !con_forcedup && cl.intermission == 0 && IW_XRWin_HasStereoTargets(vid_xr_backend);
+            vid_xr_stereo_frame = vid_xr_frame_should_render && vid_xr_snapshot.view_count >= 2 && key_dest == key_game && !cl.paused && !con_forcedup && cl.intermission == 0 && !cls.demoplayback && !CL_InCutscene() && IW_XRWin_HasStereoTargets(vid_xr_backend);
             IW_XRWin_SetStereoSubmission(vid_xr_backend, vid_xr_stereo_frame);
             if (vid_xr_frame_should_render && !vid_xr_stereo_frame)
                 IW_XRWin_BindFrameTarget(vid_xr_backend);

@@ -1411,6 +1411,8 @@ FRAMEDATA_BUFFER
 "\tfloat dot1 = r_avertexnormal_dot(pose1.nor, shadevector);\n"
 "\tfloat dot2 = r_avertexnormal_dot(pose2.nor, shadevector);\n"
 "\tout_color = clamp(LightColor * vec4(vec3(mix(dot1, dot2, float(PoseBlend.z) / 65536.0)), 1.0), 0.0, 1.0);\n"
+"\tuint overbright = floatBitsToUint(Fog.w) >> 31;\n"
+"\tout_color.rgb = ldexp(out_color.rgb, ivec3(overbright));\n"
 "}\n";
 
 ////////////////////////////////////////////////////////////////
@@ -1486,22 +1488,35 @@ OIT_OUTPUT (out_fragcolor)
 "}\n";
 
 static const char alias_fragment_shader_gles[] =
+FRAMEDATA_BUFFER
 "layout(binding=0) uniform sampler2D Tex;\n"
 "layout(binding=1) uniform sampler2D FullbrightTex;\n"
 "layout(location=0) in vec2 in_texcoord;\n"
 "layout(location=1) in vec4 in_color;\n"
+"layout(location=2) in vec3 in_pos;\n"
 "layout(location=0) out vec4 out_fragcolor;\n"
 "void main()\n"
 "{\n"
 "\tvec4 result = texture(Tex, in_texcoord);\n"
 "#if ALPHATEST\n"
 "\tif (result.a < 0.666) discard;\n"
-"#endif\n"
 "\tresult.rgb *= in_color.rgb;\n"
+"#else\n"
+"\tvec3 base_color = result.rgb;\n"
+"\tfloat inverse_alpha = 1.0 - result.a;\n"
+"\tresult.rgb *= in_color.rgb;\n"
+"\tresult.rgb *= result.a;\n"
+"\tresult.rgb += base_color * inverse_alpha;\n"
+"#endif\n"
 "\tresult.rgb += texture(FullbrightTex, in_texcoord).rgb;\n"
+"\tresult.rgb = clamp(result.rgb, 0.0, 1.0);\n"
+"\tfloat fog = exp2(abs(Fog.w) * -dot(in_pos, in_pos));\n"
+"\tfog = clamp(fog, 0.0, 1.0);\n"
+"\tresult.rgb = Fog.rgb + (result.rgb - Fog.rgb) * fog;\n"
 "\tresult.a = in_color.a;\n"
 "\tout_fragcolor = result;\n"
 "}\n";
+
 ////////////////////////////////////////////////////////////////
 //
 // Sprites

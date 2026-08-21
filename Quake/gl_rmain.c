@@ -328,7 +328,7 @@ float R_GetXRMessageOffset (void)
 		return 0.f;
 	left = tanf (r_xr_fov.left);
 	 right = tanf (r_xr_fov.right);
-	return (r_xr_eye_index == 0 ? 1.f : -1.f) * r_xr_ipd * 160.f / (0.1f * (right - left));
+	return (r_xr_eye_index == 0 ? 1.f : -1.f) * r_xr_ipd * 160.f / (1.0f * (right - left));
 }
 
 
@@ -2939,31 +2939,31 @@ void R_SetXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye)
 		VectorSubtract (svs.clients[0].edict->v.origin, cl_entities[cl.viewentity].origin, server_delta);
 		VectorAdd (r_refdef.vieworg, server_delta, r_refdef.vieworg);
 	}
-	if (cl.onground)
-		r_xr_stair_ground_time = cl.time;
-	if (vr_smooth_stairs.value == 0.f || cl.time - r_xr_stair_ground_time > 0.12)
-	{
-		r_xr_stair_smooth_z = r_refdef.vieworg[2];
-		r_xr_stair_smooth_time = cl.time;
-		r_xr_stair_smooth_valid = true;
-	}
-	else if (!r_xr_stair_smooth_valid)
-	{
-		r_xr_stair_smooth_z = r_refdef.vieworg[2];
-		r_xr_stair_smooth_time = cl.time;
-		r_xr_stair_smooth_valid = true;
-	}
-	else
-	{
-		double stair_dt = CLAMP (0.0, cl.time - r_xr_stair_smooth_time, 0.1);
-		r_xr_stair_smooth_time = cl.time;
-		if (r_xr_stair_smooth_z < r_refdef.vieworg[2])
-			r_xr_stair_smooth_z = CLAMP (r_refdef.vieworg[2] - 18.f, r_xr_stair_smooth_z + (float)stair_dt * 160.f, r_refdef.vieworg[2]);
-		else if (r_xr_stair_smooth_z > r_refdef.vieworg[2])
-			r_xr_stair_smooth_z = CLAMP (r_refdef.vieworg[2], r_xr_stair_smooth_z - (float)stair_dt * 160.f, r_refdef.vieworg[2] + 18.f);
-		r_refdef.vieworg[2] = r_xr_stair_smooth_z;
-	}
-	VectorCopy (r_refdef.vieworg, r_xr_center_vieworg);
+    if (cl.onground)
+        r_xr_stair_ground_time = cl.time;
+    if (vr_smooth_stairs.value == 0.f || cl.time - r_xr_stair_ground_time > 0.12)
+    {
+        r_xr_stair_smooth_z = r_refdef.vieworg[2];
+        r_xr_stair_smooth_time = cl.time;
+        r_xr_stair_smooth_valid = true;
+    }
+    else if (!r_xr_stair_smooth_valid)
+    {
+        r_xr_stair_smooth_z = r_refdef.vieworg[2];
+        r_xr_stair_smooth_time = cl.time;
+        r_xr_stair_smooth_valid = true;
+    }
+    else
+    {
+        double stair_dt = CLAMP (0.0, cl.time - r_xr_stair_smooth_time, 0.1);
+        r_xr_stair_smooth_time = cl.time;
+        if (r_xr_stair_smooth_z < r_refdef.vieworg[2])
+            r_xr_stair_smooth_z = CLAMP (r_refdef.vieworg[2] - 18.f, r_xr_stair_smooth_z + (float)stair_dt * 160.f, r_refdef.vieworg[2]);
+        else if (r_xr_stair_smooth_z > r_refdef.vieworg[2])
+            r_xr_stair_smooth_z = CLAMP (r_refdef.vieworg[2], r_xr_stair_smooth_z - (float)stair_dt * 160.f, r_refdef.vieworg[2] + 18.f);
+        r_refdef.vieworg[2] = r_xr_stair_smooth_z;
+    }
+    VectorCopy (r_refdef.vieworg, r_xr_center_vieworg);
 	dx = snapshot->views[1].position[0] - snapshot->views[0].position[0];
 	dy = snapshot->views[1].position[1] - snapshot->views[0].position[1];
 	dz = snapshot->views[1].position[2] - snapshot->views[0].position[2];

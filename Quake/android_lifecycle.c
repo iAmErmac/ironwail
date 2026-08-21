@@ -1,5 +1,17 @@
 #include "quakedef.h"
 #include "android_lifecycle.h"
+#include "cvar.h"
+#include "xr_virtual_screen.h"
+
+extern cvar_t vr_render_scale;
+extern cvar_t vr_screen_scale;
+extern cvar_t vr_screen_distance;
+extern cvar_t vr_screen_follow;
+extern cvar_t vr_curved_screen;
+extern cvar_t vr_curve_radius;
+extern cvar_t vr_hud_size;
+extern cvar_t vr_hud_distance;
+extern cvar_t vr_hud_yoffset;
 
 #include "android_gles.h"
 
@@ -25,6 +37,23 @@ static qboolean iw_attack_as_mouse;
 static qboolean iw_attack_active;
 extern kbutton_t in_attack, in_jump, in_down;
 static uint64_t iw_last_frame_ns;
+static iw_xr_action_snapshot_t iw_xr_actions;
+static unsigned iw_xr_target_fbo;
+static int iw_xr_target_width;
+static int iw_xr_target_height;
+static iw_xr_frame_snapshot_t iw_xr_stereo_snapshot;
+static unsigned iw_xr_stereo_fbos[2];
+static int iw_xr_stereo_widths[2];
+static int iw_xr_stereo_heights[2];
+static qboolean iw_xr_stereo_active;
+static qboolean iw_xr_stereo_rendered;
+static iw_xr_virtual_screen_follow_t iw_android_screen_follow;
+static iw_xr_virtual_screen_pose_t iw_android_screen_pose;
+static qboolean iw_android_screen_pose_valid;
+static float iw_android_pointer_start[3], iw_android_pointer_hit[3];
+static unsigned iw_android_pointer_color;
+static float iw_android_pointer_alpha, iw_android_pointer_width;
+static qboolean iw_android_pointer_active;
 static cvar_t iw_android_defaults_version = {"iw_android_defaults_version", "0", CVAR_ARCHIVE};
 #define IW_ANDROID_LOOK_SCALE 3.5f
 static int IW_Android_ScaledLook(int delta) { return (int)(delta * IW_ANDROID_LOOK_SCALE); }
@@ -115,6 +144,17 @@ qboolean IW_Android_Init(const char *base_dir, int argc, const char *const *argv
     IW_Android_QueueLaunchArgs(argc, argv);
     Cbuf_Execute();
 #if defined(ANDROID_GLES3)
+    if (!keybindings[K_LTRIGGER]) Key_SetBinding(K_LTRIGGER, "+jump");
+    if (!keybindings[K_RTRIGGER]) Key_SetBinding(K_RTRIGGER, "+attack");
+    if (!keybindings[K_RTHUMB]) Key_SetBinding(K_RTHUMB, "toggleconsole");
+    if (!keybindings[K_BBUTTON]) Key_SetBinding(K_BBUTTON, "+jump");
+    if (!keybindings[K_ABUTTON]) Key_SetBinding(K_ABUTTON, "+movedown");
+    if (!keybindings[K_LGRIP]) Key_SetBinding(K_LGRIP, "+speed");
+    if (!keybindings[K_RGRIP]) Key_SetBinding(K_RGRIP, "+vr_weaponwheel");
+    if (!keybindings[K_YBUTTON]) Key_SetBinding(K_YBUTTON, "+showscores");
+    if (!keybindings[K_XBUTTON]) Key_SetBinding(K_XBUTTON, "messagemode");
+#endif
+#if defined(ANDROID_GLES3)
     if (iw_android_defaults_version.value < 1.0f)
     {
         if (vid_gamma.value == 1.0f && vid_contrast.value == 1.0f)
@@ -193,9 +233,180 @@ void IW_Android_Frame(uint64_t frame_time_ns)
          (iw_attack_as_mouse ? key_dest != key_menu : key_dest != key_game)))
         IW_Android_ClearActions();
 #endif
+    if (iw_xr_target_fbo)
+        R_SetXRFinalTarget(iw_xr_target_fbo, iw_xr_target_width, iw_xr_target_height);
     Host_Frame(dt);
 }
 
+void IW_Android_FrameXR(uint64_t frame_time_ns, unsigned target_fbo, int target_width, int target_height)
+{
+    if (!iw_initialized || !iw_surface || !iw_context_ready || iw_paused || !iw_audio_focus)
+        return;
+    if (vid.width <= 0 || vid.height <= 0 || !target_fbo || target_width <= 0 || target_height <= 0)
+        return;
+    iw_xr_target_fbo = target_fbo;
+    iw_xr_target_width = target_width;
+    iw_xr_target_height = target_height;
+    IW_Android_Frame(frame_time_ns);
+    R_SetXRFinalTarget(0, 0, 0);
+    iw_xr_target_fbo = 0;
+    iw_xr_target_width = 0;
+    iw_xr_target_height = 0;
+}
+
+void IW_Android_SetXRStereoFrame(const iw_xr_frame_snapshot_t *snapshot, const unsigned *fbos, const int *widths, const int *heights)
+{
+    if (!snapshot || snapshot->view_count < 2 || !fbos || !widths || !heights) return;
+    iw_xr_stereo_snapshot = *snapshot;
+    {
+        iw_xr_virtual_screen_view_t views[2];
+        float distance = 2.5f;
+        qboolean follow = true;
+        IW_Android_GetXRScreenGeometry(NULL, &distance, &follow);
+        for (unsigned i = 0; i < 2; ++i) {
+            memcpy(views[i].position, snapshot->views[i].position, sizeof(views[i].position));
+            memcpy(views[i].orientation, snapshot->views[i].orientation, sizeof(views[i].orientation));
+        }
+        iw_android_screen_pose_valid = IW_XRVirtualScreen_UpdatePose(&iw_android_screen_follow, views, 2, Sys_DoubleTime(), distance, follow, &iw_android_screen_pose);
+    }
+    memcpy(iw_xr_stereo_fbos, fbos, sizeof(iw_xr_stereo_fbos));
+    memcpy(iw_xr_stereo_widths, widths, sizeof(iw_xr_stereo_widths));
+    memcpy(iw_xr_stereo_heights, heights, sizeof(iw_xr_stereo_heights));
+    iw_xr_stereo_rendered = false;
+    iw_xr_stereo_active = true;
+}
+void IW_Android_ClearXRStereoFrame(void)
+{
+    iw_xr_stereo_active = false;
+    iw_xr_stereo_rendered = false;
+    memset(&iw_xr_stereo_snapshot, 0, sizeof(iw_xr_stereo_snapshot));
+    memset(iw_xr_stereo_fbos, 0, sizeof(iw_xr_stereo_fbos));
+}
+qboolean IW_Android_GetXRStereoFrame(const iw_xr_frame_snapshot_t **snapshot)
+{
+    if (snapshot) *snapshot = iw_xr_stereo_active ? &iw_xr_stereo_snapshot : NULL;
+    if (iw_xr_stereo_active) iw_xr_stereo_rendered = true;
+    return iw_xr_stereo_active;
+}
+qboolean IW_Android_GetXRHeadPosition(float position[3])
+{
+    if (!position || !iw_xr_stereo_active || iw_xr_stereo_snapshot.view_count < 2) return false;
+    position[0] = 0.5f * (iw_xr_stereo_snapshot.views[0].position[0] + iw_xr_stereo_snapshot.views[1].position[0]);
+    position[1] = 0.5f * (iw_xr_stereo_snapshot.views[0].position[1] + iw_xr_stereo_snapshot.views[1].position[1]);
+    position[2] = 0.5f * (iw_xr_stereo_snapshot.views[0].position[2] + iw_xr_stereo_snapshot.views[1].position[2]);
+    return true;
+}
+qboolean IW_Android_RaycastVirtualScreen(const float origin[3], const float orientation[4], iw_xr_virtual_screen_hit_t *hit)
+{
+    iw_xr_virtual_screen_t screen;
+    float scale = 1.f, radius = 3.f;
+    qboolean curved = false;
+    if (!iw_android_screen_pose_valid) { if (hit) memset(hit, 0, sizeof(*hit)); return false; }
+    memset(&screen, 0, sizeof(screen));
+    memcpy(screen.position, iw_android_screen_pose.position, sizeof(screen.position));
+    memcpy(screen.orientation, iw_android_screen_pose.orientation, sizeof(screen.orientation));
+    IW_Android_GetXRScreenGeometry(&scale, NULL, NULL);
+    IW_Android_GetXRScreenStyle(&curved, &radius);
+    screen.width = 2.97f * scale;
+    screen.height = 2.2275f * scale;
+    screen.curved = curved && radius > 1.2f;
+    screen.curve_radius = screen.curved ? radius : 0.f;
+    return IW_XRVirtualScreen_Raycast(&screen, origin, orientation, hit);
+}
+qboolean IW_Android_GetXRScreenPose(float position[3], float orientation[4])
+{
+    if (!iw_android_screen_pose_valid) return false;
+    if (position) memcpy(position, iw_android_screen_pose.position, sizeof(iw_android_screen_pose.position));
+    if (orientation) memcpy(orientation, iw_android_screen_pose.orientation, sizeof(iw_android_screen_pose.orientation));
+    return true;
+}
+void IW_Android_SetVirtualPointer(const float start[3], const float hit[3], qboolean active, unsigned color, float alpha, float width)
+{
+    if (start) memcpy(iw_android_pointer_start, start, sizeof(iw_android_pointer_start));
+    if (hit) memcpy(iw_android_pointer_hit, hit, sizeof(iw_android_pointer_hit));
+    if (active != iw_android_pointer_active) IW_LOG("virtual pointer active=%d color=%06x alpha=%.2f width=%.2f", active ? 1 : 0, color, alpha, width);
+    iw_android_pointer_active = active;
+    iw_android_pointer_color = color;
+    iw_android_pointer_alpha = alpha;
+    iw_android_pointer_width = width;
+}
+qboolean IW_Android_BeginXREye(unsigned eye, unsigned *fbo, int *width, int *height)
+{
+    if (!iw_xr_stereo_active || eye >= 2 || !iw_xr_stereo_fbos[eye]) return false;
+    glBindFramebuffer(GL_FRAMEBUFFER, iw_xr_stereo_fbos[eye]);
+    glViewport(0, 0, iw_xr_stereo_widths[eye], iw_xr_stereo_heights[eye]);
+    if (fbo) *fbo = iw_xr_stereo_fbos[eye];
+    if (width) *width = iw_xr_stereo_widths[eye];
+    if (height) *height = iw_xr_stereo_heights[eye];
+    return true;
+}
+void IW_Android_EndXREye(unsigned eye)
+{
+    (void)eye;
+}
+qboolean IW_Android_BeginXRHUD(unsigned *fbo, int *width, int *height)
+{
+    static qboolean logged;
+    if (!iw_xr_stereo_active || !iw_xr_target_fbo || iw_xr_target_width <= 0 || iw_xr_target_height <= 0) return false;
+    if (!logged) { IW_LOG("XR HUD target active fbo=%u size=%dx%d", iw_xr_target_fbo, iw_xr_target_width, iw_xr_target_height); logged = true; }
+    if (fbo) *fbo = iw_xr_target_fbo;
+    if (width) *width = iw_xr_target_width;
+    if (height) *height = iw_xr_target_height;
+    return true;
+}
+
+qboolean IW_Android_FrameXRStereo(uint64_t frame_time_ns, const iw_xr_frame_snapshot_t *snapshot, unsigned mono_fbo, int mono_width, int mono_height, const unsigned *eye_fbos, const int *eye_widths, const int *eye_heights)
+{
+    qboolean stereo_used;
+    if (!iw_initialized || !iw_surface || !iw_context_ready || iw_paused || !iw_audio_focus || !snapshot || snapshot->view_count < 2 || !mono_fbo || mono_width <= 0 || mono_height <= 0) return false;
+    iw_xr_target_fbo = mono_fbo;
+    iw_xr_target_width = mono_width;
+    iw_xr_target_height = mono_height;
+    IW_Android_SetXRStereoFrame(snapshot, eye_fbos, eye_widths, eye_heights);
+    IW_Android_Frame(frame_time_ns);
+    stereo_used = iw_xr_stereo_rendered;
+    IW_Android_ClearXRStereoFrame();
+    R_SetXRFinalTarget(0, 0, 0);
+    iw_xr_target_fbo = 0;
+    iw_xr_target_width = 0;
+    iw_xr_target_height = 0;
+    return stereo_used;
+}
+
+float IW_Android_GetXRRenderScale(void) { return CLAMP(0.3f, vr_render_scale.value, 2.0f); }
+void IW_Android_GetXRScreenGeometry(float *scale, float *distance, qboolean *follow)
+{
+    if (scale) *scale = q_max(0.25f, vr_screen_scale.value);
+    if (distance) *distance = q_max(0.5f, vr_screen_distance.value);
+    if (follow) *follow = vr_screen_follow.value != 0.0f;
+}
+
+void IW_Android_GetXRHUDGeometry(float *scale, float *distance, float *yoffset)
+{
+    if (scale) *scale = q_max(0.1f, vr_hud_size.value);
+    if (distance) *distance = q_max(0.1f, vr_hud_distance.value);
+    if (yoffset) *yoffset = vr_hud_yoffset.value;
+}
+qboolean IW_Android_GetVirtualPointer(float start[3], float hit[3], unsigned *color, float *alpha, float *width)
+{
+    if (!iw_android_pointer_active) return false;
+    if (start) memcpy(start, iw_android_pointer_start, sizeof(iw_android_pointer_start));
+    if (hit) memcpy(hit, iw_android_pointer_hit, sizeof(iw_android_pointer_hit));
+    if (color) *color = iw_android_pointer_color;
+    if (alpha) *alpha = iw_android_pointer_alpha;
+    if (width) *width = iw_android_pointer_width;
+    return true;
+}
+void IW_Android_GetXRScreenStyle(qboolean *curved, float *radius)
+{
+    if (curved) *curved = vr_curved_screen.value != 0.0f;
+    if (radius) *radius = q_max(1.2f, vr_curve_radius.value);
+}
+
+void IW_Android_SetXRActions(const iw_xr_action_snapshot_t *actions) { if (actions) iw_xr_actions = *actions; else memset(&iw_xr_actions, 0, sizeof(iw_xr_actions)); }
+qboolean IW_Android_GetXRActions(iw_xr_action_snapshot_t *actions) { if (!actions) return false; *actions = iw_xr_actions; return actions->active; }
+extern void IW_Android_NativeHaptic(int hand, float amplitude, float duration_seconds);
+void IW_Android_Haptic(int hand, float amplitude, float duration_seconds) { IW_Android_NativeHaptic(hand, amplitude, duration_seconds); }
 void IW_Android_Key(int android_keycode, qboolean down)
 {
     int key = -1;
@@ -409,18 +620,19 @@ void IW_Android_SurfaceDestroyed(void) {}
 void IW_Android_ContextRestored(void) {}
 void IW_Android_Resize(int width, int height) { (void)width; (void)height; }
 void IW_Android_Frame(uint64_t frame_time_ns) { (void)frame_time_ns; }
-void IW_Android_Key(int android_keycode, qboolean down) { (void)android_keycode; (void)down; }
-void IW_Android_Text(const char *text) { (void)text; }
-void IW_Android_Axis(int device_id, int axis, float value) { (void)device_id; (void)axis; (void)value; }
-void IW_Android_Touch(int action, float x, float y) { (void)action; (void)x; (void)y; }
-void IW_Android_TouchPointer(int action, int pointer_id, float x, float y) { (void)action; (void)pointer_id; (void)x; (void)y; }
-void IW_Android_Command(const char *command) { (void)command; }
-void IW_Android_Action(int action, qboolean down) { (void)action; (void)down; }
-void IW_Android_ClearActions(void) {}
-void IW_Android_Look(int delta_x, int delta_y) { (void)delta_x; (void)delta_y; }
-int IW_Android_ScreenMode(void) { return 3; }
-void IW_Android_Pause(qboolean paused) { (void)paused; }
-void IW_Android_AudioFocus(qboolean focused) { (void)focused; }
-void IW_Android_Shutdown(void) {}
-
+void IW_Android_FrameXR(uint64_t frame_time_ns, unsigned target_fbo, int target_width, int target_height) { (void)frame_time_ns; (void)target_fbo; (void)target_width; (void)target_height; }
+qboolean IW_Android_FrameXRStereo(uint64_t frame_time_ns, const iw_xr_frame_snapshot_t *snapshot, unsigned mono_fbo, int mono_width, int mono_height, const unsigned *eye_fbos, const int *eye_widths, const int *eye_heights) { (void)frame_time_ns; (void)snapshot; (void)mono_fbo; (void)mono_width; (void)mono_height; (void)eye_fbos; (void)eye_widths; (void)eye_heights; return false; }
+void IW_Android_SetXRStereoFrame(const iw_xr_frame_snapshot_t *snapshot, const unsigned *fbos, const int *widths, const int *heights) { (void)snapshot; (void)fbos; (void)widths; (void)heights; }
+void IW_Android_ClearXRStereoFrame(void) {}
+qboolean IW_Android_GetXRStereoFrame(const iw_xr_frame_snapshot_t **snapshot) { if (snapshot) *snapshot = NULL; return false; }
+qboolean IW_Android_GetXRHeadPosition(float position[3]) { (void)position; return false; }
+qboolean IW_Android_RaycastVirtualScreen(const float origin[3], const float orientation[4], iw_xr_virtual_screen_hit_t *hit) { (void)origin; (void)orientation; if (hit) memset(hit, 0, sizeof(*hit)); return false; }
+qboolean IW_Android_GetXRScreenPose(float position[3], float orientation[4]) { (void)position; (void)orientation; return false; }
+void IW_Android_SetVirtualPointer(const float start[3], const float hit[3], qboolean active, unsigned color, float alpha, float width)
+{
+    (void)start; (void)hit; (void)active; (void)color; (void)alpha; (void)width;
+}
+qboolean IW_Android_BeginXREye(unsigned eye, unsigned *fbo, int *width, int *height) { (void)eye; if (fbo) *fbo = 0; if (width) *width = 0; if (height) *height = 0; return false; }
+void IW_Android_EndXREye(unsigned eye) { (void)eye; }
+qboolean IW_Android_BeginXRHUD(unsigned *fbo, int *width, int *height) { (void)fbo; (void)width; (void)height; return false; }
 #endif

@@ -1342,11 +1342,12 @@ void Draw_GetCanvasTransform (canvastype type, drawtransform_t *transform)
 	{
 		if (type == CANVAS_MENU && R_HasXRFinalTarget ())
 		{
-			const float scale = 1.f / 2.5f;
+			const float scale = 1.f / 1.6666667f;
 			transform->scale[0] *= scale;
 			transform->scale[1] *= scale;
 			transform->offset[0] *= scale;
 			transform->offset[1] *= scale;
+			transform->offset[1] -= 0.08f;
 		}
 
 		{

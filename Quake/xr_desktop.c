@@ -1747,5 +1747,6 @@ void IW_XRWin_RequestRecenter(iw_xr_win_t *xr) { (void)xr; }
 void IW_XRWin_SetScreenCurve(iw_xr_win_t *xr, qboolean enabled, float radius) { (void)xr; (void)enabled; (void)radius; }
 void IW_XRWin_SetScreenGeometry(iw_xr_win_t *xr, float scale, float distance) { (void)xr; (void)scale; (void)distance; }
 void IW_XRWin_SetHUDGeometry(iw_xr_win_t *xr, float scale, float distance, float yoffset) { (void)xr; (void)scale; (void)distance; (void)yoffset; }
+void IW_XRWin_Haptic(iw_xr_win_t *xr, int hand, float amplitude, float duration_seconds) { (void)xr; (void)hand; (void)amplitude; (void)duration_seconds; }
 
 #endif

@@ -3795,7 +3795,7 @@ void M_AdjustSliders (int dir)
 		Cvar_SetValueQuick (&vr_teleport_beam_alpha, CLAMP (0.f, vr_teleport_beam_alpha.value + dir * 0.05f, 1.f));
 		break;
 	case VR_OPT_CONTROLLER_SCHEME:
-		Cvar_SetValueQuick (&vr_dominant_hand, !vr_dominant_hand.value);
+		Cvar_SetValueQuick (&vr_dominant_hand, vr_dominant_hand.value >= 2.f ? 0.f : vr_dominant_hand.value + 1.f);
 		break;
 	case VR_OPT_TWO_HANDED:
 		Cvar_SetValueQuick (&vr_stabilize_mode, !vr_stabilize_mode.value);
@@ -4615,7 +4615,7 @@ static void M_Options_DrawItem (int y, int item)
 		M_DrawSlider (x, y, (vr_turn_angle.value - 1.f) / 89.f, va ("%.0f", vr_turn_angle.value));
 		break;
 	case VR_OPT_CONTROLLER_SCHEME:
-		M_Print (x, y, vr_dominant_hand.value ? "Left handed" : "Right handed");
+		M_Print (x, y, vr_dominant_hand.value >= 2.f ? "Left handed (Swap Sticks)" : (vr_dominant_hand.value ? "Left handed" : "Right handed"));
 		break;
 	case VR_OPT_TWO_HANDED:
 		M_DrawCheckbox (x, y, vr_stabilize_mode.value);
