@@ -33,12 +33,12 @@ cvar_t vr_mouse_alpha = {"vr_mouse_alpha", "0.4", CVAR_ARCHIVE};
 cvar_t vr_aim_beam = {"vr_aim_beam", "1", CVAR_ARCHIVE};
 cvar_t vr_aim_beam_width = {"vr_aim_beam_width", "2.0", CVAR_ARCHIVE};
 
-typedef struct { int item; int impulse; const char *name; qmodel_t *model; } xr_weapon_slot_t;
+typedef struct { int item; int impulse; int replaces_item; int local_field_value; const char *name; qmodel_t *model; } xr_weapon_slot_t;
 static xr_weapon_slot_t xr_weapons[16] = {
-    {IT_AXE, 1, "Axe"}, {IT_SHOTGUN, 2, "Shotgun"},
-    {IT_SUPER_SHOTGUN, 3, "Super Shotgun"}, {IT_NAILGUN, 4, "Nailgun"},
-    {IT_SUPER_NAILGUN, 5, "Super Nailgun"}, {IT_GRENADE_LAUNCHER, 6, "Grenade Launcher"},
-    {IT_ROCKET_LAUNCHER, 7, "Rocket Launcher"}, {IT_LIGHTNING, 8, "Thunderbolt"}
+    {IT_AXE, 1, 0, 0, "Axe"}, {IT_SHOTGUN, 2, 0, 0, "Shotgun"},
+    {IT_SUPER_SHOTGUN, 3, 0, 0, "Super Shotgun"}, {IT_NAILGUN, 4, 0, 0, "Nailgun"},
+    {IT_SUPER_NAILGUN, 5, 0, 0, "Super Nailgun"}, {IT_GRENADE_LAUNCHER, 6, 0, 0, "Grenade Launcher"},
+    {IT_ROCKET_LAUNCHER, 7, 0, 0, "Rocket Launcher"}, {IT_LIGHTNING, 8, 0, 0, "Thunderbolt"}
 };
 static int xr_weapon_count = 8;
 static const char *xr_builtin_model_paths[] = {
@@ -47,8 +47,10 @@ static const char *xr_builtin_model_paths[] = {
 };
 static char xr_weapon_names[16][64];
 static char xr_weapon_models[16][MAX_QPATH];
+static char xr_weapon_local_fields[16][32];
+static int xr_weapon_local_field_values[16];
 
-static qboolean wheel_active, wheel_bind_active, keyboard_active, keyboard_trigger, keyboard_select, keyboard_caps, keyboard_trigger_suppressed, virtual_mouse_trigger;
+static qboolean wheel_active, wheel_bind_active, keyboard_active, keyboard_trigger, keyboard_select, keyboard_caps, keyboard_trigger_suppressed, virtual_mouse_trigger, virtual_mouse_trigger_suppressed, two_hand_wheel_suppressed;
 static int wheel_selection = -1, keyboard_mode, wheel_hand, keyboard_row, keyboard_col, keyboard_nav_x, keyboard_nav_y, menu_scroll_direction;
 static float keyboard_x = 0.5f, keyboard_y = 0.5f, virtual_mouse_x = 0.5f, virtual_mouse_y = 0.5f, vignette_value, vignette_last_yaw;
 static qpic_t *xr_vignette_pic;
@@ -113,23 +115,83 @@ static void xr_wheel_cursor_from_pose(void)
     wheel_cursor[1] = CLAMP(-1.f, DotProduct(forward, wheel_up) / scale, 1.f);
 }
 
+static qboolean xr_wheel_item_available(int item)
+{
+    return (cl.stats[STAT_ITEMS] & item) != 0 || cl.stats[STAT_ACTIVEWEAPON] == item;
+}
+
+static void xr_weaponwheel_update_local_fields(void)
+{
+    edict_t *player;
+    qcvm_t *oldvm;
+    int i;
+
+    memset(xr_weapon_local_field_values, 0, sizeof(xr_weapon_local_field_values));
+    if (!sv.active || cl.maxclients != 1 || !svs.clients[0].active || !svs.clients[0].edict)
+        return;
+    player = svs.clients[0].edict;
+    PR_PushQCVM(&sv.qcvm, &oldvm);
+    for (i = 0; i < xr_weapon_count; ++i) {
+        eval_t *value;
+        if (!xr_weapon_local_fields[i][0]) continue;
+        value = GetEdictFieldValueByName(player, xr_weapon_local_fields[i]);
+        if (value) xr_weapon_local_field_values[i] = (int)value->_float;
+    }
+    PR_PopQCVM(oldvm);
+}
+
+static qboolean xr_wheel_local_field_matches(int slot)
+{
+    return !xr_weapon_local_fields[slot][0] ||
+        xr_weapon_local_field_values[slot] == xr_weapons[slot].local_field_value;
+}
+
+static qboolean xr_wheel_slot_owned(int slot)
+{
+    return xr_wheel_item_available(xr_weapons[slot].item) && xr_wheel_local_field_matches(slot);
+}
+
+static qboolean xr_wheel_slot_visible(int slot)
+{
+    int i;
+    if (!xr_wheel_slot_owned(slot)) return false;
+    for (i = 0; i < xr_weapon_count; ++i)
+        if (i != slot && xr_weapons[i].replaces_item == xr_weapons[slot].item && xr_wheel_slot_owned(i))
+            return false;
+    return true;
+}
+
+static int xr_wheel_visible_count(void)
+{
+    int i, count = 0;
+    for (i = 0; i < xr_weapon_count; ++i)
+        if (xr_wheel_slot_visible(i)) ++count;
+    return count;
+}
+
+static int xr_wheel_visible_index(int slot)
+{
+    int i, index = 0;
+    for (i = 0; i < slot; ++i)
+        if (xr_wheel_slot_visible(i)) ++index;
+    return index;
+}
 static void xr_wheel_select(float x, float y)
 {
     float length = sqrtf(x * x + y * y), angle, best_delta = 1000.f;
-    int i, best = -1;
-    if (length < 0.25f) return;
+    int i, best = -1, count = xr_wheel_visible_count();
+    if (length < 0.25f || count == 0) return;
     angle = atan2f(x, y);
     for (i = 0; i < (int)xr_weapon_count; ++i) {
-        float slot_angle = (float)i * (float)(2.0 * M_PI / xr_weapon_count);
-        float delta = fabsf(atan2f(sinf(angle - slot_angle), cosf(angle - slot_angle)));
-        if ((cl.stats[STAT_ITEMS] & xr_weapons[i].item) && delta < best_delta) {
-            best_delta = delta; best = i;
-        }
+        float slot_angle, delta;
+        if (!xr_wheel_slot_visible(i)) continue;
+        slot_angle = (float)xr_wheel_visible_index(i) * (float)(2.0 * M_PI / count);
+        delta = fabsf(atan2f(sinf(angle - slot_angle), cosf(angle - slot_angle)));
+        if (delta < best_delta) { best_delta = delta; best = i; }
     }
     if (best != wheel_selection && best >= 0) VID_XR_Haptic(wheel_hand, 0.6f, 0.05f);
     wheel_selection = best;
 }
-
 static void xr_wheel_commit(void)
 {
     if (wheel_selection >= 0 && cl.stats[STAT_ACTIVEWEAPON] != xr_weapons[wheel_selection].item) {
@@ -273,6 +335,9 @@ static void xr_weaponwheel_set_builtin_slots(void)
         xr_weapons[i].impulse = impulses[i];
         xr_weapons[i].name = names[i];
         xr_weapons[i].model = NULL;
+        xr_weapons[i].replaces_item = 0;
+        xr_weapons[i].local_field_value = 0;
+        xr_weapon_local_fields[i][0] = 0;
         q_strlcpy(xr_weapon_models[i], xr_builtin_model_paths[i], sizeof(xr_weapon_models[i]));
     }
     xr_weapon_count = 8;
@@ -300,22 +365,30 @@ static void xr_weaponwheel_reload_f(void)
     section = JSON_Find(json->root, COM_SkipPath(com_gamedir), JSON_ARRAY);
     if (!section) section = JSON_Find(json->root, "default", JSON_ARRAY);
     if (section) {
-        for (entry = section->firstchild; entry && count < 16; entry = entry->next) {
+        for (entry = section->firstchild; entry && count < (int)Q_COUNTOF(xr_weapons); entry = entry->next) {
             const char *name = JSON_FindString(entry, "name");
             const char *item_name = JSON_FindString(entry, "item");
             const double *item_number = JSON_FindNumber(entry, "item");
             const double *impulse = JSON_FindNumber(entry, "impulse");
             const char *model = JSON_FindString(entry, "model");
+            const char *replaces_name = JSON_FindString(entry, "replaces");
+            const char *local_field = JSON_FindString(entry, "local_field");
+            const double *local_value = JSON_FindNumber(entry, "local_value");
             int item = item_name ? xr_item_bit(item_name) : (item_number ? (int)*item_number : 0);
             if (entry->type != JSON_OBJECT || !name || !impulse || !item) continue;
             xr_weapons[count].item = item;
             xr_weapons[count].impulse = (int)*impulse;
+            xr_weapons[count].replaces_item = replaces_name ? xr_item_bit(replaces_name) : 0;
+            xr_weapons[count].local_field_value = local_value ? (int)*local_value : 0;
             q_strlcpy(xr_weapon_names[count], name, sizeof(xr_weapon_names[count]));
             xr_weapons[count].name = xr_weapon_names[count];
             xr_weapons[count].model = NULL;
-            xr_weapon_models[count][0] = '\0';
+            xr_weapon_models[count][0] = 0;
+            xr_weapon_local_fields[count][0] = 0;
             if (model && *model)
                 q_strlcpy(xr_weapon_models[count], model, sizeof(xr_weapon_models[count]));
+            if (local_field && *local_field)
+                q_strlcpy(xr_weapon_local_fields[count], local_field, sizeof(xr_weapon_local_fields[count]));
             ++count;
         }
     }
@@ -323,7 +396,6 @@ static void xr_weaponwheel_reload_f(void)
     JSON_Free(json);
     free(file);
 }
-
 static void xr_vignette_init(void)
 {
     xr_vignette_pic = Draw_LoadPicRGBA("gfx/vignette");
@@ -375,21 +447,25 @@ void XR_Interaction_Init(void)
 
 void XR_Interaction_Shutdown(void)
 {
-    xr_wheel_close(); xr_keyboard_close(); xr_virtual_pointer_clear(); keyboard_trigger_suppressed = false; vignette_value = 0.f; vignette_yaw_valid = false;
+    xr_wheel_close(); xr_keyboard_close(); xr_virtual_pointer_clear(); keyboard_trigger_suppressed = false; virtual_mouse_trigger_suppressed = false; two_hand_wheel_suppressed = false; vignette_value = 0.f; vignette_yaw_valid = false;
 }
 
 void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
 {
     int dominant, offhand; float move, yaw_delta; qboolean grip, main_grip, trigger, menu_combo, both_grips;
     if (!actions || !actions->active) { XR_Interaction_Shutdown(); return; }
+    xr_weaponwheel_update_local_fields();
     if (key_dest != key_game) wheel_bind_active = false;
     if (wheel_active && !xr_can_wheel()) xr_wheel_close();
     dominant = XR_Input_PhysicalHandForRole(XR_HAND_MAINHAND); offhand = XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND);
     main_grip = actions->hand[dominant].grip > 0.5f || (actions->hand[dominant].buttons & IW_XR_BUTTON_GRIP) != 0;
     grip = wheel_bind_active;
     both_grips = main_grip && (actions->hand[offhand].grip > 0.5f || (actions->hand[offhand].buttons & IW_XR_BUTTON_GRIP) != 0);
+    if (both_grips) two_hand_wheel_suppressed = true;
+    else if (!main_grip && !(actions->hand[offhand].grip > 0.5f || (actions->hand[offhand].buttons & IW_XR_BUTTON_GRIP) != 0)) two_hand_wheel_suppressed = false;
     trigger = (actions->hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) != 0;
     if (!trigger) keyboard_trigger_suppressed = false;
+    if (!trigger) virtual_mouse_trigger_suppressed = false;
     menu_combo = main_grip && (actions->hand[dominant].buttons & IW_XR_BUTTON_SECONDARY) != 0;
     if (keyboard_active && key_dest == key_game) xr_keyboard_close();
     if (virtual_mouse_trigger && (key_dest != key_menu || (!vr_mouse.value && actions->hand[dominant].grip <= 0.5f && !(actions->hand[dominant].buttons & IW_XR_BUTTON_GRIP))) ) {
@@ -398,7 +474,7 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
     }
     if (keyboard_active) {
         qboolean select = (actions->hand[dominant].buttons & IW_XR_BUTTON_PRIMARY) != 0;
-        xr_virtual_pointer_update(&actions->hand[dominant]);
+        xr_virtual_pointer_update(&actions->hand[XR_Input_MouseHand()]);
         if (pointer_active) xr_keyboard_key_at(keyboard_x, keyboard_y, &keyboard_row, &keyboard_col);
         xr_keyboard_navigate(&actions->hand[offhand]);
         if (trigger && !keyboard_trigger && pointer_active) {
@@ -409,15 +485,19 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
         keyboard_select = select;
         if (actions->hand[dominant].buttons & IW_XR_BUTTON_SECONDARY) xr_keyboard_close();
     } else if (key_dest == key_menu) {
-        int scroll = actions->hand[dominant].stick[1] > 0.6f ? 1 : actions->hand[dominant].stick[1] < -0.6f ? -1 : 0;
+        int menu_hand = XR_Input_MenuHand();
+        int scroll = actions->hand[menu_hand].stick[1] > 0.6f ? 1 : actions->hand[menu_hand].stick[1] < -0.6f ? -1 : 0;
         if (scroll && scroll != menu_scroll_direction)
             M_Keydown(scroll > 0 ? K_MWHEELUP : K_MWHEELDOWN, false);
         menu_scroll_direction = scroll;
         if (!ui_mouse.value) Cvar_SetValueQuick(&ui_mouse, 1.f);
-        xr_virtual_pointer_update(&actions->hand[dominant]);
+        xr_virtual_pointer_update(&actions->hand[XR_Input_MouseHand()]);
         if (pointer_active || virtual_mouse_trigger)
             M_MousemoveNormalized(CLAMP(0.f, virtual_mouse_x, 1.f), CLAMP(0.f, virtual_mouse_y, 1.f));
-        if (trigger && !virtual_mouse_trigger && pointer_active) Key_Event(K_MOUSE1, true);
+        if (trigger && !virtual_mouse_trigger && pointer_active) {
+            Key_Event(K_MOUSE1, true);
+            if (key_dest != key_menu) virtual_mouse_trigger_suppressed = true;
+        }
         if (!trigger && virtual_mouse_trigger) Key_Event(K_MOUSE1, false);
         virtual_mouse_trigger = trigger && (pointer_active || virtual_mouse_trigger);
     } else if ((key_dest == key_console || key_dest == key_message) && Key_TextEntry() == TEXTMODE_ON) {
@@ -440,7 +520,7 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
         xr_wheel_cursor_from_pose();
         xr_wheel_select(wheel_cursor[0], wheel_cursor[1]);
         if (!grip) xr_wheel_commit();
-    } else if (grip && !menu_combo && !both_grips) {
+    } else if (grip && !menu_combo && !both_grips && !two_hand_wheel_suppressed) {
         menu_scroll_direction = 0;
         xr_wheel_open();
     } else {
@@ -470,7 +550,7 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
     vignette_value = CLAMP(0.f, vignette_value, 1.f);
 }
 
-qboolean XR_Interaction_ConsumesGameplay(void) { return wheel_active || keyboard_active || keyboard_trigger_suppressed; }
+qboolean XR_Interaction_ConsumesGameplay(void) { return wheel_active || keyboard_active || keyboard_trigger_suppressed || virtual_mouse_trigger || virtual_mouse_trigger_suppressed; }
 qboolean XR_Interaction_WheelActive(void) { return wheel_active; }
 qboolean XR_Interaction_GetVirtualPointer(float start[3], float hit[3]) { if (!pointer_active) return false; if (start) VectorCopy(pointer_start_xr, start); if (hit) VectorCopy(pointer_hit_xr, hit); return true; }
 
@@ -494,7 +574,7 @@ void XR_Interaction_AddWorldEntities(void)
 {
     vec3_t hub, cursor, slot, a, b, forward, right, up, angles;
     float worldscale, distance, radius, targetsize, biggest;
-    int i, teleport_rgb = 0;
+    int i, teleport_rgb = 0, visible_count;
     uint32_t teleport_color;
     wheel_entity_count = 0;
     sscanf(vr_teleport_beam_color.string, "%x", &teleport_rgb);
@@ -533,10 +613,12 @@ void XR_Interaction_AddWorldEntities(void)
     angles[PITCH] = vr_weaponwheel_modelpitch.value;
     angles[YAW] = RAD2DEG(atan2f(wheel_forward[1], wheel_forward[0])) + vr_weaponwheel_modelyaw.value + wheel_spin;
     angles[ROLL] = 0.f;
+    visible_count = xr_wheel_visible_count();
     for (i = 0; i < xr_weapon_count && wheel_entity_count < (int)Q_COUNTOF(wheel_entities); ++i) {
         entity_t *ent;
-        float angle = (float)i * (2.f * (float)M_PI / xr_weapon_count);
-        if (!(cl.stats[STAT_ITEMS] & xr_weapons[i].item) || !xr_weapons[i].model) continue;
+        float angle;
+        if (!xr_wheel_slot_visible(i) || !xr_weapons[i].model || visible_count == 0) continue;
+        angle = (float)xr_wheel_visible_index(i) * (2.f * (float)M_PI / visible_count);
         VectorMA(hub, sinf(angle) * radius, wheel_right, slot);
         VectorMA(slot, cosf(angle) * radius, wheel_up, slot);
         ent = &wheel_entities[wheel_entity_count++];
@@ -552,7 +634,7 @@ void XR_Interaction_AddWorldEntities(void)
         ent->alpha = ENTALPHA_DEFAULT;
     }
     for (i = 0; i < xr_weapon_count && wheel_entity_count < (int)Q_COUNTOF(wheel_entities); ++i) {
-        if (cl.stats[STAT_ACTIVEWEAPON] != xr_weapons[i].item || !xr_weapons[i].model) continue;
+        if (cl.stats[STAT_ACTIVEWEAPON] != xr_weapons[i].item || !xr_wheel_slot_visible(i) || !xr_weapons[i].model) continue;
         entity_t *ent = &wheel_entities[wheel_entity_count++];
         memset(ent, 0, sizeof(*ent));
         ent->model = xr_weapons[i].model;

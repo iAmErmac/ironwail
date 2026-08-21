@@ -13,6 +13,10 @@
     "  impulse  the console impulse that selects the weapon",
     "  model    the model shown on the wheel. A missing model leaves the slot empty.",
     "",
+    "Optional replacement fields:",
+    "  replaces     inventory bit of the base wheel slot this entry replaces when owned.",
+    "  local_field/local_value  local single-player QuakeC player field required for this entry.",
+    "",
     "Known item names: IT_AXE, IT_SHOTGUN, IT_SUPER_SHOTGUN, IT_NAILGUN, IT_SUPER_NAILGUN,",
     "IT_GRENADE_LAUNCHER, IT_ROCKET_LAUNCHER, IT_LIGHTNING, IT_SUPER_LIGHTNING,",
     "HIT_PROXIMITY_GUN, HIT_MJOLNIR, HIT_LASER_CANNON, RIT_AXE, RIT_LAVA_NAILGUN,",
@@ -55,5 +59,42 @@
     { "name": "Grenade Launcher", "item": "IT_GRENADE_LAUNCHER", "impulse": 6, "model": "progs/v_rock.mdl" },
     { "name": "Rocket Launcher",  "item": "IT_ROCKET_LAUNCHER",  "impulse": 7, "model": "progs/v_rock2.mdl" },
     { "name": "Thunderbolt",      "item": "IT_LIGHTNING",        "impulse": 8, "model": "progs/v_light.mdl" }
+  ],
+
+  "dopa": [
+    { "name": "Axe",              "item": "RIT_AXE",             "impulse": 1, "model": "progs/v_axe.mdl" },
+    { "name": "Shotgun",          "item": "IT_SHOTGUN",          "impulse": 2, "model": "progs/v_shot.mdl" },
+    { "name": "Super Shotgun",    "item": "IT_SUPER_SHOTGUN",    "impulse": 3, "model": "progs/v_shot2.mdl" },
+    { "name": "Nailgun",          "item": "IT_NAILGUN",          "impulse": 4, "model": "progs/v_nail.mdl" },
+    { "name": "Super Nailgun",    "item": "IT_SUPER_NAILGUN",    "impulse": 5, "model": "progs/v_nail2.mdl" },
+    { "name": "Grenade Launcher", "item": "IT_GRENADE_LAUNCHER", "impulse": 6, "model": "progs/v_rock.mdl" },
+    { "name": "Rocket Launcher",  "item": "IT_ROCKET_LAUNCHER",  "impulse": 7, "model": "progs/v_rock2.mdl" },
+    { "name": "Thunderbolt",      "item": "IT_LIGHTNING",        "impulse": 8, "model": "progs/v_light.mdl" }
+  ],
+
+  "mg1": [
+    { "name": "Axe",              "item": "RIT_AXE",             "impulse": 1, "model": "progs/v_axe.mdl" },
+    { "name": "Shotgun",          "item": "IT_SHOTGUN",          "impulse": 2, "model": "progs/v_shot.mdl" },
+    { "name": "Super Shotgun",    "item": "IT_SUPER_SHOTGUN",    "impulse": 3, "model": "progs/v_shot2.mdl" },
+    { "name": "Nailgun",          "item": "IT_NAILGUN",          "impulse": 4, "model": "progs/v_nail.mdl" },
+    { "name": "Super Nailgun",    "item": "IT_SUPER_NAILGUN",    "impulse": 5, "model": "progs/v_nail2.mdl" },
+    { "name": "Grenade Launcher", "item": "IT_GRENADE_LAUNCHER", "impulse": 6, "model": "progs/v_rock.mdl" },
+    { "name": "Rocket Launcher",  "item": "IT_ROCKET_LAUNCHER",  "impulse": 7, "model": "progs/v_rock2.mdl" },
+    { "name": "Thunderbolt",      "item": "IT_LIGHTNING",        "impulse": 8, "model": "progs/v_light.mdl" }
+  ],
+
+  "mg3": [
+    { "name": "Axe",              "item": "IT_AXE",              "impulse": 1,   "model": "progs/v_axe.mdl" },
+    { "name": "Super Axe",        "item": "HIT_MJOLNIR",         "impulse": 1,   "model": "progs/v_hammer.mdl", "replaces": "IT_AXE" },
+    { "name": "Shotgun",          "item": "IT_SHOTGUN",          "impulse": 2,   "model": "progs/v_shot.mdl" },
+    { "name": "Bloody Shotgun",   "item": "IT_SHOTGUN",          "impulse": 2,   "model": "progs/v_bloodshot.mdl", "replaces": "IT_SHOTGUN", "local_field": "bloody_weapon", "local_value": 1 },
+    { "name": "Super Shotgun",    "item": "IT_SUPER_SHOTGUN",    "impulse": 3,   "model": "progs/v_shot2.mdl" },
+    { "name": "Bloody Super Shotgun", "item": "IT_SUPER_SHOTGUN", "impulse": 3,   "model": "progs/v_bloodshot2.mdl", "replaces": "IT_SUPER_SHOTGUN", "local_field": "bloody_weapon", "local_value": 2 },
+    { "name": "Nailgun",          "item": "IT_NAILGUN",          "impulse": 4,   "model": "progs/v_nail.mdl" },
+    { "name": "Super Nailgun",    "item": "IT_SUPER_NAILGUN",    "impulse": 5,   "model": "progs/v_nail2.mdl" },
+    { "name": "Grenade Launcher", "item": "IT_GRENADE_LAUNCHER", "impulse": 6,   "model": "progs/v_rock.mdl" },
+    { "name": "Rocket Launcher",  "item": "IT_ROCKET_LAUNCHER",  "impulse": 7,   "model": "progs/v_rock2.mdl" },
+    { "name": "Thunderbolt",      "item": "IT_LIGHTNING",        "impulse": 8,   "model": "progs/v_light.mdl" },
+    { "name": "Laser Cannon",     "item": "HIT_LASER_CANNON",    "impulse": 225, "model": "progs/v_laserg.mdl" }
   ]
 }

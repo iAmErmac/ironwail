@@ -55,6 +55,13 @@ const iw_xr_hand_snapshot_t *XR_Input_HandForRole(const iw_xr_action_snapshot_t 
     return actions ? &actions->hand[XR_Input_PhysicalHandForRole(role)] : NULL;
 }
 
+iw_xr_hand_t XR_Input_MovementHand(void) { return vr_dominant_hand.value == 1.f ? IW_XR_HAND_RIGHT : IW_XR_HAND_LEFT; }
+iw_xr_hand_t XR_Input_TurnHand(void) { return vr_dominant_hand.value == 1.f ? IW_XR_HAND_LEFT : IW_XR_HAND_RIGHT; }
+iw_xr_hand_t XR_Input_MenuHand(void) { return XR_Input_MovementHand(); }
+iw_xr_hand_t XR_Input_MouseHand(void) { return vr_dominant_hand.value == 1.f ? IW_XR_HAND_LEFT : IW_XR_HAND_RIGHT; }
+iw_xr_hand_t XR_Input_RightStickHand(void) { return vr_dominant_hand.value == 1.f ? IW_XR_HAND_LEFT : IW_XR_HAND_RIGHT; }
+iw_xr_hand_t XR_Input_LeftStickHand(void) { return vr_dominant_hand.value == 1.f ? IW_XR_HAND_RIGHT : IW_XR_HAND_LEFT; }
+
 static void XR_Input_MenuHaptic(void) {
     iw_xr_hand_t offhand = XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND);
     VID_XR_Haptic(offhand, 0.22f, 0.025f);
@@ -377,8 +384,8 @@ void XR_Input_PrepareInputGrab(void)
     xr_key_state[3] = (actions.hand[dominant].buttons & IW_XR_BUTTON_SECONDARY) != 0;
     xr_key_state[4] = (actions.hand[offhand].buttons & IW_XR_BUTTON_PRIMARY) != 0;
     xr_key_state[5] = (actions.hand[offhand].buttons & IW_XR_BUTTON_SECONDARY) != 0;
-    xr_key_state[6] = (actions.hand[dominant].buttons & IW_XR_BUTTON_STICK) != 0;
-    xr_key_state[7] = (actions.hand[offhand].buttons & IW_XR_BUTTON_STICK) != 0;
+    xr_key_state[6] = (actions.hand[XR_Input_RightStickHand()].buttons & IW_XR_BUTTON_STICK) != 0;
+    xr_key_state[7] = (actions.hand[XR_Input_LeftStickHand()].buttons & IW_XR_BUTTON_STICK) != 0;
     xr_key_state[8] = (actions.hand[IW_XR_HAND_LEFT].buttons & IW_XR_BUTTON_MENU) != 0 || (actions.hand[IW_XR_HAND_RIGHT].buttons & IW_XR_BUTTON_MENU) != 0;
     xr_key_state[13] = actions.hand[offhand].grip > 0.5f || (actions.hand[offhand].buttons & IW_XR_BUTTON_GRIP) != 0;
     xr_key_state[14] = actions.hand[dominant].grip > 0.5f || (actions.hand[dominant].buttons & IW_XR_BUTTON_GRIP) != 0;
@@ -431,15 +438,15 @@ void XR_Input_Update(void)
         XR_Input_Key(3, K_BBUTTON, !menu_toggle && (actions.hand[dominant].buttons & IW_XR_BUTTON_SECONDARY) != 0);
         XR_Input_Key(4, K_XBUTTON, (actions.hand[offhand].buttons & IW_XR_BUTTON_PRIMARY) != 0);
         XR_Input_Key(5, K_YBUTTON, (actions.hand[offhand].buttons & IW_XR_BUTTON_SECONDARY) != 0);
-        XR_Input_Key(6, K_RTHUMB, (actions.hand[dominant].buttons & IW_XR_BUTTON_STICK) != 0);
-        XR_Input_Key(7, K_LTHUMB, (actions.hand[offhand].buttons & IW_XR_BUTTON_STICK) != 0);
+        XR_Input_Key(6, K_RTHUMB, (actions.hand[XR_Input_RightStickHand()].buttons & IW_XR_BUTTON_STICK) != 0);
+        XR_Input_Key(7, K_LTHUMB, (actions.hand[XR_Input_LeftStickHand()].buttons & IW_XR_BUTTON_STICK) != 0);
         XR_Input_Key(8, K_ESCAPE, menu_toggle);
     }
 
     if (key_dest == key_menu)
     {
-        float x = actions.hand[offhand].stick[0];
-        float y = actions.hand[offhand].stick[1];
+        float x = actions.hand[XR_Input_MenuHand()].stick[0];
+        float y = actions.hand[XR_Input_MenuHand()].stick[1];
         float ax = fabsf(x), ay = fabsf(y);
         qboolean horizontal = ax > 0.25f && ax >= ay + 0.15f;
         qboolean vertical = ay > 0.25f && ay >= ax + 0.15f;
@@ -456,8 +463,8 @@ void XR_Input_Update(void)
     XR_Input_Key(11, K_DOWNARROW, false);
     XR_Input_Key(12, K_UPARROW, false);
 
-    turn = actions.hand[dominant].stick[0];
-    if (fabsf(turn) < q_max(vr_turn_deadzone.value, 0.20f) || fabsf(turn) < fabsf(actions.hand[dominant].stick[1]) + 0.20f)
+    turn = actions.hand[XR_Input_TurnHand()].stick[0];
+    if (fabsf(turn) < q_max(vr_turn_deadzone.value, 0.20f) || fabsf(turn) < fabsf(actions.hand[XR_Input_TurnHand()].stick[1]) + 0.20f)
     {
         xr_turn_held = false;
         xr_smooth_turn_rate = 0.0f;
@@ -512,14 +519,14 @@ static void XR_Input_ApplyRoomscaleDelta (const float delta[3])
 qboolean XR_Input_Move(usercmd_t *cmd)
 {
     iw_xr_action_snapshot_t actions;
-    iw_xr_hand_t offhand = XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND);
+    iw_xr_hand_t movement = XR_Input_MovementHand();
     float x, y, length, deadzone;
     if (!cmd || !xr_owns_input)
         return false;
     if (VID_XR_GetActions (&actions))
     {
-        x = actions.hand[offhand].stick[0];
-        y = actions.hand[offhand].stick[1];
+        x = actions.hand[movement].stick[0];
+        y = actions.hand[movement].stick[1];
     }
     else
     {

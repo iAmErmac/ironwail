@@ -25,5 +25,11 @@ qboolean XR_Input_GetTeleportAim(vec3_t start, vec3_t target);
 iw_xr_hand_t XR_Input_PhysicalHandForRole(xr_hand_role_t role);
 xr_hand_role_t XR_Input_RoleForPhysicalHand(iw_xr_hand_t hand);
 const iw_xr_hand_snapshot_t *XR_Input_HandForRole(const iw_xr_action_snapshot_t *actions, xr_hand_role_t role);
+iw_xr_hand_t XR_Input_MovementHand(void);
+iw_xr_hand_t XR_Input_TurnHand(void);
+iw_xr_hand_t XR_Input_MenuHand(void);
+iw_xr_hand_t XR_Input_MouseHand(void);
+iw_xr_hand_t XR_Input_RightStickHand(void);
+iw_xr_hand_t XR_Input_LeftStickHand(void);
 
 #endif
