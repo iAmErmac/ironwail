@@ -85,6 +85,17 @@ struct ibuf_s {
 	aliasinstance_t inst[MAX_ALIAS_INSTANCES];
 } ibuf;
 
+struct multiview_ibuf_s {
+	struct {
+		float matviewproj[2][16];
+		float eyepos[2][4];
+		vec4_t fog;
+		float dither;
+		float padding[3];
+	} global;
+	aliasinstance_t inst[MAX_ALIAS_INSTANCES];
+} multiview_ibuf;
+
 /*
 =================
 R_SetupAliasFrame -- johnfitz -- rewritten to support lerping
@@ -355,7 +366,7 @@ anim = (int)(cl.time * 10) & 3;
 		mode = r_softemu_mdl_warp.value > 0.f ? ALIASSHADER_NOPERSP : ALIASSHADER_STANDARD;
 		break;
 	}
-	GL_UseProgram (glprogs.alias[oit][mode][alphatest][poseverttype]);
+	GL_UseProgram (VID_XR_UsingMultiview () ? glprogs.alias_multiview[oit][mode][alphatest][poseverttype] : glprogs.alias[oit][mode][alphatest][poseverttype]);
 
 	#if defined(ANDROID_GLES3)
     state = GLS_ATTRIBS (poseverttype == PV_IQM ? 5 : 1);
@@ -385,8 +396,22 @@ anim = (int)(cl.time * 10) & 3;
 	ibuf.global.dither = r_framedata.screendither;
 
 #if !defined(ANDROID_GLES3)
-	ibuf_size = sizeof (ibuf.global) + sizeof (ibuf.inst[0]) * ibuf.count;
-	GL_Upload (GL_SHADER_STORAGE_BUFFER, &ibuf.global, ibuf_size, &buf, &ofs);
+	if (VID_XR_UsingMultiview ())
+	{
+		const gpumultiviewframedata_t *frame = R_GetMultiviewFrameData ();
+		memcpy (multiview_ibuf.global.matviewproj, frame->viewproj, sizeof (multiview_ibuf.global.matviewproj));
+		memcpy (multiview_ibuf.global.eyepos, frame->eyepos, sizeof (multiview_ibuf.global.eyepos));
+		memcpy (multiview_ibuf.global.fog, ibuf.global.fog, sizeof (multiview_ibuf.global.fog));
+		multiview_ibuf.global.dither = ibuf.global.dither;
+		memcpy (multiview_ibuf.inst, ibuf.inst, sizeof (ibuf.inst[0]) * ibuf.count);
+		ibuf_size = sizeof (multiview_ibuf.global) + sizeof (multiview_ibuf.inst[0]) * ibuf.count;
+		GL_Upload (GL_SHADER_STORAGE_BUFFER, &multiview_ibuf.global, ibuf_size, &buf, &ofs);
+	}
+	else
+	{
+		ibuf_size = sizeof (ibuf.global) + sizeof (ibuf.inst[0]) * ibuf.count;
+		GL_Upload (GL_SHADER_STORAGE_BUFFER, &ibuf.global, ibuf_size, &buf, &ofs);
+	}
 #endif
 
 	for (hdr = mainhdr, totalverts = 0; hdr; hdr = Mod_NextSurface (hdr))

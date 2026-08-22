@@ -726,7 +726,7 @@ static void R_DrawParticles_Real (qboolean alpha, qboolean showtris)
 
 	dither = (softemu == SOFTEMU_COARSE && !showtris);
 	oit = (alpha && R_GetEffectiveAlphaMode () == ALPHAMODE_OIT);
-	GL_UseProgram (glprogs.particles[oit][dither]);
+	GL_UseProgram (VID_XR_UsingMultiview () ? glprogs.particles_multiview[oit][dither] : glprogs.particles[oit][dither]);
 
 	// compensate for apparent size of different particle textures
 	// this bakes in the additional scaling of vup and vright by 1.5f for billboarding,

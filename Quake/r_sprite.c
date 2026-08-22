@@ -156,7 +156,7 @@ static void R_FlushSpriteInstances (void)
 		GL_PolygonOffset (OFFSET_DECAL);
 
 	dither = (softemu == SOFTEMU_COARSE && !showtris);
-	GL_UseProgram (glprogs.sprites[dither]);
+	GL_UseProgram (VID_XR_UsingMultiview () ? glprogs.sprites_multiview[dither] : glprogs.sprites[dither]);
 
 	if (showtris)
 		GL_SetState (GLS_BLEND_OPAQUE | GLS_NO_ZWRITE | GLS_CULL_BACK | GLS_ATTRIBS(2));

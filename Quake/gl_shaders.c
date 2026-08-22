@@ -26,9 +26,10 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "q_ctype.h"
 
 glprogs_t glprogs;
-static GLuint gl_programs[128];
+static GLuint gl_programs[256];
 static GLuint gl_current_program;
 static int gl_num_programs;
+
 
 #if defined(ANDROID_GLES3)
 static cvar_t gl_gles_shader_dump = {"gl_gles_shader_dump", "0", CVAR_NONE};
@@ -163,6 +164,37 @@ static void GL_RegisterShaderSource(GLuint shader, GLenum type, const char *name
 }
 #endif
 
+#if !defined(ANDROID_GLES3)
+static void GL_DumpShaderSource(GLenum type, const char *name, const char *source)
+{
+	char safe_name[192];
+	char dump_dir[MAX_OSPATH];
+	char dump_path[MAX_OSPATH];
+	const char *stage;
+	int i, j;
+
+	if (!source || !host_parms || !host_parms->basedir)
+		return;
+
+	for (i = 0, j = 0; name[i] && j < (int)sizeof(safe_name) - 1; ++i)
+	{
+		char c = name[i];
+		if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '_' || c == '-')
+			safe_name[j++] = c;
+		else
+			safe_name[j++] = '_';
+	}
+	safe_name[j] = 0;
+	stage = type == GL_VERTEX_SHADER ? "vertex" : "fragment";
+	q_snprintf(dump_dir, sizeof(dump_dir), "%s/shader_dumps", host_parms->basedir);
+	Sys_mkdir(dump_dir);
+	q_snprintf(dump_path, sizeof(dump_path), "%s/%s_%s.glsl", dump_dir, safe_name, stage);
+	if (COM_WriteFile_OSPath(dump_path, source, strlen(source)))
+		Con_Printf("Shader source dump: %s\n", dump_path);
+}
+#endif
+
 /*
 =============
 AppendString
@@ -194,11 +226,9 @@ static GLuint GL_CreateShader (GLenum type, const char *source, const char *extr
 	int numstrings = 0;
 	GLint status;
 	GLuint shader;
-#if defined(ANDROID_GLES3)
 	const char *line_directive = "#line 1\n";
 	char *final_source;
 	size_t final_length;
-#endif
 
 	switch (type)
 	{
@@ -220,20 +250,21 @@ static GLuint GL_CreateShader (GLenum type, const char *source, const char *extr
 		"#version 310 es\n"
 		"precision highp float;\n"
 		"precision highp int;\n"
-
 		"precision highp sampler2D;\n"
 		"precision highp samplerCube;\n"
 		"precision highp usampler3D;\n"
 		"\n"
 		"#define IW_GL_BACKEND_GLES 1\n"
 		"#define IW_NOPERSPECTIVE smooth\n"
+		"#define IW_VERTEX_SHADER %d\n"
 		"#define BINDLESS 0\n"
 		"#define USE_BINDLESS 0\n"
 		"#define USE_DRAW_ID 0\n"
 		"#define USE_OIT 0\n"
-        "#define IW_MIX(a,b,t) ((a) + ((b) - (a)) * (t))\n"
+		"#define IW_MIX(a,b,t) ((a) + ((b) - (a)) * (t))\n"
 		"#define USE_MULTISAMPLE 0\n"
-		"#define REVERSED_Z 0\n"
+		"#define REVERSED_Z 0\n",
+		type == GL_VERTEX_SHADER
 	);
 #else
 	q_snprintf (header, sizeof (header),
@@ -241,12 +272,14 @@ static GLuint GL_CreateShader (GLenum type, const char *source, const char *extr
 		"\n"
 		"#define IW_GL_BACKEND_GLES 0\n"
 		"#define IW_NOPERSPECTIVE noperspective\n"
+		"#define IW_VERTEX_SHADER %d\n"
 		"#define BINDLESS %d\n"
 		"#define USE_BINDLESS %d\n"
 		"#define USE_DRAW_ID 0\n"
 		"#define USE_OIT %d\n"
 		"#define USE_MULTISAMPLE 0\n"
 		"#define REVERSED_Z %d\n",
+		type == GL_VERTEX_SHADER,
 		gl_bindless_able,
 		gl_bindless_able,
 		gl_bindless_able ? 1 : 0,
@@ -261,10 +294,11 @@ static GLuint GL_CreateShader (GLenum type, const char *source, const char *extr
 #endif
 	strings[numstrings++] = source;
 
-#if defined(ANDROID_GLES3)
 	final_length = strlen(header) +
-		(extradefs && *extradefs ? strlen(extradefs) : 0) +
-		strlen(line_directive) + strlen(source);
+		(extradefs && *extradefs ? strlen(extradefs) : 0) + strlen(source);
+#if defined(ANDROID_GLES3)
+	final_length += strlen(line_directive);
+#endif
 	final_source = (char *) malloc(final_length + 1);
 	if (!final_source)
 		Sys_Error ("GL_CreateShader: out of memory for %s", name);
@@ -272,9 +306,10 @@ static GLuint GL_CreateShader (GLenum type, const char *source, const char *extr
 	strcat(final_source, header);
 	if (extradefs && *extradefs)
 		strcat(final_source, extradefs);
+#if defined(ANDROID_GLES3)
 	strcat(final_source, line_directive);
-	strcat(final_source, source);
 #endif
+	strcat(final_source, source);
 
 	    shader = GL_CreateShaderFunc (type);
 	if (GL_ObjectLabelFunc)
@@ -287,15 +322,15 @@ static GLuint GL_CreateShader (GLenum type, const char *source, const char *extr
 	{
 		char infolog[4096];
 		memset(infolog, 0, sizeof(infolog));
-#if defined(ANDROID_GLES3)
 		GL_DumpShaderSource(type, name, final_source);
-#endif
 		GL_GetShaderInfoLogFunc (shader, sizeof(infolog), NULL, infolog);
 		GL_InitError ("Error compiling %s %s shader:\n\n%s", name, typestr, infolog);
 	}
 
 #if defined(ANDROID_GLES3)
 	GL_RegisterShaderSource(shader, type, name, final_source);
+#else
+	free(final_source);
 #endif
 	return shader;
 }
@@ -536,6 +571,33 @@ void GL_CreateShaders (void)
 				glprogs.world[oit][dither][mode] = GL_CreateProgram (world_vertex_shader, world_fragment_shader, "world|OIT %d; DITHER %d; MODE %d", oit, dither, mode);
 #endif
 
+	/* The same UBO/geometry streams serve desktop GL and GLES; only the shader source differs. */
+	if (gl_multiview_able)
+		for (oit = 0; oit < oit_count; oit++)
+			for (dither = 0; dither < dither_count; dither++)
+				for (mode = 0; mode < 3; mode++)
+					glprogs.world_multiview[oit][dither][mode] =
+#if defined(ANDROID_GLES3)
+						GL_CreateProgram (world_vertex_shader_gles, world_fragment_shader_gles,
+#else
+						GL_CreateProgram (world_vertex_shader, world_fragment_shader,
+#endif
+							"world multiview|IW_MULTIVIEW 1; OIT %d; DITHER %d; MODE %d", oit, dither, mode);
+
+	if (gl_multiview_able)
+		for (dither = 0; dither < 2; dither++)
+			for (oit = 0; oit < oit_count; oit++)
+			{
+				glprogs.water_multiview[oit][dither] =
+#if defined(ANDROID_GLES3)
+					GL_CreateProgram (water_vertex_shader_gles, water_fragment_shader_gles,
+#else
+					GL_CreateProgram (water_vertex_shader, water_fragment_shader,
+#endif
+						"water multiview|IW_MULTIVIEW 1; OIT %d; DITHER %d", oit, dither);
+				glprogs.particles_multiview[oit][dither] = GL_CreateProgram (particles_vertex_shader, particles_fragment_shader,
+					"particles multiview|IW_MULTIVIEW 1; OIT %d; DITHER %d", oit, dither);
+			}
 	for (dither = 0; dither < 2; dither++)
 	{
 		for (oit = 0; oit < oit_count; oit++)
@@ -566,6 +628,39 @@ void GL_CreateShaders (void)
 #else
 	glprogs.skystencil = GL_CreateProgram (skystencil_vertex_shader, NULL, "sky stencil");
 #endif
+	if (gl_multiview_able)
+	{
+		for (dither = 0; dither < 2; dither++)
+		{
+			glprogs.skylayers_multiview[dither] =
+#if defined(ANDROID_GLES3)
+				GL_CreateProgram (sky_layers_vertex_shader_gles, sky_layers_fragment_shader,
+#else
+				GL_CreateProgram (sky_layers_vertex_shader, sky_layers_fragment_shader,
+#endif
+					"sky layers multiview|IW_MULTIVIEW 1; DITHER %d", dither);
+			for (mode = 0; mode < 2; mode++)
+				glprogs.skycubemap_multiview[mode][dither] =
+#if defined(ANDROID_GLES3)
+					GL_CreateProgram (sky_cubemap_vertex_shader_gles, sky_cubemap_fragment_shader,
+#else
+					GL_CreateProgram (sky_cubemap_vertex_shader, sky_cubemap_fragment_shader,
+#endif
+						"sky cubemap multiview|IW_MULTIVIEW 1; ANIM %d; DITHER %d", mode, dither);
+						glprogs.skyboxside_multiview[dither] = GL_CreateProgram (sky_boxside_vertex_shader, sky_boxside_fragment_shader,
+				"skybox side multiview|IW_MULTIVIEW 1; DITHER %d", dither);glprogs.sprites_multiview[dither] = GL_CreateProgram (sprites_vertex_shader, sprites_fragment_shader,
+				"sprites multiview|IW_MULTIVIEW 1; DITHER %d", dither);
+		}
+		glprogs.skystencil_multiview = GL_CreateProgram (skystencil_vertex_shader,
+#if defined(ANDROID_GLES3)
+			skystencil_fragment_shader_gles,
+#else
+			NULL,
+#endif
+			"sky stencil multiview|IW_MULTIVIEW 1");
+		glprogs.debug3d_multiview = GL_CreateProgram (debug3d_vertex_shader, debug3d_fragment_shader,
+			"debug3d multiview|IW_MULTIVIEW 1");
+	}
 
 	for (oit = 0; oit < oit_count; oit++)
 		for (mode = 0; mode < 3; mode++)
@@ -578,6 +673,18 @@ void GL_CreateShaders (void)
 					GL_CreateProgram (alias_vertex_shader, alias_fragment_shader, "alias|OIT %d; MODE %d; ALPHATEST %d; POSEVERTTYPE %d", oit, mode, alphatest, poseverttype);
 #endif
 	glprogs.debug3d = GL_CreateProgram (debug3d_vertex_shader, debug3d_fragment_shader, "debug3d");
+	if (gl_multiview_able)
+		for (oit = 0; oit < oit_count; oit++)
+			for (mode = 0; mode < 3; mode++)
+				for (alphatest = 0; alphatest < 2; alphatest++)
+					for (poseverttype = 0; poseverttype < poseverttype_count; poseverttype++)
+						glprogs.alias_multiview[oit][mode][alphatest][poseverttype] =
+#if defined(ANDROID_GLES3)
+							GL_CreateProgram (alias_vertex_shader_gles, alias_fragment_shader_gles,
+#else
+							GL_CreateProgram (alias_vertex_shader, alias_fragment_shader,
+#endif
+								"alias multiview|IW_MULTIVIEW 1; OIT %d; MODE %d; ALPHATEST %d; POSEVERTTYPE %d", oit, mode, alphatest, poseverttype);
 
 #if !defined(ANDROID_GLES3)
 	glprogs.clear_indirect = GL_CreateComputeProgram (clear_indirect_compute_shader, "clear indirect draw params");

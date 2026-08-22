@@ -84,7 +84,7 @@ extern cvar_t gyro_turning_axis;
 extern cvar_t gyro_pitchsensitivity;
 extern cvar_t gyro_yawsensitivity;
 extern cvar_t gyro_noise_thresh;
-extern cvar_t vr_mode, vr_render_scale;
+extern cvar_t vr_mode, vr_render_scale, vr_multiview;
 extern cvar_t vr_curved_screen;
 extern cvar_t vr_curve_radius;
 extern cvar_t vr_screen_scale;
@@ -3133,6 +3133,7 @@ void M_Menu_Gamepad_f (void)
 		begin_menu (VR_OPTIONS, m_vr, TITLE("VR Options"))					\
 		item (VR_OPT_ENABLE, "Enable VR")						\
 		item (VR_OPT_XR_RENDER_SCALE, "VR Render Scale")				\
+		item (VR_OPT_MULTIVIEW, "Stereo Multiview")				\
 		item (VR_OPT_SCREEN, "Virtual Screen")						\
 		item (VR_OPT_HUD, "VR HUD")							\
 		item (VR_OPT_WEAPON, "VR Weapon")				\
@@ -3645,6 +3646,7 @@ static void M_VR_ResetOptions (void)
 {
 	Cvar_SetValueQuick (&vr_mode, 1.f);
 	Cvar_SetValueQuick (&vr_render_scale, 1.f);
+	Cvar_SetValueQuick (&vr_multiview, 1.f);
 	Cvar_SetValueQuick (&vr_desktop_mirror, 1.f);
 	Cvar_SetValueQuick (&vr_world_scale, 33.5f);
     Cvar_SetValueQuick (&vr_player_speed, 100.f);
@@ -3768,6 +3770,9 @@ void M_AdjustSliders (int dir)
 	{
 	case VR_OPT_XR_RENDER_SCALE:
 		Cvar_SetValueQuick (&vr_render_scale, CLAMP (0.3f, vr_render_scale.value + dir * 0.05f, 2.f));
+		break;
+	case VR_OPT_MULTIVIEW:
+		Cvar_SetValueQuick (&vr_multiview, !vr_multiview.value);
 		break;
 	case VR_OPT_ENABLE:
 		Cbuf_AddText ("toggle vr_mode\n");
@@ -4586,6 +4591,9 @@ static void M_Options_DrawItem (int y, int item)
 
 	case VR_OPT_XR_RENDER_SCALE:
 		M_DrawSlider (x, y, (vr_render_scale.value - 0.3f) / 1.7f, va ("%.2f", vr_render_scale.value));
+		break;
+	case VR_OPT_MULTIVIEW:
+		M_DrawCheckbox (x, y, vr_multiview.value);
 		break;
 	case VR_OPT_ENABLE:
 		M_DrawCheckbox (x, y, vr_mode.value);

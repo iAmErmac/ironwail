@@ -25,9 +25,14 @@ qboolean IW_XRWin_BindFrameTarget(iw_xr_win_t *xr);
 qboolean IW_XRWin_GetFrameTarget(const iw_xr_win_t *xr, unsigned *fbo, int *width, int *height);
 qboolean IW_XRWin_ResolveDefaultFramebuffer(iw_xr_win_t *xr, int source_width, int source_height);
 qboolean IW_XRWin_HasStereoTargets(const iw_xr_win_t *xr);
+void IW_XRWin_SetMultiviewRequested(iw_xr_win_t *xr, qboolean requested);
+qboolean IW_XRWin_UsingMultiview(const iw_xr_win_t *xr);
+qboolean IW_XRWin_BeginMultiviewTarget(iw_xr_win_t *xr, unsigned *fbo, int *width, int *height);
+void IW_XRWin_EndMultiviewTarget(iw_xr_win_t *xr);
 qboolean IW_XRWin_BindEyeTarget(iw_xr_win_t *xr, unsigned eye);
 qboolean IW_XRWin_GetEyeTarget(const iw_xr_win_t *xr, unsigned eye, unsigned *fbo, int *width, int *height);
 void IW_XRWin_MirrorEye(iw_xr_win_t *xr, unsigned eye, int width, int height);
+void IW_XRWin_MirrorMultiview(iw_xr_win_t *xr, int width, int height);
 
 qboolean IW_XRWin_ResolveEyeTarget(iw_xr_win_t *xr, unsigned eye, int source_width, int source_height);
 void IW_XRWin_SetStereoSubmission(iw_xr_win_t *xr, qboolean enabled);

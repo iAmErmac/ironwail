@@ -934,6 +934,50 @@ the entity origin, so any view position inside that will be valid
 */
 extern vrect_t	scr_vrect;
 
+void V_RenderXRMultiview (const iw_xr_frame_snapshot_t *snapshot)
+{
+	gpumultiviewframedata_t frame;
+
+	if (con_forcedup || !snapshot || snapshot->view_count < 2)
+		return;
+	if (cl.intermission)
+		V_CalcIntermissionRefdef ();
+	else if (!cl.paused)
+		V_CalcRefdef ();
+
+	memset (&frame, 0, sizeof (frame));
+	R_SetXREye (snapshot, 0);
+	R_SetupView ();
+	memcpy (frame.viewproj[0], r_framedata.viewproj, sizeof (frame.viewproj[0]));
+	memcpy (frame.eyepos[0], r_framedata.eyepos, sizeof (r_framedata.eyepos));
+	if (cl.intermission)
+		V_CalcIntermissionRefdef ();
+	else if (!cl.paused)
+		V_CalcRefdef ();
+	R_SetXREye (snapshot, 1);
+	R_SetupView ();
+	memcpy (frame.viewproj[1], r_framedata.viewproj, sizeof (frame.viewproj[1]));
+	memcpy (frame.eyepos[1], r_framedata.eyepos, sizeof (r_framedata.eyepos));
+	memcpy (frame.fogdata, r_framedata.fogdata, sizeof (frame.fogdata));
+	memcpy (frame.skyfogdata, r_framedata.skyfogdata, sizeof (frame.skyfogdata));
+	VectorCopy (r_framedata.winddir, frame.winddir);
+	frame.windphase = r_framedata.windphase;
+	frame.screendither = r_framedata.screendither;
+	frame.texturedither = r_framedata.texturedither;
+	frame.time = r_framedata.time;
+	frame.zlogscale = r_framedata.zlogscale;
+	frame.zlogbias = r_framedata.zlogbias;
+	frame.numlights = r_framedata.numlights;
+
+	if (cl.intermission)
+		V_CalcIntermissionRefdef ();
+	else if (!cl.paused)
+		V_CalcRefdef ();
+	R_SetXREye (snapshot, 0);
+	R_SetupView ();
+	R_UploadMultiviewFrameData (&frame);
+	R_RenderScene ();
+}
 void V_RenderXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye)
 {
 	if (con_forcedup)

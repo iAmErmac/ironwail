@@ -158,6 +158,7 @@ void R_PushDlights (void)
 			if (l->die < cl.time || !l->radius)
 				continue;
 
+			if (!VID_XR_UsingMultiview ())
 			for (j = 0; j < 4; j++)
 			{
 				mplane_t *p = &frustum[j];
@@ -189,6 +190,19 @@ void R_PushDlights (void)
 	GL_EndGroup ();
 	return;
 #endif
+
+	if (VID_XR_UsingMultiview ())
+	{
+		static GLuint cluster_data[LIGHT_TILES_X * LIGHT_TILES_Y * LIGHT_TILES_Z * 2];
+		GLuint mask0 = r_framedata.numlights >= 32 ? 0xffffffffu : ((1u << r_framedata.numlights) - 1u);
+		GLuint mask1 = r_framedata.numlights <= 32 ? 0u : (r_framedata.numlights >= 64 ? 0xffffffffu : ((1u << (r_framedata.numlights - 32)) - 1u));
+		for (i = 0; i < countof (cluster_data); i += 2) { cluster_data[i] = mask0; cluster_data[i + 1] = mask1; }
+		GL_BindNative (GL_TEXTURE0, GL_TEXTURE_3D, gl_lightclustertexture);
+		GL_TexSubImage3DFunc (GL_TEXTURE_3D, 0, 0, 0, 0, LIGHT_TILES_X, LIGHT_TILES_Y, LIGHT_TILES_Z, GL_RG_INTEGER, GL_UNSIGNED_INT, cluster_data);
+		GL_BindImageTextureFunc (0, gl_lightclustertexture, 0, GL_TRUE, 0, GL_READ_ONLY, GL_RG32UI);
+		GL_EndGroup ();
+		return;
+	}
 
 	for (i = 0; i < 16; i++)
 		cluster_inputs.transposed_proj[i] = r_matproj[((i & 3) << 2) | (i >> 2)];

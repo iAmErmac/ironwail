@@ -89,10 +89,20 @@ static void R_MarkVisSurfaces (byte* vis)
 
 	for (i = 0; i < 4; i++)
 	{
-		frame.frustum[i][0] = frustum[i].normal[0];
-		frame.frustum[i][1] = frustum[i].normal[1];
-		frame.frustum[i][2] = frustum[i].normal[2];
-		frame.frustum[i][3] = frustum[i].dist;
+		if (VID_XR_UsingMultiview ())
+		{
+			frame.frustum[i][0] = 0.f;
+			frame.frustum[i][1] = 0.f;
+			frame.frustum[i][2] = 0.f;
+			frame.frustum[i][3] = -1e30f;
+		}
+		else
+		{
+			frame.frustum[i][0] = frustum[i].normal[0];
+			frame.frustum[i][1] = frustum[i].normal[1];
+			frame.frustum[i][2] = frustum[i].normal[2];
+			frame.frustum[i][3] = frustum[i].dist;
+		}
 	}
 	frame.vieworg[0] = r_refdef.vieworg[0];
 	frame.vieworg[1] = r_refdef.vieworg[1];
@@ -520,29 +530,21 @@ R_ChooseBModelProgram
 static GLuint R_ChooseBModelProgram (qboolean oit, qboolean alphatest)
 {
 	extern cvar_t r_softemu_lightmap_banding;
+	int dither;
 
 	switch (softemu)
 	{
 	case SOFTEMU_BANDED:
-		if (r_softemu_lightmap_banding.value != 0.f)
-			return glprogs.world[oit][2][alphatest];
-		else
-			return glprogs.world[oit][1][alphatest];
-
 	case SOFTEMU_COARSE:
-		if (r_softemu_lightmap_banding.value > 0.f)
-			return glprogs.world[oit][2][alphatest];
-		else
-			return glprogs.world[oit][1][alphatest];
-
+		dither = r_softemu_lightmap_banding.value != 0.f ? 2 : 1;
+		break;
 	default:
-		if (r_softemu_lightmap_banding.value > 0.f)
-			return glprogs.world[oit][2][alphatest];
-		else
-			return glprogs.world[oit][0][alphatest];
+		dither = r_softemu_lightmap_banding.value > 0.f ? 2 : 0;
+		break;
 	}
-}
 
+	return VID_XR_UsingMultiview () ? glprogs.world_multiview[oit][dither][alphatest] : glprogs.world[oit][dither][alphatest];
+}
 typedef enum {
 	BP_SOLID,
 	BP_ALPHATEST,
@@ -594,17 +596,17 @@ static void R_DrawBrushModels_Real (entity_t **ents, int count, brushpass_t pass
 	case BP_SKYLAYERS:
 		texbegin = TEXTYPE_SKY;
 		texend = TEXTYPE_SKY + 1;
-		program = glprogs.skylayers[softemu == SOFTEMU_COARSE];
+		program = VID_XR_UsingMultiview () ? glprogs.skylayers_multiview[softemu == SOFTEMU_COARSE] : glprogs.skylayers[softemu == SOFTEMU_COARSE];
 		break;
 	case BP_SKYCUBEMAP:
 		texbegin = TEXTYPE_SKY;
 		texend = TEXTYPE_SKY + 1;
-		program = glprogs.skycubemap[Sky_IsAnimated ()][softemu == SOFTEMU_COARSE];
+		program = VID_XR_UsingMultiview () ? glprogs.skycubemap_multiview[Sky_IsAnimated ()][softemu == SOFTEMU_COARSE] : glprogs.skycubemap[Sky_IsAnimated ()][softemu == SOFTEMU_COARSE];
 		break;
 	case BP_SKYSTENCIL:
 		texbegin = TEXTYPE_SKY;
 		texend = TEXTYPE_SKY + 1;
-		program = glprogs.skystencil;
+		program = VID_XR_UsingMultiview () ? glprogs.skystencil_multiview : glprogs.skystencil;
 		break;
 	case BP_SHOWTRIS:
 		texbegin = 0;
@@ -726,12 +728,12 @@ void R_DrawBrushModels_Water (entity_t **ents, int count, qboolean translucent)
 
 	oit = translucent && R_GetEffectiveAlphaMode () == ALPHAMODE_OIT;
 #if defined(ANDROID_GLES3)
-	program = glprogs.water[oit][softemu == SOFTEMU_COARSE];
+	program = VID_XR_UsingMultiview () ? glprogs.water_multiview[oit][softemu == SOFTEMU_COARSE] : glprogs.water[oit][softemu == SOFTEMU_COARSE];
 #else
 	if (cl.worldmodel->haslitwater && r_litwater.value)
-		program = glprogs.world[oit][q_max(0, (int)softemu - 1)][WORLDSHADER_WATER];
+		program = VID_XR_UsingMultiview () ? glprogs.world_multiview[oit][q_max(0, (int)softemu - 1)][WORLDSHADER_WATER] : glprogs.world[oit][q_max(0, (int)softemu - 1)][WORLDSHADER_WATER];
 	else
-		program = glprogs.water[oit][softemu == SOFTEMU_COARSE];
+		program = VID_XR_UsingMultiview () ? glprogs.water_multiview[oit][softemu == SOFTEMU_COARSE] : glprogs.water[oit][softemu == SOFTEMU_COARSE];
 #endif
 
 	R_ResetBModelCalls (program);

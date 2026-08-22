@@ -281,32 +281,47 @@ NOISE_FUNCTIONS
 ////////////////////////////////////////////////////////////////
 
 #define FRAMEDATA_BUFFER \
+"#if IW_MULTIVIEW\n"\
+"#extension GL_OVR_multiview2 : require\n"\
+"#if IW_VERTEX_SHADER\n"\
+"layout(num_views=2) in;\n"\
+"#endif\n"\
+"layout(std140, binding=3) uniform MultiviewDataUBO\n"\
+"{\n"\
+"\tmat4\tIW_ViewProj[2];\n"\
+"\tvec4\tIW_EyePos[2];\n"\
+"};\n"\
+"#endif\n"\
 "layout(std140, binding=0) uniform FrameDataUBO\n"\
 "{\n"\
-"	mat4	ViewProj;\n"\
-"	vec4	Fog;\n"\
-"	vec4	SkyFog;\n"\
-"	vec3	WindDir;\n"\
-"	float	WindPhase;\n"\
-"	float	ScreenDither;\n"\
-"	float	TextureDither;\n"\
-"	vec3	EyePos;\n"\
-"	float	Time;\n"\
-"	float	ZLogScale;\n"\
-"	float	ZLogBias;\n"\
-"	uint	NumLights;\n"\
+"\tmat4\tIW_FrameViewProj;\n"\
+"\tvec4\tFog;\n"\
+"\tvec4\tSkyFog;\n"\
+"\tvec3\tWindDir;\n"\
+"\tfloat\tWindPhase;\n"\
+"\tfloat\tScreenDither;\n"\
+"\tfloat\tTextureDither;\n"\
+"\tvec3\tIW_FrameEyePos;\n"\
+"\tfloat\tTime;\n"\
+"\tfloat\tZLogScale;\n"\
+"\tfloat\tZLogBias;\n"\
+"\tuint\tNumLights;\n"\
 "};\n"\
+"#if IW_MULTIVIEW\n"\
+"#define ViewProj IW_ViewProj[gl_ViewID_OVR]\n"\
+"#define EyePos IW_EyePos[gl_ViewID_OVR].xyz\n"\
+"#else\n"\
+"#define ViewProj IW_FrameViewProj\n"\
+"#define EyePos IW_FrameEyePos\n"\
+"#endif\n"\
 "\n"\
 "vec3 ApplyFog(vec3 clr, vec3 p)\n"\
 "{\n"\
-"	float fog = exp2(-Fog.w * dot(p, p));\n"\
-"	fog = clamp(fog, 0.0, 1.0);\n"\
-"	return Fog.rgb + (clr - Fog.rgb) * fog;\n"\
+"\tfloat fog = exp2(-Fog.w * dot(p, p));\n"\
+"\tfog = clamp(fog, 0.0, 1.0);\n"\
+"\treturn Fog.rgb + (clr - Fog.rgb) * fog;\n"\
 "}\n"\
-"\n"\
-
-////////////////////////////////////////////////////////////////
-
+"\n"
 #define LIGHT_BUFFER \
 "#define LIGHT_TILES_X " QS_STRINGIFY (LIGHT_TILES_X) "\n"\
 "#define LIGHT_TILES_Y " QS_STRINGIFY (LIGHT_TILES_Y) "\n"\
@@ -1156,9 +1171,7 @@ NOISE_FUNCTIONS
 ////////////////////////////////////////////////////////////////
 
 static const char sky_boxside_vertex_shader[] =
-"layout(location=0) uniform mat4 MVP;\n"
-"layout(location=1) uniform vec3 EyePos;\n"
-"\n"
+FRAMEDATA_BUFFER
 "layout(location=0) in vec3 in_dir;\n"
 "layout(location=1) in vec2 in_uv;\n"
 "\n"
@@ -1167,21 +1180,18 @@ static const char sky_boxside_vertex_shader[] =
 "\n"
 "void main()\n"
 "{\n"
-"	gl_Position = MVP * vec4(EyePos + in_dir, 1.0);\n"
-"	gl_Position.z = gl_Position.w; // map to far plane\n"
-"	out_dir = in_dir;\n"
-"	out_uv = in_uv;\n"
+"\tgl_Position = ViewProj * vec4(EyePos + in_dir, 1.0);\n"
+"\tgl_Position.z = gl_Position.w; // map to far plane\n"
+"\tout_dir = in_dir;\n"
+"\tout_uv = in_uv;\n"
 "}\n";
-
 ////////////////////////////////////////////////////////////////
 
 static const char sky_boxside_fragment_shader[] =
+FRAMEDATA_BUFFER
 "layout(binding=0) uniform sampler2D Tex;\n"
 "\n"
 NOISE_FUNCTIONS
-"\n"
-"layout(location=2) uniform vec4 Fog;\n"
-"layout(location=3) uniform float ScreenDither;\n"
 "\n"
 "layout(location=0) in vec3 in_dir;\n"
 "layout(location=1) in vec2 in_uv;\n"
@@ -1190,17 +1200,16 @@ NOISE_FUNCTIONS
 "\n"
 "void main()\n"
 "{\n"
-"	out_fragcolor = texture(Tex, in_uv);\n"
-"	out_fragcolor.rgb = out_fragcolor.rgb + (Fog.rgb - out_fragcolor.rgb) * Fog.w;\n"
+"\tout_fragcolor = texture(Tex, in_uv);\n"
+"\tout_fragcolor.rgb = out_fragcolor.rgb + (Fog.rgb - out_fragcolor.rgb) * Fog.w;\n"
 "#if DITHER\n"
-"	out_fragcolor.rgb = sqrt(out_fragcolor.rgb);\n"
-"	out_fragcolor.rgb += tri(bayer01(ivec2(floor(gl_FragCoord.xy)+0.5))) * ScreenDither;\n"
-"	out_fragcolor.rgb *= out_fragcolor.rgb;\n"
+"\tout_fragcolor.rgb = sqrt(out_fragcolor.rgb);\n"
+"\tout_fragcolor.rgb += tri(bayer01(ivec2(floor(gl_FragCoord.xy)+0.5))) * ScreenDither;\n"
+"\tout_fragcolor.rgb *= out_fragcolor.rgb;\n"
 "#else\n"
-"	out_fragcolor.rgb += bayer(ivec2(gl_FragCoord.xy)) * ScreenDither;\n"
+"\tout_fragcolor.rgb += bayer(ivec2(gl_FragCoord.xy)) * ScreenDither;\n"
 "#endif\n"
 "}\n";
-
 ////////////////////////////////////////////////////////////////
 //
 // Alias models
@@ -1208,6 +1217,12 @@ NOISE_FUNCTIONS
 ////////////////////////////////////////////////////////////////
 
 #define ALIAS_INSTANCE_BUFFER \
+"#if IW_MULTIVIEW\n"\
+"#extension GL_OVR_multiview2 : require\n"\
+"#if IW_VERTEX_SHADER\n"\
+"layout(num_views=2) in;\n"\
+"#endif\n"\
+"#endif\n"\
 "struct InstanceData\n"\
 "{\n"\
 "\tvec4\tWorldMatrix[3];\n"\
@@ -1220,12 +1235,24 @@ NOISE_FUNCTIONS
 "\n"\
 "layout(std430, binding=1) restrict readonly buffer InstanceBuffer\n"\
 "{\n"\
-"\tmat4\tViewProj;\n"\
-"\tvec3\tEyePos;\n"\
+"#if IW_MULTIVIEW\n"\
+"\tmat4\tIW_AliasViewProj[2];\n"\
+"\tvec4\tIW_AliasEyePos[2];\n"\
+"#else\n"\
+"\tmat4\tIW_AliasViewProj;\n"\
+"\tvec3\tIW_AliasEyePos;\n"\
+"#endif\n"\
 "\tvec4\tFog;\n"\
 "\tfloat\tScreenDither;\n"\
 "\tInstanceData instances[];\n"\
 "};\n"\
+"#if IW_MULTIVIEW\n"\
+"#define ViewProj IW_AliasViewProj[gl_ViewID_OVR]\n"\
+"#define EyePos IW_AliasEyePos[gl_ViewID_OVR].xyz\n"\
+"#else\n"\
+"#define ViewProj IW_AliasViewProj\n"\
+"#define EyePos IW_AliasEyePos\n"\
+"#endif\n"\
 ////////////////////////////////////////////////////////////////
 
 static const char alias_vertex_shader[] =

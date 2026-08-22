@@ -847,6 +847,8 @@ Returns true if the box is completely outside the frustum
 */
 qboolean R_CullBox (vec3_t emins, vec3_t emaxs)
 {
+	if (VID_XR_UsingMultiview ())
+		return false;
 	int i;
 	mplane_t *p;
 	byte signbits;
@@ -1089,7 +1091,7 @@ alphamode_t R_GetEffectiveAlphaMode (void)
 #if defined(ANDROID_GLES3)
 	return r_alphasort.value ? ALPHAMODE_SORTED : ALPHAMODE_BASIC;
 #endif
-	if (map_checks.value)
+	if (VID_XR_UsingMultiview () || map_checks.value)
 		return ALPHAMODE_BASIC;
 	return R_GetAlphaMode ();
 }
@@ -1387,7 +1389,7 @@ GL_NeedsSceneEffects
 */
 qboolean GL_NeedsSceneEffects (void)
 {
-	return R_HasXRFinalTarget() || framebufs.scene.samples > 1 || water_warp || r_refdef.scale != 1;
+	return !VID_XR_UsingMultiview () && (R_HasXRFinalTarget() || framebufs.scene.samples > 1 || water_warp || r_refdef.scale != 1);
 }
 
 /*
@@ -1397,7 +1399,7 @@ GL_NeedsPostprocess
 */
 qboolean GL_NeedsPostprocess (void)
 {
-    return vid_gamma.value != 1.f || vid_contrast.value != 1.f || softemu || R_GetEffectiveAlphaMode () == ALPHAMODE_OIT;
+    return !VID_XR_UsingMultiview () && (vid_gamma.value != 1.f || vid_contrast.value != 1.f || softemu || R_GetEffectiveAlphaMode () == ALPHAMODE_OIT);
 }
 
 /*
@@ -1409,7 +1411,14 @@ void R_SetupGL (void)
 {
 
 
-	if (!GL_NeedsSceneEffects ())
+	if (VID_XR_UsingMultiview ())
+	{
+		R_BindXRFinalTarget ();
+		framesetup.scene_fbo = r_xr_final_fbo;
+		framesetup.oit_fbo = r_xr_final_fbo;
+		glViewport (0, 0, r_xr_final_width, r_xr_final_height);
+	}
+	else if (!GL_NeedsSceneEffects ())
 	{
 		GL_BindFramebufferFunc (GL_FRAMEBUFFER, GL_NeedsPostprocess () ? framebufs.composite.fbo : 0u);
 		framesetup.scene_fbo = framebufs.composite.fbo;
@@ -1456,6 +1465,8 @@ void R_SetupScene (void)
 R_UploadFrameData
 ===============
 */
+static gpumultiviewframedata_t r_multiview_framedata;
+
 void R_UploadFrameData (void)
 {
 	GLuint	buf;
@@ -1479,11 +1490,28 @@ void R_UploadFrameData (void)
 R_SetupView -- johnfitz -- this is the stuff that needs to be done once per frame, even in stereo mode
 ===============
 */
+const gpumultiviewframedata_t *R_GetMultiviewFrameData (void) { return &r_multiview_framedata; }
+
+void R_UploadMultiviewFrameData (const gpumultiviewframedata_t *data)
+{
+	struct { float viewproj[2][16]; float eyepos[2][4]; } views;
+	GLuint buf;
+	GLbyte *ofs;
+
+	if (!data)
+		return;
+	r_multiview_framedata = *data;
+	memcpy (views.viewproj, data->viewproj, sizeof (views.viewproj));
+	memcpy (views.eyepos, data->eyepos, sizeof (views.eyepos));
+	R_UploadFrameData ();
+	GL_Upload (GL_UNIFORM_BUFFER, &views, sizeof (views), &buf, &ofs);
+	GL_BindBufferRange (GL_UNIFORM_BUFFER, 3, buf, (GLintptr)ofs, sizeof (views));
+}
 void R_SetupView (void)
 {
 	R_AnimateLight ();
 
-	r_framecount++;
+		r_framecount++;
 	r_framedata.eyepos[0] = r_refdef.vieworg[0];
 	r_framedata.eyepos[1] = r_refdef.vieworg[1];
 	r_framedata.eyepos[2] = r_refdef.vieworg[2];
@@ -1562,7 +1590,6 @@ void R_SetupView (void)
 	R_MarkSurfaces (); //johnfitz -- create texture chains from PVS
     XR_Interaction_AddWorldEntities ();
     R_SortEntities ();
-
 	R_PushDlights ();
 
 	//johnfitz -- cheat-protect some draw modes
@@ -1718,7 +1745,7 @@ void R_FlushDebugGeometry (void)
 		GLbyte	*ofs;
 		unsigned int state;
 
-		GL_UseProgram (glprogs.debug3d);
+		GL_UseProgram (VID_XR_UsingMultiview () ? glprogs.debug3d_multiview : glprogs.debug3d);
 		state = GLS_BLEND_ALPHA | GLS_NO_ZWRITE | GLS_CULL_NONE | GLS_ATTRIBS(2);
 		if (!debugztest)
 			state |= GLS_NO_ZTEST;
@@ -1835,7 +1862,7 @@ static void R_XRDrawLaserBeam (void)
 	{
 		GLuint buf;
 		GLbyte *ofs;
-		GL_UseProgram (glprogs.debug3d);
+		GL_UseProgram (VID_XR_UsingMultiview () ? glprogs.debug3d_multiview : glprogs.debug3d);
 		GL_SetState (GLS_BLEND_ALPHA | GLS_NO_ZWRITE | GLS_CULL_NONE | GLS_ATTRIBS(2));
 		GL_UploadTransient (GL_ARRAY_BUFFER, verts, sizeof (verts), buf, ofs, "xr laser");
 		GL_BindBuffer (GL_ARRAY_BUFFER, buf);
@@ -1859,7 +1886,7 @@ static void R_XRDrawTeleportMarker (void)
     const float outer_radius = 13.333f, inner_radius = 12.833f;
     if (!r_xr_teleport_marker_valid) return;
     for (i = 0; i < 16; ++i) { float a = (float)i * 2.f * (float)M_PI / 16.f; int next = (i + 1) % 16; VectorCopy(r_xr_teleport_marker_origin, verts[i * 2].pos); VectorCopy(r_xr_teleport_marker_origin, verts[i * 2 + 1].pos); verts[i * 2].pos[0] += cosf(a) * outer_radius; verts[i * 2].pos[1] += sinf(a) * outer_radius; verts[i * 2 + 1].pos[0] += cosf(a) * inner_radius; verts[i * 2 + 1].pos[1] += sinf(a) * inner_radius; verts[i * 2].pos[2] += 0.15f; verts[i * 2 + 1].pos[2] += 0.15f; verts[i * 2].color = verts[i * 2 + 1].color = r_xr_teleport_marker_color; idx[i * 6] = (uint16_t)(i * 2); idx[i * 6 + 1] = (uint16_t)(next * 2); idx[i * 6 + 2] = (uint16_t)(i * 2 + 1); idx[i * 6 + 3] = (uint16_t)(i * 2 + 1); idx[i * 6 + 4] = (uint16_t)(next * 2); idx[i * 6 + 5] = (uint16_t)(next * 2 + 1); }
-    GL_UseProgram(glprogs.debug3d); GL_SetState(GLS_BLEND_ALPHA | GLS_NO_ZWRITE | GLS_CULL_NONE | GLS_ATTRIBS(2)); GL_UploadTransient(GL_ARRAY_BUFFER, verts, sizeof(verts), buf, ofs, "xr teleport marker"); GL_BindBuffer(GL_ARRAY_BUFFER, buf);
+    GL_UseProgram(VID_XR_UsingMultiview () ? glprogs.debug3d_multiview : glprogs.debug3d); GL_SetState(GLS_BLEND_ALPHA | GLS_NO_ZWRITE | GLS_CULL_NONE | GLS_ATTRIBS(2)); GL_UploadTransient(GL_ARRAY_BUFFER, verts, sizeof(verts), buf, ofs, "xr teleport marker"); GL_BindBuffer(GL_ARRAY_BUFFER, buf);
 #if defined(ANDROID_GLES3)
     GLESVAO_BindDynamic();
 #endif
@@ -2608,7 +2635,7 @@ void R_WarpScaleView (void)
 	GLuint fbodest;
 	double t;
 
-	if (!GL_NeedsSceneEffects ())
+	if (VID_XR_UsingMultiview () || !GL_NeedsSceneEffects ())
 		return;
 
 	srcx = glx + r_refdef.vrect.x;

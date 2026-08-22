@@ -123,6 +123,7 @@ extern	qboolean	gl_multi_bind_able;
 extern	qboolean	gl_bindless_able;
 extern	qboolean	gl_clipcontrol_able;
 extern qboolean gl_timer_query_able;
+extern qboolean gl_multiview_able;
 
 extern	const char	*gl_vendor;
 extern	const char	*gl_renderer;
@@ -185,6 +186,7 @@ extern	const char	*gl_version;
 	x(void,			GenFramebuffers, (GLsizei n, GLuint *framebuffers))\
 	x(void,			DeleteFramebuffers, (GLsizei n, const GLuint *framebuffers))\
 	x(void,			FramebufferTexture2D, (GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level))\
+	x(void,			FramebufferTextureLayer, (GLenum target, GLenum attachment, GLuint texture, GLint level, GLint layer))\
 	x(GLenum,		CheckFramebufferStatus, (GLenum target))\
 	x(void,			BlitFramebuffer, (GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter))\
 	x(void,			DrawBuffers, (GLsizei n, const GLenum *bufs))\
@@ -511,6 +513,23 @@ typedef struct gpuframedata_s {
 	int		_padding2;
 } gpuframedata_t;
 
+typedef struct gpumultiviewframedata_s {
+    float viewproj[2][16];
+    float fogdata[4];
+    float skyfogdata[4];
+    vec3_t winddir;
+    float windphase;
+    float screendither;
+    float texturedither;
+    float _padding1[2];
+    float eyepos[2][4];
+    float time;
+    float zlogscale;
+    float zlogbias;
+    int numlights;
+    int _padding2;
+} gpumultiviewframedata_t;
+
 extern gpulightbuffer_t r_lightbuffer;
 typedef struct gles_object_ubo_s {
 	float worldmatrix[3][4];
@@ -538,6 +557,10 @@ void R_TranslatePlayerSkin (int playernum);
 void R_TranslateNewPlayerSkin (int playernum); //johnfitz -- this handles cases when the actual texture changes
 
 void R_UploadFrameData (void);
+void R_SetupView (void);
+void R_RenderScene (void);
+void R_UploadMultiviewFrameData (const gpumultiviewframedata_t *data);
+const gpumultiviewframedata_t *R_GetMultiviewFrameData (void);
 
 void R_DrawBrushModels (entity_t **ents, int count);
 void R_DrawBrushModels_Water (entity_t **ents, int count, qboolean translucent);
@@ -623,15 +646,25 @@ typedef struct glprogs_s {
 
 	/* 3d */
 	GLuint		world[2][3][3];		// [OIT][standard/dithered/banded][solid/alpha test/water]
+	GLuint		world_multiview[2][3][3];
 	GLuint		water[2][2];		// [OIT][dither]
+	GLuint		water_multiview[2][2];
 	GLuint		skystencil;
+	GLuint		skystencil_multiview;
 	GLuint		skylayers[2];		// [dither]
+	GLuint		skylayers_multiview[2];
 	GLuint		skycubemap[2][2];	// [anim][dither]
+	GLuint		skycubemap_multiview[2][2];
 	GLuint		skyboxside[2];		// [dither]
+	GLuint		skyboxside_multiview[2];
 	GLuint		alias[2][3][2][3];	// [OIT][mode:standard/dithered/noperspective][alpha test][poseverttype]
+	GLuint		alias_multiview[2][3][2][3];
 	GLuint		sprites[2];			// [dither]
+	GLuint		sprites_multiview[2];
 	GLuint		particles[2][2];	// [OIT][dither]
+	GLuint		particles_multiview[2][2];
 	GLuint		debug3d;
+	GLuint		debug3d_multiview;
 
 	/* compute */
 	GLuint		clear_indirect;
@@ -774,6 +807,10 @@ qboolean R_XRTransformRoomscaleDelta (const float xr[3], float quake[3]);
 void R_ApplyXRProjectileVisualOffset (const entity_t *e, vec3_t origin);
 void R_SetXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye);
 void R_ClearXREye (void);
+void V_RenderXRMultiview (const iw_xr_frame_snapshot_t *snapshot);
+qboolean VID_XR_UsingMultiview (void);
+qboolean VID_XR_BeginMultiview (unsigned *fbo, int *width, int *height);
+void VID_XR_EndMultiview (void);
 qboolean VID_XR_GetStereoFrame (const iw_xr_frame_snapshot_t **snapshot);
 qboolean VID_XR_GetHeadPosition (float position[3]);
 qboolean VID_XR_RaycastVirtualScreen(const float origin[3], const float orientation[4], iw_xr_virtual_screen_hit_t *hit);

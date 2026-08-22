@@ -2230,31 +2230,48 @@ void SCR_UpdateScreen (void)
 			qboolean hud_layer = VID_XR_BeginHUD (&hud_fbo, &hud_width, &hud_height);
 			scr_xr_hud_layer = hud_layer;
 
-			for (eye = 0; eye < 2; ++eye)
 			{
-				unsigned eye_fbo;
-				int eye_width, eye_height;
-				if (!VID_XR_BeginEye (eye, &eye_fbo, &eye_width, &eye_height))
-					continue;
-				glx = gly = 0;
-				glwidth = eye_width;
-				glheight = eye_height;
-				GL_SetFrameBufferSize (eye_width, eye_height);
-				vid.width = eye_width;
-				vid.height = eye_height;
-				vid.guiwidth = eye_width;
-				vid.guiheight = eye_height;
-				SCR_CalcRefdef ();
-				r_refdef.scale = q_max (1, CLAMP (1, (int)r_scale.value, vid.maxscale));
-				R_SetXRFinalTarget (eye_fbo, eye_width, eye_height);
-				V_RenderXREye (snapshot, eye);
-				Sbar_Changed ();
-				SCR_DrawScreenOverlay ();
-				GL_PostProcess ();
-				VID_XR_EndEye (eye);
-				R_ClearXREye ();
-			}
-			if (hud_layer)
+				qboolean rendered_multiview = false;
+				if (VID_XR_UsingMultiview ())
+				{
+					unsigned fbo; int width, height;
+					if (VID_XR_BeginMultiview (&fbo, &width, &height))
+					{
+						glx = gly = 0; glwidth = width; glheight = height;
+						GL_SetFrameBufferSize (width, height);
+						vid.width = vid.guiwidth = width; vid.height = vid.guiheight = height;
+						SCR_CalcRefdef (); r_refdef.scale = 1;
+						R_SetXRFinalTarget (fbo, width, height);
+						V_RenderXRMultiview (snapshot);
+						VID_XR_EndMultiview (); R_ClearXREye ();
+						rendered_multiview = true;
+					}
+				}
+				if (!rendered_multiview) for (eye = 0; eye < 2; ++eye)
+				{
+					unsigned eye_fbo;
+					int eye_width, eye_height;
+					if (!VID_XR_BeginEye (eye, &eye_fbo, &eye_width, &eye_height))
+						continue;
+					glx = gly = 0;
+					glwidth = eye_width;
+					glheight = eye_height;
+					GL_SetFrameBufferSize (eye_width, eye_height);
+					vid.width = eye_width;
+					vid.height = eye_height;
+					vid.guiwidth = eye_width;
+					vid.guiheight = eye_height;
+					SCR_CalcRefdef ();
+					r_refdef.scale = q_max (1, CLAMP (1, (int)r_scale.value, vid.maxscale));
+					R_SetXRFinalTarget (eye_fbo, eye_width, eye_height);
+					V_RenderXREye (snapshot, eye);
+					Sbar_Changed ();
+					SCR_DrawScreenOverlay ();
+					GL_PostProcess ();
+					VID_XR_EndEye (eye);
+					R_ClearXREye ();
+				}
+			}			if (hud_layer)
 			{
 			    glx = gly = 0;
 			    glwidth = hud_width;

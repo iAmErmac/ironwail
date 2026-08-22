@@ -115,6 +115,9 @@ else()
 endif()
 
 target_compile_definitions(ironwail PRIVATE $<$<CONFIG:Debug>:DEBUG=1> $<$<NOT:$<CONFIG:Debug>>:NDEBUG=1> USE_SDL2 USE_CODEC_WAVE)
+if (MSVC)
+    target_link_options(ironwail PRIVATE $<$<CONFIG:Debug>:/DEBUG>)
+endif()
 
 set(IRONWAIL_PAK_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Misc/pak" CACHE PATH "Ironwail pak source directory" )
 set(IRONWAIL_PAK_BUILDER "${IRONWAIL_PAK_SOURCE_DIR}/build_pak.ps1")

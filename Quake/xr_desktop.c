@@ -17,6 +17,8 @@ typedef struct {
     XrSwapchain swapchain;
     XrSwapchainImageOpenGLKHR *images;
     GLuint *fbos;
+    GLuint *depth_textures;
+    GLuint mirror_fbo;
     uint32_t image_count;
     uint32_t image_index;
     uint32_t width;
@@ -40,6 +42,8 @@ struct iw_xr_win_s {
 XrSwapchain swapchain;
     XrSwapchainImageOpenGLKHR *images;
     GLuint *fbos;
+    GLuint *depth_textures;
+    GLuint mirror_fbo;
     uint32_t image_count;
     uint32_t image_index;
     uint32_t width;
@@ -63,6 +67,11 @@ XrSwapchain swapchain;
     float hud_yoffset;
     qboolean curve_submission_logged;
     iw_xr_gl_target_t eyes[2];
+    iw_xr_gl_target_t multiview;
+    qboolean multiview_capable;
+    qboolean multiview_requested;
+    qboolean multiview_active;
+    void (APIENTRYP framebuffer_texture_multiview_ovr)(GLenum, GLenum, GLuint, GLint, GLint, GLsizei);
     int64_t swapchain_format;
     iw_xr_gl_target_t pointer_target;
     qboolean pointer_active;
@@ -152,6 +161,8 @@ static void xr_destroy_target(iw_xr_win_t *xr, iw_xr_gl_target_t *target)
     uint32_t i;
     if (!target) return;
     if (target->fbos) { for (i = 0; i < target->image_count; ++i) if (target->fbos[i]) GL_DeleteFramebuffersFunc(1, &target->fbos[i]); free(target->fbos); }
+    if (target->mirror_fbo) GL_DeleteFramebuffersFunc(1, &target->mirror_fbo);
+    if (target->depth_textures) { glDeleteTextures(target->image_count, target->depth_textures); free(target->depth_textures); }
     free(target->images);
     if (target->swapchain != XR_NULL_HANDLE && xr->destroy_swapchain) xr->destroy_swapchain(target->swapchain);
     memset(target, 0, sizeof(*target));
@@ -174,6 +185,75 @@ failed:
     GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0); xr_destroy_target(xr, target); if (reason) *reason = "OpenXR stereo swapchain framebuffer incomplete"; return false;
 }
 
+static qboolean xr_has_gl_extension(const char *extension)
+{
+    GLint count = 0;
+    GLint i;
+    if (!extension || !GL_GetStringiFunc) return false;
+    glGetIntegerv(GL_NUM_EXTENSIONS, &count);
+    for (i = 0; i < count; ++i)
+    {
+        const char *name = (const char *)GL_GetStringiFunc(GL_EXTENSIONS, (GLuint)i);
+        if (name && !strcmp(name, extension)) return true;
+    }
+    return false;
+}
+static qboolean xr_create_multiview_target(iw_xr_win_t *xr, int64_t format, uint32_t width, uint32_t height, uint32_t sample_count, const char **reason)
+{
+    iw_xr_gl_target_t *target = &xr->multiview;
+    XrSwapchainCreateInfo info;
+    XrSwapchainImageBaseHeader *base_images;
+    XrResult result;
+    uint32_t i;
+
+    if (!xr->framebuffer_texture_multiview_ovr)
+    {
+        if (reason) *reason = "GL_OVR_multiview2 framebuffer entry point unavailable";
+        return false;
+    }
+    memset(&info, 0, sizeof(info));
+    info.type = XR_TYPE_SWAPCHAIN_CREATE_INFO;
+    info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
+    info.format = format;
+    info.sampleCount = 1;
+    info.width = width;
+    info.height = height;
+    info.faceCount = info.mipCount = 1;
+    info.arraySize = 2;
+    result = xr->create_swapchain(xr->session, &info, &target->swapchain);
+    if (result != XR_SUCCESS) { if (reason) *reason = "OpenXR two-layer swapchain creation failed"; return false; }
+    result = xr->enumerate_swapchain_images(target->swapchain, 0, &target->image_count, NULL);
+    if (result != XR_SUCCESS || !target->image_count) goto failed;
+    target->images = calloc(target->image_count, sizeof(*target->images));
+    target->fbos = calloc(target->image_count, sizeof(*target->fbos));
+    target->depth_textures = calloc(target->image_count, sizeof(*target->depth_textures));
+    if (!target->images || !target->fbos || !target->depth_textures) goto failed;
+    base_images = (XrSwapchainImageBaseHeader *)target->images;
+    for (i = 0; i < target->image_count; ++i) target->images[i].type = XR_TYPE_SWAPCHAIN_IMAGE_OPENGL_KHR;
+    result = xr->enumerate_swapchain_images(target->swapchain, target->image_count, &target->image_count, base_images);
+    if (result != XR_SUCCESS) goto failed;
+    GL_GenFramebuffersFunc(target->image_count, target->fbos);
+    for (i = 0; i < target->image_count; ++i)
+    {
+        GL_BindFramebufferFunc(GL_FRAMEBUFFER, target->fbos[i]);
+        xr->framebuffer_texture_multiview_ovr(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, target->images[i].image, 0, 0, 2);
+        glGenTextures(1, &target->depth_textures[i]);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, target->depth_textures[i]);
+        GL_TexStorage3DFunc(GL_TEXTURE_2D_ARRAY, 1, GL_DEPTH24_STENCIL8, width, height, 2);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        xr->framebuffer_texture_multiview_ovr(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, target->depth_textures[i], 0, 0, 2);
+        if (GL_CheckFramebufferStatusFunc(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) goto failed;
+    }
+    GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
+    target->width = width; target->height = height;
+    return true;
+failed:
+    GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
+    xr_destroy_target(xr, target);
+    if (reason) *reason = "OpenXR layered multiview framebuffer incomplete";
+    return false;
+}
 static qboolean xr_acquire_target(iw_xr_win_t *xr, iw_xr_gl_target_t *target)
 {
     XrSwapchainImageAcquireInfo acquire_info; XrSwapchainImageWaitInfo wait_info; XrSwapchainImageReleaseInfo release_info;
@@ -598,6 +678,7 @@ static void xr_destroy_resources(iw_xr_win_t *xr)
     xr_destroy_actions(xr);
     xr_destroy_target(xr, &xr->eyes[0]);
     xr_destroy_target(xr, &xr->eyes[1]);
+    xr_destroy_target(xr, &xr->multiview);
     xr_destroy_target(xr, &xr->pointer_target);
     if (xr->fbos)
     {
@@ -691,6 +772,7 @@ iw_xr_result_t IW_XRWin_Probe(iw_xr_win_t *xr, iw_xr_bridge_t *bridge, uint64_t 
     qboolean has_cylinder_extension = false;
     XrViewConfigurationType view_configs[8];
     uint32_t view_config_count = 0;
+    uint32_t stereo_view_count = 0;
     uint32_t view_config_index;
     XrViewConfigurationView view_config_views[2];
 
@@ -780,7 +862,8 @@ iw_xr_result_t IW_XRWin_Probe(iw_xr_win_t *xr, iw_xr_bridge_t *bridge, uint64_t 
     result = xr->enumerate_view_configuration_views(xr->instance, xr->system_id, xr->view_config_type,
                                                      Q_COUNTOF(view_config_views), &count, view_config_views);
     if (result != XR_SUCCESS || count < 2)
-        return xr_fail(xr, reason, result, "xrEnumerateViewConfigurationViews");    memset(&requirements, 0, sizeof(requirements));
+        return xr_fail(xr, reason, result, "xrEnumerateViewConfigurationViews");
+    stereo_view_count = count;    memset(&requirements, 0, sizeof(requirements));
     requirements.type = XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_KHR;
     result = xr->get_opengl_graphics_requirements(xr->instance, xr->system_id, &requirements);
     if (result != XR_SUCCESS)
@@ -909,13 +992,33 @@ xr->fbos = (GLuint *)calloc(xr->image_count, sizeof(*xr->fbos));
             xr_log(xr, "OpenXR stereo target creation failed; flat screen remains available");
             xr_destroy_target(xr, &xr->eyes[0]);
             xr_destroy_target(xr, &xr->eyes[1]);
+    xr_destroy_target(xr, &xr->multiview);
     xr_destroy_target(xr, &xr->pointer_target);
             break;
         }
     }
     if (!xr_create_target(xr, &xr->pointer_target, swap_info.format, 256, 64, 1, NULL))
         xr_log(xr, "OpenXR pointer layer unavailable");
-    if (xr->eyes[0].swapchain != XR_NULL_HANDLE && xr->eyes[1].swapchain != XR_NULL_HANDLE)
+    {
+        qboolean matching_views = stereo_view_count == 2 && xr->eyes[0].width == xr->eyes[1].width && xr->eyes[0].height == xr->eyes[1].height;
+        qboolean extension = xr_has_gl_extension("GL_OVR_multiview2");
+        char message[192];
+
+        xr->framebuffer_texture_multiview_ovr = (void (APIENTRYP)(GLenum, GLenum, GLuint, GLint, GLint, GLsizei))SDL_GL_GetProcAddress("glFramebufferTextureMultiviewOVR");
+        q_snprintf(message, sizeof(message), "OpenXR multiview prerequisites: requested=%d view_count=%u matching_views=%d extension=%d framebuffer_entry=%d", xr->multiview_requested, stereo_view_count, matching_views, extension, xr->framebuffer_texture_multiview_ovr != NULL);
+        xr_log(xr, message);
+        if (matching_views && extension && xr->framebuffer_texture_multiview_ovr)
+        {
+            const char *multiview_reason = NULL;
+            xr->multiview_capable = xr_create_multiview_target(xr, swap_info.format, xr->eyes[0].width, xr->eyes[0].height,
+                q_min(view_config_views[0].recommendedSwapchainSampleCount, view_config_views[1].recommendedSwapchainSampleCount), &multiview_reason);
+            xr_log(xr, xr->multiview_capable ? "OpenXR multiview capability: layered two-view target ready" : multiview_reason);
+            xr->multiview_active = xr->multiview_requested && xr->multiview_capable;
+            xr_log(xr, xr->multiview_active ? "OpenXR multiview active for gameplay stereo" : "OpenXR multiview disabled; using two-pass stereo");
+        }
+        else
+            xr_log(xr, "OpenXR multiview capability: unavailable; using two-pass stereo");
+    }    if (xr->eyes[0].swapchain != XR_NULL_HANDLE && xr->eyes[1].swapchain != XR_NULL_HANDLE)
     {
         char message[192];
         q_snprintf(message, sizeof(message), "OpenXR stereo targets: scale=%.2f, recommended=%ux%u / %ux%u, allocated=%ux%u / %ux%u", CLAMP(0.3f, vr_render_scale.value, 2.f), view_config_views[0].recommendedImageRectWidth, view_config_views[0].recommendedImageRectHeight, view_config_views[1].recommendedImageRectWidth, view_config_views[1].recommendedImageRectHeight, xr->eyes[0].width, xr->eyes[0].height, xr->eyes[1].width, xr->eyes[1].height);
@@ -1277,6 +1380,41 @@ qboolean IW_XRWin_HasStereoTargets(const iw_xr_win_t *xr)
     return xr && xr->eyes[0].swapchain != XR_NULL_HANDLE && xr->eyes[1].swapchain != XR_NULL_HANDLE;
 }
 
+void IW_XRWin_SetMultiviewRequested(iw_xr_win_t *xr, qboolean requested)
+{
+    if (!xr) return;
+    xr->multiview_requested = requested;
+    xr->multiview_active = requested && xr->multiview_capable;
+    xr_log(xr, xr->multiview_active ? "OpenXR multiview active for gameplay stereo" : (requested ? "OpenXR multiview requested; awaiting capability check" : "OpenXR multiview disabled; using two-pass stereo"));
+}
+
+qboolean IW_XRWin_UsingMultiview(const iw_xr_win_t *xr)
+{
+    return xr && xr->multiview_active;
+}
+qboolean IW_XRWin_BeginMultiviewTarget(iw_xr_win_t *xr, unsigned *fbo, int *width, int *height)
+{
+    iw_xr_gl_target_t *target;
+    if (!xr || !xr->multiview_active)
+        return false;
+    if (!xr_acquire_target(xr, &xr->multiview))
+    {
+        xr->multiview_active = false;
+        xr_log(xr, "OpenXR multiview target acquire failed; using two-pass stereo");
+        return false;
+    }
+    target = &xr->multiview;
+    if (fbo) *fbo = target->fbos[target->image_index];
+    if (width) *width = (int)target->width;
+    if (height) *height = (int)target->height;
+    return true;
+}
+
+void IW_XRWin_EndMultiviewTarget(iw_xr_win_t *xr)
+{
+    /* EndFrame releases the layered image after selecting it for projection submission. */
+    (void)xr;
+}
 qboolean IW_XRWin_BindEyeTarget(iw_xr_win_t *xr, unsigned eye)
 {
     return xr && eye < 2 && xr_acquire_target(xr, &xr->eyes[eye]);
@@ -1292,6 +1430,23 @@ qboolean IW_XRWin_GetEyeTarget(const iw_xr_win_t *xr, unsigned eye, unsigned *fb
     if (width) *width = (int)target->width;
     if (height) *height = (int)target->height;
     return true;
+}
+
+void IW_XRWin_MirrorMultiview(iw_xr_win_t *xr, int width, int height)
+{
+    iw_xr_gl_target_t *target;
+    if (!xr || width <= 0 || height <= 0) return;
+    target = &xr->multiview;
+    if (!target->acquired) return;
+    if (!target->mirror_fbo) GL_GenFramebuffersFunc(1, &target->mirror_fbo);
+    GL_BindFramebufferFunc(GL_READ_FRAMEBUFFER, target->mirror_fbo);
+    GL_FramebufferTextureLayerFunc(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, target->images[target->image_index].image, 0, 0);
+    if (GL_CheckFramebufferStatusFunc(GL_READ_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
+    {
+        GL_BindFramebufferFunc(GL_DRAW_FRAMEBUFFER, 0);
+        GL_BlitFramebufferFunc(0, 0, target->width, target->height, 0, 0, width, height, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    }
+    GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
 }
 
 void IW_XRWin_MirrorEye(iw_xr_win_t *xr, unsigned eye, int width, int height)
@@ -1422,7 +1577,8 @@ iw_xr_result_t IW_XRWin_EndFrame(iw_xr_win_t *xr, qboolean submit)
         XrCompositionLayerBaseHeader *layers[3];
         XrFrameEndInfo projection_end;
         uint32_t i, layer_count = 0;
-        qboolean stereo_submit = xr->eyes[0].acquired && xr->eyes[1].acquired;
+        qboolean multiview_submit = xr->multiview_active && xr->multiview.acquired;
+        qboolean stereo_submit = multiview_submit || (xr->eyes[0].acquired && xr->eyes[1].acquired);
         qboolean hud_submit = xr->image_acquired;
 
         for (i = 0; i < 2; ++i)
@@ -1455,9 +1611,10 @@ iw_xr_result_t IW_XRWin_EndFrame(iw_xr_win_t *xr, qboolean submit)
             projection_views[i].fov.angleRight = xr->frame_snapshot.views[i].fov.right;
             projection_views[i].fov.angleUp = xr->frame_snapshot.views[i].fov.up;
             projection_views[i].fov.angleDown = xr->frame_snapshot.views[i].fov.down;
-            projection_views[i].subImage.swapchain = xr->eyes[i].swapchain;
-            projection_views[i].subImage.imageRect.extent.width = xr->eyes[i].width;
-            projection_views[i].subImage.imageRect.extent.height = xr->eyes[i].height;
+            projection_views[i].subImage.swapchain = multiview_submit ? xr->multiview.swapchain : xr->eyes[i].swapchain;
+            projection_views[i].subImage.imageArrayIndex = multiview_submit ? i : 0;
+            projection_views[i].subImage.imageRect.extent.width = multiview_submit ? xr->multiview.width : xr->eyes[i].width;
+            projection_views[i].subImage.imageRect.extent.height = multiview_submit ? xr->multiview.height : xr->eyes[i].height;
         }
         layers[layer_count++] = (XrCompositionLayerBaseHeader *)&projection;
 
@@ -1477,7 +1634,10 @@ iw_xr_result_t IW_XRWin_EndFrame(iw_xr_win_t *xr, qboolean submit)
             layers[layer_count++] = (XrCompositionLayerBaseHeader *)&hud;
         }
 
-        memset (&projection_end, 0, sizeof (projection_end));
+        if (multiview_submit)
+            xr_release_target (xr, &xr->multiview);
+
+                memset (&projection_end, 0, sizeof (projection_end));
         projection_end.type = XR_TYPE_FRAME_END_INFO;
         projection_end.displayTime = xr->frame_state.predictedDisplayTime;
         projection_end.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
@@ -1649,9 +1809,14 @@ qboolean IW_XRWin_BeginFrame(iw_xr_win_t *xr, iw_xr_frame_snapshot_t *snapshot) 
 qboolean IW_XRWin_BindFrameTarget(iw_xr_win_t *xr) { (void)xr; return false; }
 qboolean IW_XRWin_GetFrameTarget(const iw_xr_win_t *xr, unsigned *fbo, int *width, int *height) { (void)xr; if (fbo) *fbo = 0; if (width) *width = 0; if (height) *height = 0; return false; }
 qboolean IW_XRWin_HasStereoTargets(const iw_xr_win_t *xr) { (void)xr; return false; }
+void IW_XRWin_SetMultiviewRequested(iw_xr_win_t *xr, qboolean requested) { (void)xr; (void)requested; }
+qboolean IW_XRWin_UsingMultiview(const iw_xr_win_t *xr) { (void)xr; return false; }
+qboolean IW_XRWin_BeginMultiviewTarget(iw_xr_win_t *xr, unsigned *fbo, int *width, int *height) { (void)xr; if (fbo) *fbo = 0; if (width) *width = 0; if (height) *height = 0; return false; }
+void IW_XRWin_EndMultiviewTarget(iw_xr_win_t *xr) { (void)xr; }
 qboolean IW_XRWin_BindEyeTarget(iw_xr_win_t *xr, unsigned eye) { (void)xr; (void)eye; return false; }
 qboolean IW_XRWin_GetEyeTarget(const iw_xr_win_t *xr, unsigned eye, unsigned *fbo, int *width, int *height) { (void)xr; (void)eye; if (fbo) *fbo = 0; if (width) *width = 0; if (height) *height = 0; return false; }
 void IW_XRWin_MirrorEye(iw_xr_win_t *xr, unsigned eye, int width, int height) { (void)xr; (void)eye; (void)width; (void)height; }
+void IW_XRWin_MirrorMultiview(iw_xr_win_t *xr, int width, int height) { (void)xr; (void)width; (void)height; }
 qboolean IW_XRWin_ResolveEyeTarget(iw_xr_win_t *xr, unsigned eye, int source_width, int source_height) { (void)xr; (void)eye; (void)source_width; (void)source_height; return false; }
 void IW_XRWin_SetStereoSubmission(iw_xr_win_t *xr, qboolean enabled) { (void)xr; (void)enabled; }
 qboolean IW_XRWin_ResolveDefaultFramebuffer(iw_xr_win_t *xr, int source_width, int source_height) { (void)xr; (void)source_width; (void)source_height; return false; }
