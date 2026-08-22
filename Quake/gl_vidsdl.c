@@ -109,6 +109,8 @@ cvar_t vr_curve_radius = {"vr_curve_radius", "3.0", CVAR_ARCHIVE};
 cvar_t vr_screen_scale = {"vr_screen_scale", "1.0", CVAR_ARCHIVE};
 cvar_t vr_screen_distance = {"vr_screen_distance", "2.5", CVAR_ARCHIVE};
 cvar_t vr_screen_follow = {"vr_screen_follow", "1", CVAR_ARCHIVE};
+cvar_t vr_screen_skybox = {"vr_screen_skybox", "1", CVAR_ARCHIVE};
+
 cvar_t vr_desktop_mirror = {"vr_desktop_mirror", "1", CVAR_ARCHIVE};
 cvar_t vr_world_scale = {"vr_world_scale", "33.5", CVAR_ARCHIVE};
 cvar_t vr_player_height = {"vr_player_height", "1.7", CVAR_ARCHIVE};
@@ -219,7 +221,7 @@ qboolean VID_XR_GetActions(iw_xr_action_snapshot_t *actions)
 #endif
 extern cvar_t vr_haptic_intensity;
 #if defined(ANDROID_GLES3)
-void VID_XR_Haptic(int hand, float amplitude, float duration_seconds) { IW_Android_Haptic(hand, amplitude, duration_seconds); }
+void VID_XR_Haptic(int hand, float amplitude, float duration_seconds) { IW_Android_Haptic(hand, amplitude * CLAMP(0.f, vr_haptic_intensity.value, 1.f), duration_seconds); }
 #else
 void VID_XR_Haptic(int hand, float amplitude, float duration_seconds)
 {
@@ -266,6 +268,7 @@ qboolean VID_XR_GetHeadPosition(float position[3])
 qboolean VID_XR_GetStereoFrame(const iw_xr_frame_snapshot_t **snapshot)
 {
     const iw_xr_frame_snapshot_t *frame = NULL;
+
     if (key_dest != key_game || cl.paused || con_forcedup || cl.intermission != 0 || cls.demoplayback || CL_InCutscene())
     {
         if (snapshot)
@@ -1808,7 +1811,12 @@ void GL_BeginRendering (int *x, int *y, int *width, int *height)
 	GLPalette_UpdateLookupTable ();
 	TexMgr_ApplySettings ();
 
-	GL_BindFramebufferFunc (GL_FRAMEBUFFER, GL_NeedsPostprocess () ? framebufs.composite.fbo : 0);
+	if (GL_NeedsPostprocess ())
+		GL_BindFramebufferFunc (GL_FRAMEBUFFER, framebufs.composite.fbo);
+	else if (R_HasXRFinalTarget ())
+		R_BindXRFinalTarget ();
+	else
+		GL_BindFramebufferFunc (GL_FRAMEBUFFER, 0);
 }
 
 /*
@@ -2085,6 +2093,7 @@ void	VID_Init (void)
     Cvar_RegisterVariable (&vr_screen_scale);
     Cvar_RegisterVariable (&vr_screen_distance);
     Cvar_RegisterVariable (&vr_screen_follow);
+    Cvar_RegisterVariable (&vr_screen_skybox);
     Cvar_RegisterVariable (&vr_desktop_mirror);    Cvar_RegisterVariable (&vr_world_scale);    Cvar_RegisterVariable (&vr_player_height);
     Cvar_RegisterVariable (&vr_hud_scale);
     Cvar_RegisterVariable (&vr_hud_size);

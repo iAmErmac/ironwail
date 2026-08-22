@@ -89,7 +89,7 @@ extern cvar_t vr_curved_screen;
 extern cvar_t vr_curve_radius;
 extern cvar_t vr_screen_scale;
 extern cvar_t vr_mouse, vr_mouse_color, vr_mouse_alpha, vr_aim_beam, vr_aim_beam_width;
-extern cvar_t vr_screen_distance, vr_screen_follow;
+extern cvar_t vr_screen_distance, vr_screen_follow, vr_screen_skybox;
 extern cvar_t vr_desktop_mirror;
 extern cvar_t vr_world_scale, vr_roomscale, vr_teleport, vr_teleport_range, vr_teleport_speed, vr_teleport_auto_jump, vr_teleport_beam_alpha, vr_teleport_beam_color;
 extern cvar_t vr_hud_scale;
@@ -3163,6 +3163,7 @@ void M_Menu_Gamepad_f (void)
 		item (VR_SCREEN_OPT_SCALE, "Scale")						\
 		item (VR_SCREEN_OPT_DISTANCE, "Distance")					\
 		item (VR_SCREEN_OPT_RADIUS, "Curve Radius")					\
+		item (VR_SCREEN_OPT_BACKDROP, "Backdrop Scene")						\
 		item (VR_SCREEN_OPT_MOUSE, "Virtual Mouse")						\
 		item (VR_SCREEN_OPT_BEAM, "Aim Beam")									\
 		item (VR_SCREEN_OPT_BEAM_WIDTH, "Aim Beam Width")							\
@@ -3673,6 +3674,7 @@ static void M_VR_ResetScreen (void)
 	Cvar_SetValueQuick (&vr_screen_distance, 2.5f);
 	Cvar_SetValueQuick (&vr_screen_follow, 1.f);
 	Cvar_SetValueQuick (&vr_curve_radius, 3.f);
+	Cvar_SetValueQuick (&vr_screen_skybox, 1.f);
 	Cvar_SetValueQuick (&vr_mouse, 0.f);
 	Cvar_SetValueQuick (&vr_aim_beam, 1.f);
 	Cvar_SetValueQuick (&vr_aim_beam_width, 2.f);
@@ -3835,7 +3837,11 @@ void M_AdjustSliders (int dir)
 		break;
 	case VR_SCREEN_OPT_RADIUS:
 		Cvar_SetValueQuick (&vr_curve_radius, CLAMP (1.f, vr_curve_radius.value + dir * 0.01f, 20.f));
-		break;	case VR_SCREEN_OPT_MOUSE:
+		break;
+	case VR_SCREEN_OPT_BACKDROP:
+		Cvar_SetValueQuick (&vr_screen_skybox, !vr_screen_skybox.value);
+		break;
+	case VR_SCREEN_OPT_MOUSE:
 		Cvar_SetValueQuick (&vr_mouse, !vr_mouse.value);
 		break;
 	case VR_SCREEN_OPT_BEAM:
@@ -4649,7 +4655,11 @@ static void M_Options_DrawItem (int y, int item)
 		break;
 	case VR_SCREEN_OPT_RADIUS:
 		M_DrawSlider (x, y, (vr_curve_radius.value - 1.f) / 19.f, va ("%.2f", vr_curve_radius.value));
-		break;	case VR_SCREEN_OPT_MOUSE:
+		break;
+	case VR_SCREEN_OPT_BACKDROP:
+		M_Print (x, y, vr_screen_skybox.value ? "On" : "Off");
+		break;
+	case VR_SCREEN_OPT_MOUSE:
 		M_Print (x, y, vr_mouse.value ? "On" : "Off");
 		break;
 	case VR_SCREEN_OPT_BEAM:

@@ -58,6 +58,7 @@ const iw_xr_hand_snapshot_t *XR_Input_HandForRole(const iw_xr_action_snapshot_t 
 iw_xr_hand_t XR_Input_MovementHand(void) { return vr_dominant_hand.value == 1.f ? IW_XR_HAND_RIGHT : IW_XR_HAND_LEFT; }
 iw_xr_hand_t XR_Input_TurnHand(void) { return vr_dominant_hand.value == 1.f ? IW_XR_HAND_LEFT : IW_XR_HAND_RIGHT; }
 iw_xr_hand_t XR_Input_MenuHand(void) { return XR_Input_MovementHand(); }
+/* Mouse stays on the physical right, left, right controller for right-handed, left-handed, and left-handed swap-sticks. */
 iw_xr_hand_t XR_Input_MouseHand(void) { return vr_dominant_hand.value == 1.f ? IW_XR_HAND_LEFT : IW_XR_HAND_RIGHT; }
 iw_xr_hand_t XR_Input_RightStickHand(void) { return vr_dominant_hand.value == 1.f ? IW_XR_HAND_LEFT : IW_XR_HAND_RIGHT; }
 iw_xr_hand_t XR_Input_LeftStickHand(void) { return vr_dominant_hand.value == 1.f ? IW_XR_HAND_RIGHT : IW_XR_HAND_LEFT; }
@@ -410,7 +411,7 @@ void XR_Input_Update(void)
         if (cutscene_skip && !xr_cutscene_skip_previous) Key_Event(K_ENTER, true);
         xr_cutscene_skip_previous = cutscene_skip;
     }
-    XR_Input_UpdateTeleport(&actions, offhand);
+    XR_Input_UpdateTeleport(&actions, XR_Input_MovementHand());
     if ((actions.hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) && !xr_main_trigger_previous) VID_XR_Haptic(dominant, 0.30f, 0.025f);
     xr_main_trigger_previous = (actions.hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) != 0;
     if (XR_Interaction_ConsumesGameplay()) {

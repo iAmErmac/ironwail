@@ -88,6 +88,13 @@ void R_SetXRFinalTarget(GLuint fbo, int width, int height)
 }
 
 qboolean R_HasXRFinalTarget(void) { return r_xr_final_fbo != 0; }
+void R_BindXRFinalTarget(void)
+{
+    if (!r_xr_final_fbo)
+        return;
+    GL_BindFramebufferFunc(GL_FRAMEBUFFER, r_xr_final_fbo);
+    glViewport(0, 0, r_xr_final_width, r_xr_final_height);
+}
 static qboolean r_xr_asymmetric_projection;
 static iw_xr_fov_t r_xr_fov;
 static qboolean r_xr_head_anchor_valid;

@@ -2,13 +2,14 @@
 #include "android_lifecycle.h"
 #include "cvar.h"
 #include "xr_virtual_screen.h"
-
+#include "xr_virtual_environment.h"
 extern cvar_t vr_render_scale;
 extern cvar_t vr_screen_scale;
 extern cvar_t vr_screen_distance;
 extern cvar_t vr_screen_follow;
 extern cvar_t vr_curved_screen;
 extern cvar_t vr_curve_radius;
+extern cvar_t vr_screen_skybox;
 extern cvar_t vr_hud_size;
 extern cvar_t vr_hud_distance;
 extern cvar_t vr_hud_yoffset;
@@ -184,6 +185,7 @@ void IW_Android_SurfaceCreated(void)
 void IW_Android_ContextRestored(void)
 {
     GL_RestoreContextResources();
+    IW_XRVirtualEnvironment_Invalidate();
     iw_surface = true;
     iw_context_ready = true;
     iw_last_frame_ns = 0;
@@ -403,6 +405,7 @@ void IW_Android_GetXRScreenStyle(qboolean *curved, float *radius)
     if (radius) *radius = q_max(1.2f, vr_curve_radius.value);
 }
 
+qboolean IW_Android_GetXRBackdropScene(void) { return vr_screen_skybox.value != 0.f; }
 void IW_Android_SetXRActions(const iw_xr_action_snapshot_t *actions) { if (actions) iw_xr_actions = *actions; else memset(&iw_xr_actions, 0, sizeof(iw_xr_actions)); }
 qboolean IW_Android_GetXRActions(iw_xr_action_snapshot_t *actions) { if (!actions) return false; *actions = iw_xr_actions; return actions->active; }
 extern void IW_Android_NativeHaptic(int hand, float amplitude, float duration_seconds);

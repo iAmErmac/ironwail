@@ -32,6 +32,7 @@ void IW_Android_SetVirtualPointer(const float start[3], const float hit[3], qboo
 float IW_Android_GetXRRenderScale(void);
 void IW_Android_GetXRScreenGeometry(float *scale, float *distance, qboolean *follow);
 void IW_Android_GetXRScreenStyle(qboolean *curved, float *radius);
+qboolean IW_Android_GetXRBackdropScene(void);
 void IW_Android_GetXRHUDGeometry(float *scale, float *distance, float *yoffset);
 qboolean IW_Android_GetVirtualPointer(float start[3], float hit[3], unsigned *color, float *alpha, float *width);
 void IW_Android_Key(int android_keycode, qboolean down);
