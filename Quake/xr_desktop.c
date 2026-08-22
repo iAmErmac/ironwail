@@ -1,9 +1,11 @@
 #include "quakedef.h"
 #include "xr_desktop.h"
 #include "xr_virtual_screen.h"
+#include "xr_virtual_environment.h"
 #include "xr_math.h"
 #include "xr_action_schema.h"
 extern cvar_t vr_render_scale;
+extern cvar_t vr_screen_skybox;
 extern cvar_t vr_screen_follow;
 
 #if defined(IW_ENABLE_OPENXR)
@@ -34,12 +36,7 @@ struct iw_xr_win_s {
     XrPosef screen_pose;
     XrPosef hud_pose;
     qboolean recenter_requested;
-        XrPosef screen_follow_current;
-    XrPosef screen_follow_target;
-    double screen_follow_last_step_s;
-    double screen_follow_ready_s;
-    qboolean screen_follow_valid;
-    qboolean screen_follow_targeting;
+    iw_xr_virtual_screen_follow_t screen_follow;
 XrSwapchain swapchain;
     XrSwapchainImageOpenGLKHR *images;
     GLuint *fbos;
@@ -64,7 +61,9 @@ XrSwapchain swapchain;
     float hud_scale;
     float hud_distance;
     float hud_yoffset;
-    qboolean curve_submission_logged;    iw_xr_gl_target_t eyes[2];
+    qboolean curve_submission_logged;
+    iw_xr_gl_target_t eyes[2];
+    int64_t swapchain_format;
     iw_xr_gl_target_t pointer_target;
     qboolean pointer_active;
     float pointer_start[3];
@@ -272,128 +271,32 @@ static XrPosef xr_build_screen_pose (const XrVector3f *center, const float forwa
     pose.position.x = center->x + forward[0] * distance; pose.position.y = center->y; pose.position.z = center->z + forward[2] * distance;
     return pose;
 }
-static void xr_face_screen_at_center (XrPosef *pose, const XrVector3f *center)
-{
-    float dx = center->x - pose->position.x;
-    float dz = center->z - pose->position.z;
-    float length = sqrtf (dx * dx + dz * dz);
-    float half;
-    if (length < 0.0001f)
-        return;
-    half = atan2f (dx, dz) * 0.5f;
-    pose->orientation.x = 0.0f;
-    pose->orientation.y = sinf (half);
-    pose->orientation.z = 0.0f;
-    pose->orientation.w = cosf (half);
-}
-
-static float xr_position_distance (const XrVector3f *a, const XrVector3f *b)
-{
-    float dx = a->x - b->x;
-    float dy = a->y - b->y;
-    float dz = a->z - b->z;
-    return sqrtf (dx * dx + dy * dy + dz * dz);
-}
-
-static void xr_keep_screen_distance (iw_xr_win_t *xr, const XrVector3f *center)
-{
-    float dx = xr->screen_follow_current.position.x - center->x;
-    float dz = xr->screen_follow_current.position.z - center->z;
-    float length = sqrtf (dx * dx + dz * dz);
-    if (length < 0.0001f)
-        return;
-    xr->screen_follow_current.position.x = center->x + dx * xr->screen_distance / length;
-    xr->screen_follow_current.position.y = center->y;
-    xr->screen_follow_current.position.z = center->z + dz * xr->screen_distance / length;
-}
-
 static void xr_update_screen_pose (iw_xr_win_t *xr, const XrView *views, uint32_t view_count)
 {
-    XrVector3f center = { 0.0f, 0.0f, 0.0f };
-    XrVector3f candidate_position;
-    float forward[3] = { 0.0f, 0.0f, 0.0f };
-    XrPosef candidate;
-    double now = (double)GetTickCount64 () * 0.001;
-    double delta;
-    float easing;
-    float target_delta;
-    uint32_t i;
+    XrVector3f center = {0.0f, 0.0f, 0.0f};
+    float forward[3] = {0.0f, 0.0f, 0.0f};
+    iw_xr_virtual_screen_view_t screen_views[2];
+    iw_xr_virtual_screen_pose_t screen_pose;
+    uint32_t i, count = q_min(view_count, (uint32_t)Q_COUNTOF(screen_views));
 
-    if (!view_count)
-        return;
-    for (i = 0; i < view_count; ++i)
-    {
-        float view_forward[3] = { 0.0f, 0.0f, -1.0f };
-        center.x += views[i].pose.position.x;
-        center.y += views[i].pose.position.y;
-        center.z += views[i].pose.position.z;
-        xr_rotate3 (&views[i].pose.orientation, view_forward, view_forward);
-        forward[0] += view_forward[0];
-        forward[1] += view_forward[1];
-        forward[2] += view_forward[2];
+    if (!count) return;
+    for (i = 0; i < count; ++i) {
+        float view_forward[3] = {0.0f, 0.0f, -1.0f};
+        center.x += views[i].pose.position.x; center.y += views[i].pose.position.y; center.z += views[i].pose.position.z;
+        xr_rotate3(&views[i].pose.orientation, view_forward, view_forward);
+        forward[0] += view_forward[0]; forward[1] += view_forward[1]; forward[2] += view_forward[2];
+        screen_views[i].position[0] = views[i].pose.position.x; screen_views[i].position[1] = views[i].pose.position.y; screen_views[i].position[2] = views[i].pose.position.z;
+        screen_views[i].orientation[0] = views[i].pose.orientation.x; screen_views[i].orientation[1] = views[i].pose.orientation.y; screen_views[i].orientation[2] = views[i].pose.orientation.z; screen_views[i].orientation[3] = views[i].pose.orientation.w;
     }
-    center.x /= (float)view_count;
-    center.y /= (float)view_count;
-    center.z /= (float)view_count;
-    forward[1] = 0.0f;
-    if (!IW_XRMath_Normalize3 (forward))
-    {
-        forward[0] = 0.0f;
-        forward[1] = 0.0f;
-        forward[2] = -1.0f;
-    }
-    xr->hud_pose = xr_build_screen_pose (&center, forward, xr->hud_distance);
+    center.x /= (float)count; center.y /= (float)count; center.z /= (float)count; forward[1] = 0.0f;
+    if (!IW_XRMath_Normalize3(forward)) { forward[0] = 0.0f; forward[1] = 0.0f; forward[2] = -1.0f; }
+    xr->hud_pose = xr_build_screen_pose(&center, forward, xr->hud_distance);
     xr->hud_pose.position.y += xr->hud_yoffset;
-    candidate = xr_build_screen_pose (&center, forward, xr->screen_distance);
-    candidate_position = candidate.position;
-
-    if (!xr->screen_follow_valid || xr->recenter_requested)
-    {
-        xr->screen_follow_current = candidate;
-        xr->screen_follow_target = candidate;
-        xr->screen_follow_last_step_s = now;
-        xr->screen_follow_ready_s = now + 0.75;
-        xr->screen_follow_valid = true;
-        xr->screen_follow_targeting = true;
-        xr->recenter_requested = false;
+    if (xr->recenter_requested) { memset(&xr->screen_follow, 0, sizeof(xr->screen_follow)); xr->recenter_requested = false; }
+    if (IW_XRVirtualScreen_UpdatePose(&xr->screen_follow, screen_views, count, (double)GetTickCount64() * 0.001, xr->screen_distance, vr_screen_follow.value != 0.f, &screen_pose)) {
+        xr->screen_pose.position.x = screen_pose.position[0]; xr->screen_pose.position.y = screen_pose.position[1]; xr->screen_pose.position.z = screen_pose.position[2];
+        xr->screen_pose.orientation.x = screen_pose.orientation[0]; xr->screen_pose.orientation.y = screen_pose.orientation[1]; xr->screen_pose.orientation.z = screen_pose.orientation[2]; xr->screen_pose.orientation.w = screen_pose.orientation[3];
     }
-    else if (!vr_screen_follow.value)
-    {
-        xr->screen_pose = xr->screen_follow_current;
-        return;
-    }
-    else if (now < xr->screen_follow_ready_s)
-    {
-        xr->screen_follow_current = candidate;
-        xr->screen_follow_target = candidate;
-    }
-    else
-    {
-        target_delta = xr_position_distance (&xr->screen_follow_target.position, &candidate_position);
-        if (target_delta < 0.1f)
-            xr->screen_follow_targeting = false;
-        else if (target_delta > 1.5f || xr->screen_follow_targeting)
-        {
-            xr->screen_follow_target.position = candidate_position;
-            xr->screen_follow_targeting = true;
-            if (target_delta > 3.0f)
-                xr->screen_follow_current.position = candidate_position;
-        }
-
-        delta = now - xr->screen_follow_last_step_s;
-        if (delta < 0.0)
-            delta = 0.0;
-        if (delta > 0.1)
-            delta = 0.1;
-        xr->screen_follow_last_step_s = now;
-        easing = 1.0f - powf (0.99f, (float)delta * 90.0f);
-        xr->screen_follow_current.position.x += (xr->screen_follow_target.position.x - xr->screen_follow_current.position.x) * easing;
-        xr->screen_follow_current.position.y += (xr->screen_follow_target.position.y - xr->screen_follow_current.position.y) * easing;
-        xr->screen_follow_current.position.z += (xr->screen_follow_target.position.z - xr->screen_follow_current.position.z) * easing;
-        xr_keep_screen_distance (xr, &center);
-        xr_face_screen_at_center (&xr->screen_follow_current, &center);
-    }
-    xr->screen_pose = xr->screen_follow_current;
 }static iw_xr_result_t xr_fail(iw_xr_win_t *xr, const char **reason, XrResult result, const char *stage)
 {
     static char message[256];
@@ -995,6 +898,7 @@ xr->fbos = (GLuint *)calloc(xr->image_count, sizeof(*xr->fbos));
         }
     }
     GL_BindFramebufferFunc(GL_FRAMEBUFFER, 0);
+    xr->swapchain_format = swap_info.format;
     for (i = 0; i < 2; ++i)
     {
         if (!xr_create_target(xr, &xr->eyes[i], swap_info.format,
@@ -1308,14 +1212,13 @@ qboolean IW_XRWin_GetActions(const iw_xr_win_t *xr, iw_xr_action_snapshot_t *act
 static qboolean xr_get_virtual_screen(const iw_xr_win_t *xr, iw_xr_virtual_screen_t *screen)
 {
     XrPosef pose;
-    if (!xr || !screen || !xr->screen_follow_valid) return false;
+    if (!xr || !screen || !xr->screen_follow.valid) return false;
     memset(screen, 0, sizeof(*screen));
     pose = xr->screen_pose;
     screen->width = 2.97f * xr->screen_scale;
     screen->height = 2.2275f * xr->screen_scale;
     screen->curved = xr->curved_screen && xr->cylinder_supported && xr->curve_radius > 1.2f;
     screen->curve_radius = screen->curved ? xr->curve_radius : 0.f;
-    if (screen->curved) pose = xr_cylinder_pose(&xr->screen_pose, xr->curve_radius);
     screen->position[0] = pose.position.x;
     screen->position[1] = pose.position.y;
     screen->position[2] = pose.position.z;
@@ -1489,24 +1392,34 @@ qboolean IW_XRWin_GetFrameTarget(const iw_xr_win_t *xr, unsigned *fbo, int *widt
     if (height) *height = (int)xr->height;
     return true;
 }
+static qboolean xr_submit_screen_skybox(iw_xr_win_t *xr, qboolean submit)
+{
+    XrCompositionLayerProjection projection; XrCompositionLayerProjectionView views[2]; XrCompositionLayerBaseHeader *layers[2]; XrCompositionLayerQuad pointer; XrFrameEndInfo end; iw_xr_virtual_screen_t screen; uint32_t i;
+    if (!xr || !vr_screen_skybox.value || !xr->image_acquired || !xr_get_virtual_screen(xr, &screen) || !IW_XRWin_HasStereoTargets(xr)) return false;
+    for (i=0;i<2;i++) { if (!xr_acquire_target(xr,&xr->eyes[i]) || !IW_XRVirtualEnvironment_Render(&xr->frame_snapshot.views[i],&screen,xr->images[xr->image_index].image,xr->eyes[i].fbos[xr->eyes[i].image_index],xr->eyes[i].width,xr->eyes[i].height)) { xr_release_target(xr,&xr->eyes[i]); while(i--) xr_release_target(xr,&xr->eyes[i]); return false; } }
+    for(i=0;i<2;i++) xr_release_target(xr,&xr->eyes[i]); { XrSwapchainImageReleaseInfo release={XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO}; xr->release_swapchain_image(xr->swapchain,&release); xr->image_acquired=false; }
+    memset(&projection,0,sizeof(projection)); memset(views,0,sizeof(views)); projection.type=XR_TYPE_COMPOSITION_LAYER_PROJECTION; projection.space=xr->space; projection.viewCount=2; projection.views=views;
+    for(i=0;i<2;i++){ const iw_xr_view_t *in=&xr->frame_snapshot.views[i]; views[i].type=XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW; views[i].pose.position.x=in->position[0];views[i].pose.position.y=in->position[1];views[i].pose.position.z=in->position[2];views[i].pose.orientation.x=in->orientation[0];views[i].pose.orientation.y=in->orientation[1];views[i].pose.orientation.z=in->orientation[2];views[i].pose.orientation.w=in->orientation[3];views[i].fov.angleLeft=in->fov.left;views[i].fov.angleRight=in->fov.right;views[i].fov.angleUp=in->fov.up;views[i].fov.angleDown=in->fov.down;views[i].subImage.swapchain=xr->eyes[i].swapchain;views[i].subImage.imageRect.extent.width=xr->eyes[i].width;views[i].subImage.imageRect.extent.height=xr->eyes[i].height;}
+    layers[0]=(XrCompositionLayerBaseHeader*)&projection; if (xr->pointer_active && xr_acquire_target(xr,&xr->pointer_target)) { GL_BindFramebufferFunc(GL_FRAMEBUFFER,xr->pointer_target.fbos[xr->pointer_target.image_index]); glViewport(0,0,xr->pointer_target.width,xr->pointer_target.height); glClearColor(0,0,0,0); glClear(GL_COLOR_BUFFER_BIT); glEnable(GL_SCISSOR_TEST); glScissor(0,26,xr->pointer_target.width,12); glClearColor(((xr->pointer_color>>16)&255)/255.f,((xr->pointer_color>>8)&255)/255.f,(xr->pointer_color&255)/255.f,xr->pointer_alpha); glClear(GL_COLOR_BUFFER_BIT); glDisable(GL_SCISSOR_TEST); xr_release_target(xr,&xr->pointer_target); memset(&pointer,0,sizeof(pointer)); pointer.type=XR_TYPE_COMPOSITION_LAYER_QUAD; pointer.layerFlags=XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT|XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT; pointer.space=xr->space; pointer.eyeVisibility=XR_EYE_VISIBILITY_BOTH; pointer.subImage.swapchain=xr->pointer_target.swapchain; pointer.subImage.imageRect.extent.width=xr->pointer_target.width; pointer.subImage.imageRect.extent.height=xr->pointer_target.height; pointer.pose=xr_pointer_pose(xr->pointer_start,xr->pointer_hit,xr->frame_snapshot.views[0].position); pointer.size.width=sqrtf((xr->pointer_hit[0]-xr->pointer_start[0])*(xr->pointer_hit[0]-xr->pointer_start[0])+(xr->pointer_hit[1]-xr->pointer_start[1])*(xr->pointer_hit[1]-xr->pointer_start[1])+(xr->pointer_hit[2]-xr->pointer_start[2])*(xr->pointer_hit[2]-xr->pointer_start[2])); pointer.size.height=.012f*CLAMP(.25f,xr->pointer_width,8.f); layers[1]=(XrCompositionLayerBaseHeader*)&pointer; } memset(&end,0,sizeof(end));end.type=XR_TYPE_FRAME_END_INFO;end.displayTime=xr->frame_state.predictedDisplayTime;end.environmentBlendMode=XR_ENVIRONMENT_BLEND_MODE_OPAQUE;end.layerCount=submit&&xr->frame_state.shouldRender?(xr->pointer_active?2:1):0;end.layers=end.layerCount?layers:NULL;xr->frame_running=false;return xr->end_frame(xr->session,&end)==XR_SUCCESS;
+}
 iw_xr_result_t IW_XRWin_EndFrame(iw_xr_win_t *xr, qboolean submit)
 {
     XrResult result;
     XrSwapchainImageReleaseInfo release_info;
     XrCompositionLayerQuad quad;
     XrCompositionLayerCylinderKHR cylinder;
-    XrCompositionLayerBaseHeader *layers[2];
+    XrCompositionLayerBaseHeader *layers[3];
     XrCompositionLayerQuad pointer;
     XrFrameEndInfo end_info;
     qboolean submit_image;
-    uint32_t layer_count = 1;
+    uint32_t layer_count = 0;
     if (!xr || !xr->frame_running)
         return IW_XR_RESULT_INVALID;    if (xr->stereo_submission)
     {
         XrCompositionLayerProjection projection;
         XrCompositionLayerProjectionView projection_views[2];
         XrCompositionLayerQuad hud;
-        XrCompositionLayerBaseHeader *layers[2];
+        XrCompositionLayerBaseHeader *layers[3];
         XrFrameEndInfo projection_end;
         uint32_t i, layer_count = 0;
         qboolean stereo_submit = xr->eyes[0].acquired && xr->eyes[1].acquired;
@@ -1575,6 +1488,8 @@ iw_xr_result_t IW_XRWin_EndFrame(iw_xr_win_t *xr, qboolean submit)
         xr->stereo_submission = false;
         return result == XR_SUCCESS ? IW_XR_RESULT_OK : IW_XR_RESULT_FAILED;
     }
+    if (xr_submit_screen_skybox(xr, submit)) return IW_XR_RESULT_OK;
+    if (!xr->frame_running) return IW_XR_RESULT_FAILED;
     submit_image = xr->image_acquired;
     if (xr->image_acquired)
     {
@@ -1614,7 +1529,7 @@ iw_xr_result_t IW_XRWin_EndFrame(iw_xr_win_t *xr, qboolean submit)
         cylinder.radius = xr->curve_radius;
         cylinder.centralAngle = quad.size.width / xr->curve_radius;
         cylinder.aspectRatio = quad.size.width / quad.size.height;
-        layers[0] = (XrCompositionLayerBaseHeader *)&cylinder;
+        layers[layer_count++] = (XrCompositionLayerBaseHeader *)&cylinder;
     }
     else
     {
@@ -1625,7 +1540,7 @@ iw_xr_result_t IW_XRWin_EndFrame(iw_xr_win_t *xr, qboolean submit)
             xr_log (xr, curve_log);
             xr->curve_submission_logged = true;
         }
-        layers[0] = (XrCompositionLayerBaseHeader *)&quad;
+        layers[layer_count++] = (XrCompositionLayerBaseHeader *)&quad;
     }
     if (xr->pointer_active && xr_acquire_target(xr, &xr->pointer_target))
     {
@@ -1654,8 +1569,8 @@ iw_xr_result_t IW_XRWin_EndFrame(iw_xr_win_t *xr, qboolean submit)
     end_info.type = XR_TYPE_FRAME_END_INFO;
     end_info.displayTime = xr->frame_state.predictedDisplayTime;
     end_info.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
-    end_info.layerCount = submit && submit_image && xr->frame_state.shouldRender && xr->screen_follow_valid && (double)GetTickCount64 () * 0.001 >= xr->screen_follow_ready_s ? layer_count : 0;
-    end_info.layers = submit && submit_image && xr->frame_state.shouldRender && xr->screen_follow_valid && (double)GetTickCount64 () * 0.001 >= xr->screen_follow_ready_s ? layers : NULL;
+    end_info.layerCount = submit && submit_image && xr->frame_state.shouldRender && xr->screen_follow.valid && (double)GetTickCount64 () * 0.001 >= xr->screen_follow.ready_time_s ? layer_count : 0;
+    end_info.layers = submit && submit_image && xr->frame_state.shouldRender && xr->screen_follow.valid && (double)GetTickCount64 () * 0.001 >= xr->screen_follow.ready_time_s ? layers : NULL;
     result = xr->end_frame(xr->session, &end_info);
     xr->frame_running = false;
     if (result == XR_SUCCESS)

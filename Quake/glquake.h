@@ -760,6 +760,7 @@ qboolean GL_NeedsPostprocess (void);
 void GL_PostProcess (void);
 void R_SetXRFinalTarget (GLuint fbo, int width, int height);
 qboolean R_HasXRFinalTarget (void);
+void R_BindXRFinalTarget (void);
 qboolean R_GetXRCanvasOffset (float *x, float *y);
 float R_GetXRMessageOffset (void);
 qboolean R_GetXRViewmodelMatrix (entity_t *e, float matrix[16], const vec3_t origin, unsigned char scale);
