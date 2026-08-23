@@ -15,6 +15,8 @@ void XR_Input_Shutdown(void);
 void XR_Input_Update(void);
 void XR_Input_PrepareInputGrab(void);
 qboolean XR_Input_OwnsInput(void);
+qboolean XR_Input_WantsJump(void);
+qboolean XR_Input_WantsCutsceneSkip(void);
 qboolean XR_Input_UsesRoomscale(void);
 qboolean XR_Input_Move(usercmd_t *cmd);
 void XR_Input_ApplyDash(void);

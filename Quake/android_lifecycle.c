@@ -4,6 +4,7 @@
 #include "xr_virtual_screen.h"
 #include "xr_virtual_environment.h"
 extern cvar_t vr_render_scale;
+extern cvar_t vr_refresh_rate;
 extern cvar_t vr_screen_scale;
 extern cvar_t vr_screen_distance;
 extern cvar_t vr_screen_follow;
@@ -459,6 +460,7 @@ qboolean IW_Android_FrameXRStereo(uint64_t frame_time_ns, const iw_xr_frame_snap
 }
 
 float IW_Android_GetXRRenderScale(void) { return CLAMP(0.3f, vr_render_scale.value, 2.0f); }
+float IW_Android_GetXRRefreshRate(void) { return CLAMP(0.f, vr_refresh_rate.value, 1000.f); }
 void IW_Android_GetXRScreenGeometry(float *scale, float *distance, qboolean *follow)
 {
     if (scale) *scale = q_max(0.25f, vr_screen_scale.value);

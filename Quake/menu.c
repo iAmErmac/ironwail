@@ -84,7 +84,7 @@ extern cvar_t gyro_turning_axis;
 extern cvar_t gyro_pitchsensitivity;
 extern cvar_t gyro_yawsensitivity;
 extern cvar_t gyro_noise_thresh;
-extern cvar_t vr_mode, vr_render_scale, vr_multiview;
+extern cvar_t vr_mode, vr_render_scale, vr_multiview, vr_refresh_rate;
 extern cvar_t vr_curved_screen;
 extern cvar_t vr_curve_radius;
 extern cvar_t vr_screen_scale;
@@ -3132,6 +3132,7 @@ void M_Menu_Gamepad_f (void)
 	end_menu ()															\
 		begin_menu (VR_OPTIONS, m_vr, TITLE("VR Options"))					\
 		item (VR_OPT_ENABLE, "Enable VR")						\
+		item (VR_OPT_REFRESH_RATE, "Refresh Rate")				\
 		item (VR_OPT_XR_RENDER_SCALE, "VR Render Scale")				\
 		item (VR_OPT_MULTIVIEW, "Stereo Multiview")				\
 		item (VR_OPT_SCREEN, "Virtual Screen")						\
@@ -3646,6 +3647,11 @@ static void M_VR_ResetOptions (void)
 {
 	Cvar_SetValueQuick (&vr_mode, 1.f);
 	Cvar_SetValueQuick (&vr_render_scale, 1.f);
+#if defined(ANDROID_GLES3)
+	Cvar_SetValueQuick (&vr_refresh_rate, 72.f);
+#else
+	Cvar_SetValueQuick (&vr_refresh_rate, 90.f);
+#endif
 	Cvar_SetValueQuick (&vr_multiview, 1.f);
 	Cvar_SetValueQuick (&vr_desktop_mirror, 1.f);
 	Cvar_SetValueQuick (&vr_world_scale, 33.5f);
@@ -3768,6 +3774,9 @@ void M_AdjustSliders (int dir)
 
 	switch (M_Options_GetSelected ())
 	{
+	case VR_OPT_REFRESH_RATE:
+		Cvar_SetValueQuick (&vr_refresh_rate, vr_refresh_rate.value < 80.f ? 80.f : vr_refresh_rate.value < 90.f ? 90.f : vr_refresh_rate.value < 120.f ? 120.f : 72.f);
+		break;
 	case VR_OPT_XR_RENDER_SCALE:
 		Cvar_SetValueQuick (&vr_render_scale, CLAMP (0.3f, vr_render_scale.value + dir * 0.05f, 2.f));
 		break;
@@ -4589,6 +4598,9 @@ static void M_Options_DrawItem (int y, int item)
 		break;
 
 
+	case VR_OPT_REFRESH_RATE:
+		M_Print (x, y, va ("%.0f Hz", vr_refresh_rate.value));
+		break;
 	case VR_OPT_XR_RENDER_SCALE:
 		M_DrawSlider (x, y, (vr_render_scale.value - 0.3f) / 1.7f, va ("%.2f", vr_render_scale.value));
 		break;

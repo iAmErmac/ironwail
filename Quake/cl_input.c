@@ -25,6 +25,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // rights reserved.
 
 #include "quakedef.h"
+#include "xr_input.h"
 
 extern cvar_t cl_maxpitch; //johnfitz -- variable pitch clamping
 extern cvar_t cl_minpitch; //johnfitz -- variable pitch clamping
@@ -358,6 +359,7 @@ void CL_BaseMove (usercmd_t *cmd)
 
 	cmd->upmove += cl_upspeed.value * CL_KeyState (&in_up);
 	cmd->upmove -= cl_upspeed.value * CL_KeyState (&in_down);
+	cmd->upmove += cl_upspeed.value * CL_KeyState (&in_jump);
 
 	if (! (in_klook.state & 1) )
 	{
@@ -421,11 +423,11 @@ void CL_SendMove (const usercmd_t *cmd)
 	//
 		bits = 0;
 
-		if ( in_attack.state & 3 )
+		if ((in_attack.state & 3) || XR_Input_WantsCutsceneSkip())
 			bits |= 1;
 		in_attack.state &= ~2;
 
-		if (in_jump.state & 3)
+		if ((in_jump.state & 3) || XR_Input_WantsJump())
 			bits |= 2;
 		in_jump.state &= ~2;
 

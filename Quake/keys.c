@@ -1162,6 +1162,11 @@ void Key_EndInputGrab (void)
 	IN_UpdateInputMode ();
 }
 
+qboolean Key_IsInputGrabActive (void)
+{
+    return key_inputgrab.active;
+}
+
 /*
 ===================
 Key_GetGrabbedInput

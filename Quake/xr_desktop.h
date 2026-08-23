@@ -26,6 +26,7 @@ qboolean IW_XRWin_GetFrameTarget(const iw_xr_win_t *xr, unsigned *fbo, int *widt
 qboolean IW_XRWin_ResolveDefaultFramebuffer(iw_xr_win_t *xr, int source_width, int source_height);
 qboolean IW_XRWin_HasStereoTargets(const iw_xr_win_t *xr);
 void IW_XRWin_SetMultiviewRequested(iw_xr_win_t *xr, qboolean requested);
+void IW_XRWin_SetRefreshRate(iw_xr_win_t *xr, float requested_hz);
 qboolean IW_XRWin_UsingMultiview(const iw_xr_win_t *xr);
 qboolean IW_XRWin_BeginMultiviewTarget(iw_xr_win_t *xr, unsigned *fbo, int *width, int *height);
 qboolean IW_XRWin_BeginMultiviewOverlayEye(iw_xr_win_t *xr, unsigned eye, unsigned *fbo, int *width, int *height);

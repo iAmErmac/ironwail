@@ -452,7 +452,7 @@ void XR_Interaction_Shutdown(void)
 
 void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
 {
-    int dominant, offhand, mouse_hand; float move, yaw_delta; qboolean grip, main_grip, trigger, mouse_trigger, mouse_grip, menu_combo, both_grips;
+    int dominant, offhand, mouse_hand; float move, yaw_delta; qboolean grip, main_grip, trigger, mouse_trigger, mouse_confirm, mouse_grip, menu_combo, both_grips;
     if (!actions || !actions->active) { XR_Interaction_Shutdown(); return; }
     xr_weaponwheel_update_local_fields();
     if (key_dest != key_game) wheel_bind_active = false;
@@ -465,9 +465,11 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
     else if (!main_grip && !(actions->hand[offhand].grip > 0.5f || (actions->hand[offhand].buttons & IW_XR_BUTTON_GRIP) != 0)) two_hand_wheel_suppressed = false;
     trigger = (actions->hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) != 0;
     mouse_trigger = (actions->hand[mouse_hand].buttons & IW_XR_BUTTON_TRIGGER) != 0;
+
+    mouse_confirm = mouse_trigger || (actions->hand[dominant].buttons & IW_XR_BUTTON_PRIMARY) != 0;
     mouse_grip = actions->hand[mouse_hand].grip > 0.5f || (actions->hand[mouse_hand].buttons & IW_XR_BUTTON_GRIP) != 0;
     if (!trigger) keyboard_trigger_suppressed = false;
-    if (!mouse_trigger) virtual_mouse_trigger_suppressed = false;
+    if (!mouse_confirm) virtual_mouse_trigger_suppressed = false;
     menu_combo = main_grip && (actions->hand[dominant].buttons & IW_XR_BUTTON_SECONDARY) != 0;
     if (keyboard_active && key_dest == key_game) xr_keyboard_close();
     if (virtual_mouse_trigger && (key_dest != key_menu || (!vr_mouse.value && !mouse_grip)) ) {
@@ -496,12 +498,12 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
         xr_virtual_pointer_update(&actions->hand[mouse_hand]);
         if (pointer_active || virtual_mouse_trigger)
             M_MousemoveNormalized(CLAMP(0.f, virtual_mouse_x, 1.f), CLAMP(0.f, virtual_mouse_y, 1.f));
-        if (mouse_trigger && !virtual_mouse_trigger && pointer_active) {
+        if (mouse_confirm && !virtual_mouse_trigger && pointer_active) {
             virtual_mouse_trigger_suppressed = true;
             Key_Event(K_MOUSE1, true);
         }
-        if (!mouse_trigger && virtual_mouse_trigger) Key_Event(K_MOUSE1, false);
-        virtual_mouse_trigger = mouse_trigger && (pointer_active || virtual_mouse_trigger);
+        if (!mouse_confirm && virtual_mouse_trigger) Key_Event(K_MOUSE1, false);
+        virtual_mouse_trigger = mouse_confirm && (pointer_active || virtual_mouse_trigger);
     } else if ((key_dest == key_console || key_dest == key_message) && Key_TextEntry() == TEXTMODE_ON) {
         menu_scroll_direction = 0;
         keyboard_active = true; keyboard_mode = 0; keyboard_caps = false; keyboard_trigger = keyboard_select = false;

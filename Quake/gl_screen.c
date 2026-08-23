@@ -735,25 +735,25 @@ static void SCR_DrawFPS (void)
 {
 	static double	oldtime = 0;
 	static double	lastfps = 0;
-	static int	oldframecount = 0;
+	static int	oldhostframecount = 0;
 	double	elapsed_time;
 	int	frames;
 
 	if (con_forcedup)
 	{
 		oldtime = realtime;
-		oldframecount = r_framecount;
+		oldhostframecount = host_framecount;
 		lastfps = 0;
 		return;
 	}
 
 	elapsed_time = realtime - oldtime;
-	frames = r_framecount - oldframecount;
+	frames = host_framecount - oldhostframecount;
 
 	if (elapsed_time < 0 || frames < 0)
 	{
 		oldtime = realtime;
-		oldframecount = r_framecount;
+		oldhostframecount = host_framecount;
 		return;
 	}
 	// update value every 3/4 second
@@ -761,7 +761,7 @@ static void SCR_DrawFPS (void)
 	{
 		lastfps = frames / elapsed_time;
 		oldtime = realtime;
-		oldframecount = r_framecount;
+		oldhostframecount = host_framecount;
 	}
 
 	if (scr_showfps.value && scr_viewsize.value < 130 && lastfps)

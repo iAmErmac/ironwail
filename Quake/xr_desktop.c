@@ -11,6 +11,12 @@ extern cvar_t vr_screen_follow;
 #if defined(IW_ENABLE_OPENXR)
 
 #include "glquake.h"
+#ifndef XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME
+#define XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME "XR_FB_display_refresh_rate"
+typedef XrResult (XRAPI_PTR *PFN_xrEnumerateDisplayRefreshRatesFB)(XrSession session, uint32_t displayRefreshRateCapacityInput, uint32_t *displayRefreshRateCountOutput, float *displayRefreshRates);
+typedef XrResult (XRAPI_PTR *PFN_xrGetDisplayRefreshRateFB)(XrSession session, float *displayRefreshRate);
+typedef XrResult (XRAPI_PTR *PFN_xrRequestDisplayRefreshRateFB)(XrSession session, float displayRefreshRate);
+#endif
 #include <SDL_syswm.h>
 #include <windows.h>
 typedef struct {
@@ -58,6 +64,9 @@ XrSwapchain swapchain;
     qboolean failed;
     qboolean logged_wait_failure;
     qboolean cylinder_supported;
+    qboolean refresh_rate_supported;
+    float requested_refresh_rate;
+    float applied_refresh_rate;
     qboolean curved_screen;
     float curve_radius;
     float screen_scale;
@@ -131,6 +140,9 @@ XrSwapchain swapchain;
     PFN_xrBeginFrame begin_frame;
     PFN_xrEndFrame end_frame;
     PFN_xrGetOpenGLGraphicsRequirementsKHR get_opengl_graphics_requirements;
+    PFN_xrEnumerateDisplayRefreshRatesFB enumerate_display_refresh_rates;
+    PFN_xrGetDisplayRefreshRateFB get_display_refresh_rate;
+    PFN_xrRequestDisplayRefreshRateFB request_display_refresh_rate;
     PFN_xrStringToPath string_to_path;
     PFN_xrCreateActionSet create_action_set;
     PFN_xrDestroyActionSet destroy_action_set;
@@ -148,6 +160,8 @@ XrSwapchain swapchain;
     PFN_xrApplyHapticFeedback apply_haptic_feedback;
     PFN_xrStopHapticFeedback stop_haptic_feedback;
 };
+
+static void xr_apply_refresh_rate(iw_xr_win_t *xr);
 
 static void xr_log(iw_xr_win_t *xr, const char *message)
 {
@@ -481,6 +495,13 @@ static qboolean xr_load_instance(iw_xr_win_t *xr, const char **reason)
         return false;
     }
     xr->get_opengl_graphics_requirements = (PFN_xrGetOpenGLGraphicsRequirementsKHR)proc;
+    if (xr->refresh_rate_supported)
+    {
+        proc = NULL; xr->get_instance_proc_addr(xr->instance, "xrEnumerateDisplayRefreshRatesFB", &proc); xr->enumerate_display_refresh_rates = (PFN_xrEnumerateDisplayRefreshRatesFB)proc;
+        proc = NULL; xr->get_instance_proc_addr(xr->instance, "xrGetDisplayRefreshRateFB", &proc); xr->get_display_refresh_rate = (PFN_xrGetDisplayRefreshRateFB)proc;
+        proc = NULL; xr->get_instance_proc_addr(xr->instance, "xrRequestDisplayRefreshRateFB", &proc); xr->request_display_refresh_rate = (PFN_xrRequestDisplayRefreshRateFB)proc;
+        if (!xr->enumerate_display_refresh_rates || !xr->get_display_refresh_rate || !xr->request_display_refresh_rate) xr->refresh_rate_supported = false;
+    }
 #undef XR_LOAD_INSTANCE
     return true;
 }
@@ -751,7 +772,7 @@ void IW_XRWin_Destroy(iw_xr_win_t *xr)
 
 iw_xr_result_t IW_XRWin_Probe(iw_xr_win_t *xr, iw_xr_bridge_t *bridge, uint64_t deadline_ns, const char **reason)
 {
-    const char *extensions[2] = { XR_KHR_OPENGL_ENABLE_EXTENSION_NAME, XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME };
+    const char *extensions[3];
     uint32_t enabled_extension_count = 1;
     XrApplicationInfo app;
     XrInstanceCreateInfo instance_info;
@@ -770,6 +791,7 @@ iw_xr_result_t IW_XRWin_Probe(iw_xr_win_t *xr, iw_xr_bridge_t *bridge, uint64_t 
     uint32_t extension_count = 0;
     qboolean has_opengl_extension = false;
     qboolean has_cylinder_extension = false;
+    qboolean has_refresh_rate_extension = false;
     XrViewConfigurationType view_configs[8];
     uint32_t view_config_count = 0;
     uint32_t stereo_view_count = 0;
@@ -806,11 +828,17 @@ iw_xr_result_t IW_XRWin_Probe(iw_xr_win_t *xr, iw_xr_bridge_t *bridge, uint64_t 
                 has_opengl_extension = true;
             if (!strcmp (available_extensions[view_config_index].extensionName, XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME))
                 has_cylinder_extension = true;
+            if (!strcmp (available_extensions[view_config_index].extensionName, XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME))
+                has_refresh_rate_extension = true;
         }
     }
+    extensions[0] = XR_KHR_OPENGL_ENABLE_EXTENSION_NAME;
     if (has_cylinder_extension)
-        enabled_extension_count = 2;
+        extensions[enabled_extension_count++] = XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME;
+    if (has_refresh_rate_extension)
+        extensions[enabled_extension_count++] = XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME;
     xr->cylinder_supported = has_cylinder_extension;
+    xr->refresh_rate_supported = has_refresh_rate_extension;
     xr_log (xr, has_cylinder_extension ? "OpenXR cylinder composition layer enabled" : "OpenXR cylinder layer unavailable; using flat virtual screen");
     free (available_extensions);
     available_extensions = NULL;
@@ -890,6 +918,7 @@ iw_xr_result_t IW_XRWin_Probe(iw_xr_win_t *xr, iw_xr_bridge_t *bridge, uint64_t 
     }
     if (result != XR_SUCCESS)
         return xr_fail(xr, reason, result, "xrCreateSession");
+    xr_apply_refresh_rate(xr);
     if (!xr_create_actions(xr))
     {
         if (reason) *reason = "OpenXR gameplay action creation failed";
@@ -1380,6 +1409,35 @@ qboolean IW_XRWin_HasStereoTargets(const iw_xr_win_t *xr)
     return xr && xr->eyes[0].swapchain != XR_NULL_HANDLE && xr->eyes[1].swapchain != XR_NULL_HANDLE;
 }
 
+static void xr_apply_refresh_rate(iw_xr_win_t *xr)
+{
+    float rates[16], current = 0.f;
+    uint32_t count = 0, i;
+    XrResult result;
+    char message[256], *cursor = message;
+    if (!xr || !xr->refresh_rate_supported || xr->session == XR_NULL_HANDLE || !xr->enumerate_display_refresh_rates || !xr->request_display_refresh_rate)
+        return;
+    result = xr->enumerate_display_refresh_rates(xr->session, Q_COUNTOF(rates), &count, rates);
+    if (result != XR_SUCCESS || !count) { xr_log(xr, "OpenXR refresh-rate query failed; runtime default retained"); return; }
+    count = q_min(count, (uint32_t)Q_COUNTOF(rates));
+    cursor += q_snprintf(cursor, sizeof(message), "OpenXR refresh rates:");
+    for (i = 0; i < count && cursor < message + sizeof(message); ++i) cursor += q_snprintf(cursor, (size_t)(message + sizeof(message) - cursor), " %.0f", rates[i]);
+    xr_log(xr, message);
+    for (i = 0; i < count; ++i) if (fabsf(rates[i] - xr->requested_refresh_rate) < 0.01f) break;
+    if (i == count) { q_snprintf(message, sizeof(message), "OpenXR refresh rate %.0f Hz unsupported; runtime default retained", xr->requested_refresh_rate); xr_log(xr, message); return; }
+    result = xr->request_display_refresh_rate(xr->session, rates[i]);
+    if (result == XR_SUCCESS) { xr->applied_refresh_rate = rates[i]; q_snprintf(message, sizeof(message), "OpenXR requested refresh rate %.0f Hz", rates[i]); }
+    else q_snprintf(message, sizeof(message), "OpenXR refresh-rate request %.0f Hz failed (%d)", rates[i], (int)result);
+    xr_log(xr, message);
+    if (xr->get_display_refresh_rate && xr->get_display_refresh_rate(xr->session, &current) == XR_SUCCESS) { q_snprintf(message, sizeof(message), "OpenXR current refresh rate %.0f Hz", current); xr_log(xr, message); }
+}
+void IW_XRWin_SetRefreshRate(iw_xr_win_t *xr, float requested_hz)
+{
+    if (!xr) return;
+    xr->requested_refresh_rate = requested_hz;
+    xr_apply_refresh_rate(xr);
+}
+
 void IW_XRWin_SetMultiviewRequested(iw_xr_win_t *xr, qboolean requested)
 {
     if (!xr) return;
@@ -1825,6 +1883,7 @@ qboolean IW_XRWin_BeginFrame(iw_xr_win_t *xr, iw_xr_frame_snapshot_t *snapshot) 
 qboolean IW_XRWin_BindFrameTarget(iw_xr_win_t *xr) { (void)xr; return false; }
 qboolean IW_XRWin_GetFrameTarget(const iw_xr_win_t *xr, unsigned *fbo, int *width, int *height) { (void)xr; if (fbo) *fbo = 0; if (width) *width = 0; if (height) *height = 0; return false; }
 qboolean IW_XRWin_HasStereoTargets(const iw_xr_win_t *xr) { (void)xr; return false; }
+void IW_XRWin_SetRefreshRate(iw_xr_win_t *xr, float requested_hz) { (void)xr; (void)requested_hz; }
 void IW_XRWin_SetMultiviewRequested(iw_xr_win_t *xr, qboolean requested) { (void)xr; (void)requested; }
 qboolean IW_XRWin_UsingMultiview(const iw_xr_win_t *xr) { (void)xr; return false; }
 qboolean IW_XRWin_BeginMultiviewTarget(iw_xr_win_t *xr, unsigned *fbo, int *width, int *height) { (void)xr; if (fbo) *fbo = 0; if (width) *width = 0; if (height) *height = 0; return false; }

@@ -105,6 +105,11 @@ static iw_xr_frame_snapshot_t vid_xr_snapshot;
 cvar_t vr_mode = {"vr_mode", "1", CVAR_ARCHIVE};
 cvar_t vr_render_scale = {"vr_render_scale", "1.0", CVAR_ARCHIVE};
 cvar_t vr_multiview = {"vr_multiview", "1", CVAR_ARCHIVE};
+#if defined(ANDROID_GLES3)
+cvar_t vr_refresh_rate = {"vr_refresh_rate", "72", CVAR_ARCHIVE};
+#else
+cvar_t vr_refresh_rate = {"vr_refresh_rate", "90", CVAR_ARCHIVE};
+#endif
 cvar_t vr_curved_screen = {"vr_curved_screen", "1", CVAR_ARCHIVE};
 cvar_t vr_curve_radius = {"vr_curve_radius", "3.0", CVAR_ARCHIVE};
 cvar_t vr_screen_scale = {"vr_screen_scale", "1.0", CVAR_ARCHIVE};
@@ -114,7 +119,6 @@ cvar_t vr_screen_skybox = {"vr_screen_skybox", "1", CVAR_ARCHIVE};
 
 cvar_t vr_desktop_mirror = {"vr_desktop_mirror", "1", CVAR_ARCHIVE};
 cvar_t vr_world_scale = {"vr_world_scale", "33.5", CVAR_ARCHIVE};
-cvar_t vr_player_height = {"vr_player_height", "1.7", CVAR_ARCHIVE};
 cvar_t vr_hud_scale = {"vr_hud_scale", "0.7", CVAR_ARCHIVE};
 cvar_t vr_hud_size = {"vr_hud_size", "0.35", CVAR_ARCHIVE};
 cvar_t vr_hud_distance = {"vr_hud_distance", "0.5", CVAR_ARCHIVE};
@@ -170,7 +174,12 @@ static void VID_ApplyEarlyVRCvars(void)
     int i;
     for (i = 1; i + 1 < com_argc; ++i)
     {
-        if (!q_strcasecmp(com_argv[i], "+vr_render_scale"))
+        if (!q_strcasecmp(com_argv[i], "+vr_refresh_rate"))
+        {
+            Cvar_SetValueQuick(&vr_refresh_rate, Q_atof(com_argv[i + 1]));
+            Con_DPrintf("OpenXR startup vr_refresh_rate=%.0f\n", vr_refresh_rate.value);
+        }
+        else if (!q_strcasecmp(com_argv[i], "+vr_render_scale"))
         {
             Cvar_SetValueQuick(&vr_render_scale, Q_atof(com_argv[i + 1]));
             Con_DPrintf("OpenXR startup vr_render_scale=%.2f\n", vr_render_scale.value);
@@ -184,6 +193,15 @@ static void VID_VRMultiview_f (cvar_t *var)
 #else
     if (vid_xr_backend)
         IW_XRWin_SetMultiviewRequested(vid_xr_backend, var->value != 0.f);
+#endif
+}
+static void VID_VRRefreshRate_f (cvar_t *var)
+{
+#if !defined(ANDROID_GLES3)
+    if (vid_xr_backend)
+        IW_XRWin_SetRefreshRate(vid_xr_backend, var->value);
+#else
+    (void)var;
 #endif
 }
 static void VID_VRMode_f (cvar_t *var)
@@ -1023,10 +1041,17 @@ Called when vid_fsaamode changes
 */
 static void VID_FSAAMode_f (cvar_t *cvar)
 {
+#if defined(ANDROID_GLES3)
+	/* GLES has no desktop sample-shading entry point; MSAA level remains available. */
+	if (cvar->value != 0.f)
+		Cvar_SetValueQuick (cvar, 0.f);
+	return;
+#else
 	if (!host_initialized)
 		return;
 	GL_MinSampleShadingFunc (cvar->value);
 	gl_lodbias.callback (&gl_lodbias);
+#endif
 }
 
 /*
@@ -1463,6 +1488,7 @@ static void GL_CheckExtensions (void)
 		Con_Warning ("texture_filter_anisotropic not supported\n");
 	}
 	Cvar_SetValueQuick (&gl_texture_anisotropy, CLAMP (1.f, gl_texture_anisotropy.value, gl_max_anisotropy));
+    Con_Printf ("texture filtering: mode=%s anisotropy=%.0f max=%.0f lodbias=%s\n", gl_texturemode.string, gl_texture_anisotropy.value, gl_max_anisotropy, gl_lodbias.string);
 
 #if defined(ANDROID_GLES3)
 	gl_buffer_storage_able = false;
@@ -2144,13 +2170,14 @@ void	VID_Init (void)
     Cvar_RegisterVariable (&vr_mode);
     Cvar_RegisterVariable (&vr_render_scale);
     Cvar_RegisterVariable (&vr_multiview);
+    Cvar_RegisterVariable (&vr_refresh_rate);
     Cvar_RegisterVariable (&vr_curved_screen);
     Cvar_RegisterVariable (&vr_curve_radius);
     Cvar_RegisterVariable (&vr_screen_scale);
     Cvar_RegisterVariable (&vr_screen_distance);
     Cvar_RegisterVariable (&vr_screen_follow);
     Cvar_RegisterVariable (&vr_screen_skybox);
-    Cvar_RegisterVariable (&vr_desktop_mirror);    Cvar_RegisterVariable (&vr_world_scale);    Cvar_RegisterVariable (&vr_player_height);
+    Cvar_RegisterVariable (&vr_desktop_mirror);    Cvar_RegisterVariable (&vr_world_scale);
     Cvar_RegisterVariable (&vr_hud_scale);
     Cvar_RegisterVariable (&vr_hud_size);
     Cvar_RegisterVariable (&vr_hud_distance);
@@ -2172,6 +2199,7 @@ void	VID_Init (void)
     Cvar_RegisterVariable (&vr_laser_hide_melee);
     Cvar_SetCallback (&vr_mode, VID_VRMode_f);
     Cvar_SetCallback (&vr_multiview, VID_VRMultiview_f);
+    Cvar_SetCallback (&vr_refresh_rate, VID_VRRefreshRate_f);
 	Cvar_SetCallback (&vid_fullscreen, VID_Changed_f);
 	Cvar_SetCallback (&vid_width, VID_Changed_f);
 	Cvar_SetCallback (&vid_height, VID_Changed_f);
@@ -2325,6 +2353,7 @@ putenv (vid_center);	/* SDL_putenv is problematic in versions <= 1.2.9 */
 #else
     vid_xr_backend = IW_XRWin_Create(draw_context, VID_XRLog, NULL);
     IW_XRWin_SetMultiviewRequested(vid_xr_backend, vr_multiview.value != 0.f);
+    IW_XRWin_SetRefreshRate(vid_xr_backend, vr_refresh_rate.value);
 #endif
     {
 		iw_xr_bridge_config_t xr_config;

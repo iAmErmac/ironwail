@@ -228,6 +228,7 @@ void Key_UpdateForDest (void);
 void Key_BeginInputGrab (void);
 void Key_EndInputGrab (void);
 void Key_GetGrabbedInput (int *lastkey, int *lastchar);
+qboolean Key_IsInputGrabActive (void);
 
 void Key_Event (int key, qboolean down);
 void Key_EventWithKeycode (int key, qboolean down, int keycode);

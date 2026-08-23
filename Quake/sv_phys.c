@@ -22,6 +22,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // sv_phys.c
 
 #include "quakedef.h"
+#include "xr_input.h"
 
 /*
 
@@ -956,6 +957,11 @@ void SV_Physics_Client (edict_t	*ent, int num)
 	pr_global_struct->time = qcvm->time;
 	pr_global_struct->self = EDICT_TO_PROG(ent);
 	PR_ExecuteProgram (pr_global_struct->PlayerPreThink);
+
+	if (XR_Input_OwnsInput () && svs.maxclients == 1 && ent->v.waterlevel == 2 &&
+	    ent->v.button2 && (svs.clients[num - 1].cmd.forwardmove != 0 || svs.clients[num - 1].cmd.sidemove != 0))
+		ent->v.velocity[2] = q_max (ent->v.velocity[2], 225.f);
+
 
 //
 // do a move

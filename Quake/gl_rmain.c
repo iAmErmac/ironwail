@@ -70,7 +70,7 @@ extern qboolean SV_BoxInPVS (vec3_t mins, vec3_t maxs, byte *pvs, mnode_t *node)
 // screen size info
 //
 refdef_t	r_refdef;
-extern cvar_t vr_world_scale, vr_player_height, vr_roomscale, vr_smooth_stairs;
+extern cvar_t vr_world_scale, vr_roomscale, vr_smooth_stairs;
 extern cvar_t vr_laser_sight, vr_laser_beam, vr_laser_color, vr_laser_beam_width, vr_laser_beam_alpha, vr_laser_alpha, vr_laser_sight_scale, vr_laser_hide_melee;
 extern qboolean VID_XR_GetActions(iw_xr_action_snapshot_t *actions);
 extern qboolean XR_Input_GetTeleportAim(vec3_t start, vec3_t target);
@@ -1711,11 +1711,9 @@ void R_DrawViewModel (void)
 
 	GL_BeginGroup ("View model");
 
-	if (!r_xr_eye_pass)
-		GL_DepthRange (ZRANGE_VIEWMODEL);
+	GL_DepthRange (ZRANGE_VIEWMODEL);
 	R_DrawAliasModels (&e, 1);
-	if (!r_xr_eye_pass)
-		GL_DepthRange (ZRANGE_FULL);
+	GL_DepthRange (ZRANGE_FULL);
 
 	GL_EndGroup ();
 }
@@ -2965,7 +2963,16 @@ void R_SetXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye)
 	r_refdef.viewangles[PITCH] = head_pitch;
 	r_refdef.viewangles[ROLL] = head_roll;
 
-	r_refdef.vieworg[2] += (CLAMP (0.5f, vr_player_height.value, 2.5f) - cl.viewheight / q_max (vr_world_scale.value, 0.01f)) * vr_world_scale.value;
+	{
+		float head_delta_xr[3], head_delta[3];
+		head_delta_xr[0] = 0.5f * (snapshot->views[0].position[0] + snapshot->views[1].position[0]) - r_xr_head_anchor_position[0];
+		head_delta_xr[1] = 0.5f * (snapshot->views[0].position[1] + snapshot->views[1].position[1]) - r_xr_head_anchor_position[1];
+		head_delta_xr[2] = 0.5f * (snapshot->views[0].position[2] + snapshot->views[1].position[2]) - r_xr_head_anchor_position[2];
+		R_XRToQuakePosition (head_delta_xr, head_delta);
+		R_XRRotateYaw (head_delta, r_xr_game_anchor_yaw - r_xr_head_anchor_yaw);
+		/* Keep the engine viewheight; only tracked vertical motion offsets it. */
+		r_refdef.vieworg[2] += head_delta[2] * vr_world_scale.value;
+	}
 	if (vr_roomscale.value != 0.f && sv.active && svs.maxclients == 1 &&
 		svs.clients[0].active && svs.clients[0].edict && cl.viewentity > 0 && cl.viewentity < cl.num_entities)
 	{

@@ -37,6 +37,7 @@ qboolean IW_Android_RaycastVirtualScreen(const float origin[3], const float orie
 qboolean IW_Android_GetXRScreenPose(float position[3], float orientation[4]);
 void IW_Android_SetVirtualPointer(const float start[3], const float hit[3], qboolean active, unsigned color, float alpha, float width);
 float IW_Android_GetXRRenderScale(void);
+float IW_Android_GetXRRefreshRate(void);
 void IW_Android_GetXRScreenGeometry(float *scale, float *distance, qboolean *follow);
 void IW_Android_GetXRScreenStyle(qboolean *curved, float *radius);
 qboolean IW_Android_GetXRBackdropScene(void);
