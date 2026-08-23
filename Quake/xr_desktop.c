@@ -1410,6 +1410,22 @@ qboolean IW_XRWin_BeginMultiviewTarget(iw_xr_win_t *xr, unsigned *fbo, int *widt
     return true;
 }
 
+qboolean IW_XRWin_BeginMultiviewOverlayEye(iw_xr_win_t *xr, unsigned eye, unsigned *fbo, int *width, int *height)
+{
+    iw_xr_gl_target_t *target;
+    if (!xr || eye >= 2) return false;
+    target = &xr->multiview;
+    if (!target->acquired) return false;
+    if (!target->mirror_fbo) GL_GenFramebuffersFunc(1, &target->mirror_fbo);
+    GL_BindFramebufferFunc(GL_FRAMEBUFFER, target->mirror_fbo);
+    GL_FramebufferTextureLayerFunc(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, target->images[target->image_index].image, 0, (GLint)eye);
+    if (GL_CheckFramebufferStatusFunc(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) return false;
+    if (fbo) *fbo = target->mirror_fbo;
+    if (width) *width = (int)target->width;
+    if (height) *height = (int)target->height;
+    return true;
+}
+
 void IW_XRWin_EndMultiviewTarget(iw_xr_win_t *xr)
 {
     /* EndFrame releases the layered image after selecting it for projection submission. */
@@ -1812,6 +1828,7 @@ qboolean IW_XRWin_HasStereoTargets(const iw_xr_win_t *xr) { (void)xr; return fal
 void IW_XRWin_SetMultiviewRequested(iw_xr_win_t *xr, qboolean requested) { (void)xr; (void)requested; }
 qboolean IW_XRWin_UsingMultiview(const iw_xr_win_t *xr) { (void)xr; return false; }
 qboolean IW_XRWin_BeginMultiviewTarget(iw_xr_win_t *xr, unsigned *fbo, int *width, int *height) { (void)xr; if (fbo) *fbo = 0; if (width) *width = 0; if (height) *height = 0; return false; }
+qboolean IW_XRWin_BeginMultiviewOverlayEye(iw_xr_win_t *xr, unsigned eye, unsigned *fbo, int *width, int *height) { (void)xr; (void)eye; if (fbo) *fbo = 0; if (width) *width = 0; if (height) *height = 0; return false; }
 void IW_XRWin_EndMultiviewTarget(iw_xr_win_t *xr) { (void)xr; }
 qboolean IW_XRWin_BindEyeTarget(iw_xr_win_t *xr, unsigned eye) { (void)xr; (void)eye; return false; }
 qboolean IW_XRWin_GetEyeTarget(const iw_xr_win_t *xr, unsigned eye, unsigned *fbo, int *width, int *height) { (void)xr; (void)eye; if (fbo) *fbo = 0; if (width) *width = 0; if (height) *height = 0; return false; }

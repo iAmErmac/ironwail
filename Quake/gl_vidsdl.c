@@ -179,11 +179,11 @@ static void VID_ApplyEarlyVRCvars(void)
 }
 static void VID_VRMultiview_f (cvar_t *var)
 {
-#if !defined(ANDROID_GLES3)
-    if (vid_xr_backend)
-        IW_XRWin_SetMultiviewRequested (vid_xr_backend, var->value != 0.f);
+#if defined(ANDROID_GLES3)
+    IW_Android_SetXRMultiviewRequested(var->value != 0.f);
 #else
-    (void)var;
+    if (vid_xr_backend)
+        IW_XRWin_SetMultiviewRequested(vid_xr_backend, var->value != 0.f);
 #endif
 }
 static void VID_VRMode_f (cvar_t *var)
@@ -327,22 +327,30 @@ qboolean VID_XR_BeginHUD(unsigned *fbo, int *width, int *height)
         IW_XRWin_GetFrameTarget (vid_xr_backend, fbo, width, height);
 }
 #endif
-#if defined(ANDROID_GLES3)
 qboolean VID_XR_UsingMultiview(void)
 {
 #if defined(ANDROID_GLES3)
-    return false;
+    return IW_Android_UsingXRMultiview();
 #else
     return vid_xr_stereo_frame && vid_xr_backend && IW_XRWin_UsingMultiview(vid_xr_backend);
 #endif
 }
+
 qboolean VID_XR_BeginMultiview(unsigned *fbo, int *width, int *height)
 {
 #if defined(ANDROID_GLES3)
-    (void)fbo; (void)width; (void)height;
-    return false;
+    return IW_Android_BeginXRMultiview(fbo, width, height);
 #else
     return vid_xr_stereo_frame && IW_XRWin_BeginMultiviewTarget(vid_xr_backend, fbo, width, height);
+#endif
+}
+
+qboolean VID_XR_BeginMultiviewOverlayEye(unsigned eye, unsigned *fbo, int *width, int *height)
+{
+#if defined(ANDROID_GLES3)
+    return IW_Android_BeginXRMultiviewOverlayEye(eye, fbo, width, height);
+#else
+    return vid_xr_stereo_frame && IW_XRWin_BeginMultiviewOverlayEye(vid_xr_backend, eye, fbo, width, height);
 #endif
 }
 
@@ -354,61 +362,27 @@ void VID_XR_EndMultiview(void)
         if (vid_xr_stereo_frame && vr_desktop_mirror.value != 0)
         {
             int width, height;
-            SDL_GL_GetDrawableSize (draw_context, &width, &height);
-            IW_XRWin_MirrorMultiview (vid_xr_backend, width, height);
+            SDL_GL_GetDrawableSize(draw_context, &width, &height);
+            IW_XRWin_MirrorMultiview(vid_xr_backend, width, height);
         }
         IW_XRWin_EndMultiviewTarget(vid_xr_backend);
     }
 #endif
 }
+
 void VID_XR_EndEye(unsigned eye)
 {
+#if defined(ANDROID_GLES3)
     IW_Android_EndXREye(eye);
-}
 #else
-qboolean VID_XR_UsingMultiview(void)
-{
-#if defined(ANDROID_GLES3)
-    return false;
-#else
-    return vid_xr_stereo_frame && vid_xr_backend && IW_XRWin_UsingMultiview(vid_xr_backend);
-#endif
-}
-qboolean VID_XR_BeginMultiview(unsigned *fbo, int *width, int *height)
-{
-#if defined(ANDROID_GLES3)
-    (void)fbo; (void)width; (void)height;
-    return false;
-#else
-    return vid_xr_stereo_frame && IW_XRWin_BeginMultiviewTarget(vid_xr_backend, fbo, width, height);
-#endif
-}
-
-void VID_XR_EndMultiview(void)
-{
-#if !defined(ANDROID_GLES3)
-    if (vid_xr_backend)
-    {
-        if (vid_xr_stereo_frame && vr_desktop_mirror.value != 0)
-        {
-            int width, height;
-            SDL_GL_GetDrawableSize (draw_context, &width, &height);
-            IW_XRWin_MirrorMultiview (vid_xr_backend, width, height);
-        }
-        IW_XRWin_EndMultiviewTarget(vid_xr_backend);
-    }
-#endif
-}
-void VID_XR_EndEye(unsigned eye)
-{
     if (vid_xr_stereo_frame && eye == 0 && vr_desktop_mirror.value != 0)
     {
         int width, height;
-        SDL_GL_GetDrawableSize (draw_context, &width, &height);
-        IW_XRWin_MirrorEye (vid_xr_backend, eye, width, height);
+        SDL_GL_GetDrawableSize(draw_context, &width, &height);
+        IW_XRWin_MirrorEye(vid_xr_backend, eye, width, height);
     }
-}
 #endif
+}
 void VID_XR_Pump (void)
 {
     iw_xr_result_t result;
@@ -2346,9 +2320,13 @@ putenv (vid_center);	/* SDL_putenv is problematic in versions <= 1.2.9 */
 
 	GL_Init ();
 	GL_SetupState ();
-	vid_xr_backend = IW_XRWin_Create (draw_context, VID_XRLog, NULL);
-	IW_XRWin_SetMultiviewRequested (vid_xr_backend, vr_multiview.value != 0.f);
-	{
+	#if defined(ANDROID_GLES3)
+    IW_Android_SetXRMultiviewRequested(vr_multiview.value != 0.f);
+#else
+    vid_xr_backend = IW_XRWin_Create(draw_context, VID_XRLog, NULL);
+    IW_XRWin_SetMultiviewRequested(vid_xr_backend, vr_multiview.value != 0.f);
+#endif
+    {
 		iw_xr_bridge_config_t xr_config;
 		memset (&xr_config, 0, sizeof (xr_config));
 		xr_config.monotonic_time_ns = VID_XRMonotonicTimeNs;

@@ -281,8 +281,10 @@ NOISE_FUNCTIONS
 ////////////////////////////////////////////////////////////////
 
 #define FRAMEDATA_BUFFER \
-"#if IW_MULTIVIEW\n"\
+"#ifdef IW_MULTIVIEW\n"\
+"#if !IW_GL_BACKEND_GLES\n"\
 "#extension GL_OVR_multiview2 : require\n"\
+"#endif\n"\
 "#if IW_VERTEX_SHADER\n"\
 "layout(num_views=2) in;\n"\
 "#endif\n"\
@@ -307,7 +309,7 @@ NOISE_FUNCTIONS
 "\tfloat\tZLogBias;\n"\
 "\tuint\tNumLights;\n"\
 "};\n"\
-"#if IW_MULTIVIEW\n"\
+"#ifdef IW_MULTIVIEW\n"\
 "#define ViewProj IW_ViewProj[gl_ViewID_OVR]\n"\
 "#define EyePos IW_EyePos[gl_ViewID_OVR].xyz\n"\
 "#else\n"\
@@ -1217,8 +1219,10 @@ NOISE_FUNCTIONS
 ////////////////////////////////////////////////////////////////
 
 #define ALIAS_INSTANCE_BUFFER \
-"#if IW_MULTIVIEW\n"\
+"#ifdef IW_MULTIVIEW\n"\
+"#if !IW_GL_BACKEND_GLES\n"\
 "#extension GL_OVR_multiview2 : require\n"\
+"#endif\n"\
 "#if IW_VERTEX_SHADER\n"\
 "layout(num_views=2) in;\n"\
 "#endif\n"\
@@ -1235,7 +1239,7 @@ NOISE_FUNCTIONS
 "\n"\
 "layout(std430, binding=1) restrict readonly buffer InstanceBuffer\n"\
 "{\n"\
-"#if IW_MULTIVIEW\n"\
+"#ifdef IW_MULTIVIEW\n"\
 "\tmat4\tIW_AliasViewProj[2];\n"\
 "\tvec4\tIW_AliasEyePos[2];\n"\
 "#else\n"\
@@ -1246,7 +1250,7 @@ NOISE_FUNCTIONS
 "\tfloat\tScreenDither;\n"\
 "\tInstanceData instances[];\n"\
 "};\n"\
-"#if IW_MULTIVIEW\n"\
+"#ifdef IW_MULTIVIEW\n"\
 "#define ViewProj IW_AliasViewProj[gl_ViewID_OVR]\n"\
 "#define EyePos IW_AliasEyePos[gl_ViewID_OVR].xyz\n"\
 "#else\n"\

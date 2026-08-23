@@ -48,6 +48,12 @@ static int iw_xr_stereo_widths[2];
 static int iw_xr_stereo_heights[2];
 static qboolean iw_xr_stereo_active;
 static qboolean iw_xr_stereo_rendered;
+static qboolean iw_xr_multiview_requested = true;
+static qboolean iw_xr_multiview_active;
+static unsigned iw_xr_multiview_fbo;
+static unsigned iw_xr_multiview_overlay_fbos[2];
+static int iw_xr_multiview_width;
+static int iw_xr_multiview_height;
 static iw_xr_virtual_screen_follow_t iw_android_screen_follow;
 static iw_xr_virtual_screen_pose_t iw_android_screen_pose;
 static qboolean iw_android_screen_pose_valid;
@@ -346,6 +352,83 @@ void IW_Android_EndXREye(unsigned eye)
 {
     (void)eye;
 }
+void IW_Android_SetXRMultiviewRequested(qboolean requested)
+{
+    iw_xr_multiview_requested = requested;
+}
+
+qboolean IW_Android_XRMultiviewRequested(void)
+{
+    return iw_xr_multiview_requested;
+}
+qboolean IW_Android_XRGameplayStereoEligible(void)
+{
+    return iw_initialized && key_dest == key_game && !cl.paused && !con_forcedup && cl.intermission == 0 && !cls.demoplayback && !CL_InCutscene();
+}
+
+qboolean IW_Android_UsingXRMultiview(void)
+{
+    return iw_xr_stereo_active && iw_xr_multiview_active;
+}
+
+qboolean IW_Android_BeginXRMultiview(unsigned *fbo, int *width, int *height)
+{
+    if (!IW_Android_UsingXRMultiview() || !iw_xr_multiview_fbo)
+        return false;
+    glBindFramebuffer(GL_FRAMEBUFFER, iw_xr_multiview_fbo);
+    glViewport(0, 0, iw_xr_multiview_width, iw_xr_multiview_height);
+    if (fbo) *fbo = iw_xr_multiview_fbo;
+    if (width) *width = iw_xr_multiview_width;
+    if (height) *height = iw_xr_multiview_height;
+    return true;
+}
+
+qboolean IW_Android_BeginXRMultiviewOverlayEye(unsigned eye, unsigned *fbo, int *width, int *height)
+{
+    if (!IW_Android_UsingXRMultiview() || eye >= 2 || !iw_xr_multiview_overlay_fbos[eye])
+        return false;
+    glBindFramebuffer(GL_FRAMEBUFFER, iw_xr_multiview_overlay_fbos[eye]);
+    glViewport(0, 0, iw_xr_multiview_width, iw_xr_multiview_height);
+    if (fbo) *fbo = iw_xr_multiview_overlay_fbos[eye];
+    if (width) *width = iw_xr_multiview_width;
+    if (height) *height = iw_xr_multiview_height;
+    return true;
+}
+qboolean IW_Android_FrameXRStereoMultiview(uint64_t frame_time_ns, const iw_xr_frame_snapshot_t *snapshot, unsigned mono_fbo, int mono_width, int mono_height, unsigned layered_fbo, const unsigned *overlay_fbos, int layered_width, int layered_height)
+{
+    qboolean stereo_used;
+    if (!iw_initialized || !iw_surface || !iw_context_ready || iw_paused || !iw_audio_focus || !snapshot || snapshot->view_count < 2 || !mono_fbo || !layered_fbo || !overlay_fbos || !overlay_fbos[0] || !overlay_fbos[1] || mono_width <= 0 || mono_height <= 0 || layered_width <= 0 || layered_height <= 0) {
+        static qboolean reject_logged;
+        if (!reject_logged) {
+            IW_LOG("XR multiview frame rejected init=%d surface=%d context=%d paused=%d audio=%d snapshot=%d views=%u mono=%u layered=%u sizes=%dx%d/%dx%d", iw_initialized ? 1 : 0, iw_surface ? 1 : 0, iw_context_ready ? 1 : 0, iw_paused ? 1 : 0, iw_audio_focus ? 1 : 0, snapshot ? 1 : 0, snapshot ? snapshot->view_count : 0, mono_fbo, layered_fbo, mono_width, mono_height, layered_width, layered_height);
+            reject_logged = true;
+        }
+        return false;
+    }
+    iw_xr_target_fbo = mono_fbo;
+    iw_xr_target_width = mono_width;
+    iw_xr_target_height = mono_height;
+    iw_xr_stereo_snapshot = *snapshot;
+    iw_xr_stereo_rendered = false;
+    iw_xr_stereo_active = true;
+    iw_xr_multiview_fbo = layered_fbo;
+    iw_xr_multiview_overlay_fbos[0] = overlay_fbos ? overlay_fbos[0] : 0;
+    iw_xr_multiview_overlay_fbos[1] = overlay_fbos ? overlay_fbos[1] : 0;
+    iw_xr_multiview_width = layered_width;
+    iw_xr_multiview_height = layered_height;
+    iw_xr_multiview_active = IW_Android_XRMultiviewRequested();
+    IW_Android_Frame(frame_time_ns);
+    stereo_used = iw_xr_stereo_rendered && iw_xr_multiview_active;
+    iw_xr_multiview_active = false;
+    iw_xr_multiview_fbo = 0;
+    iw_xr_multiview_overlay_fbos[0] = iw_xr_multiview_overlay_fbos[1] = 0;
+    iw_xr_multiview_width = iw_xr_multiview_height = 0;
+    IW_Android_ClearXRStereoFrame();
+    R_SetXRFinalTarget(0, 0, 0);
+    iw_xr_target_fbo = 0;
+    iw_xr_target_width = iw_xr_target_height = 0;
+    return stereo_used;
+}
 qboolean IW_Android_BeginXRHUD(unsigned *fbo, int *width, int *height)
 {
     static qboolean logged;
@@ -625,6 +708,7 @@ void IW_Android_Resize(int width, int height) { (void)width; (void)height; }
 void IW_Android_Frame(uint64_t frame_time_ns) { (void)frame_time_ns; }
 void IW_Android_FrameXR(uint64_t frame_time_ns, unsigned target_fbo, int target_width, int target_height) { (void)frame_time_ns; (void)target_fbo; (void)target_width; (void)target_height; }
 qboolean IW_Android_FrameXRStereo(uint64_t frame_time_ns, const iw_xr_frame_snapshot_t *snapshot, unsigned mono_fbo, int mono_width, int mono_height, const unsigned *eye_fbos, const int *eye_widths, const int *eye_heights) { (void)frame_time_ns; (void)snapshot; (void)mono_fbo; (void)mono_width; (void)mono_height; (void)eye_fbos; (void)eye_widths; (void)eye_heights; return false; }
+qboolean IW_Android_FrameXRStereoMultiview(uint64_t frame_time_ns, const iw_xr_frame_snapshot_t *snapshot, unsigned mono_fbo, int mono_width, int mono_height, unsigned layered_fbo, const unsigned *overlay_fbos, int layered_width, int layered_height) { (void)frame_time_ns; (void)snapshot; (void)mono_fbo; (void)mono_width; (void)mono_height; (void)layered_fbo; (void)overlay_fbos; (void)layered_width; (void)layered_height; return false; }
 void IW_Android_SetXRStereoFrame(const iw_xr_frame_snapshot_t *snapshot, const unsigned *fbos, const int *widths, const int *heights) { (void)snapshot; (void)fbos; (void)widths; (void)heights; }
 void IW_Android_ClearXRStereoFrame(void) {}
 qboolean IW_Android_GetXRStereoFrame(const iw_xr_frame_snapshot_t **snapshot) { if (snapshot) *snapshot = NULL; return false; }
@@ -638,4 +722,10 @@ void IW_Android_SetVirtualPointer(const float start[3], const float hit[3], qboo
 qboolean IW_Android_BeginXREye(unsigned eye, unsigned *fbo, int *width, int *height) { (void)eye; if (fbo) *fbo = 0; if (width) *width = 0; if (height) *height = 0; return false; }
 void IW_Android_EndXREye(unsigned eye) { (void)eye; }
 qboolean IW_Android_BeginXRHUD(unsigned *fbo, int *width, int *height) { (void)fbo; (void)width; (void)height; return false; }
+void IW_Android_SetXRMultiviewRequested(qboolean requested) { (void)requested; }
+qboolean IW_Android_XRMultiviewRequested(void) { return false; }
+qboolean IW_Android_XRGameplayStereoEligible(void) { return false; }
+qboolean IW_Android_UsingXRMultiview(void) { return false; }
+qboolean IW_Android_BeginXRMultiview(unsigned *fbo, int *width, int *height) { if (fbo) *fbo = 0; if (width) *width = 0; if (height) *height = 0; return false; }
+qboolean IW_Android_BeginXRMultiviewOverlayEye(unsigned eye, unsigned *fbo, int *width, int *height) { (void)eye; if (fbo) *fbo = 0; if (width) *width = 0; if (height) *height = 0; return false; }
 #endif

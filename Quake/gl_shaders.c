@@ -248,6 +248,7 @@ static GLuint GL_CreateShader (GLenum type, const char *source, const char *extr
 #if defined(ANDROID_GLES3)
 	q_snprintf (header, sizeof (header),
 		"#version 310 es\n"
+		"%s"
 		"precision highp float;\n"
 		"precision highp int;\n"
 		"precision highp sampler2D;\n"
@@ -264,6 +265,7 @@ static GLuint GL_CreateShader (GLenum type, const char *source, const char *extr
 		"#define IW_MIX(a,b,t) ((a) + ((b) - (a)) * (t))\n"
 		"#define USE_MULTISAMPLE 0\n"
 		"#define REVERSED_Z 0\n",
+		extradefs && strstr(extradefs, "IW_MULTIVIEW 1") ? "#extension GL_OVR_multiview2 : require\n" : "",
 		type == GL_VERTEX_SHADER
 	);
 #else

@@ -2228,10 +2228,10 @@ void SCR_UpdateScreen (void)
 			unsigned hud_fbo, eye;
 			int hud_width, hud_height;
 			qboolean hud_layer = VID_XR_BeginHUD (&hud_fbo, &hud_width, &hud_height);
+			qboolean rendered_multiview = false;
 			scr_xr_hud_layer = hud_layer;
 
 			{
-				qboolean rendered_multiview = false;
 				if (VID_XR_UsingMultiview ())
 				{
 					unsigned fbo; int width, height;
@@ -2243,7 +2243,22 @@ void SCR_UpdateScreen (void)
 						SCR_CalcRefdef (); r_refdef.scale = 1;
 						R_SetXRFinalTarget (fbo, width, height);
 						V_RenderXRMultiview (snapshot);
-						VID_XR_EndMultiview (); R_ClearXREye ();
+						for (eye = 0; eye < 2; ++eye)
+						{
+						    unsigned overlay_fbo;
+						    int overlay_width, overlay_height;
+						    if (!VID_XR_BeginMultiviewOverlayEye (eye, &overlay_fbo, &overlay_width, &overlay_height))
+						        continue;
+						    glx = gly = 0; glwidth = overlay_width; glheight = overlay_height;
+						    GL_SetFrameBufferSize (overlay_width, overlay_height);
+						    vid.width = vid.guiwidth = overlay_width; vid.height = vid.guiheight = overlay_height;
+						    R_SetXRFinalTarget (overlay_fbo, overlay_width, overlay_height);
+						    R_SetXREye (snapshot, eye);
+						    SCR_DrawScreenOverlay ();
+						    GL_PostProcess ();
+						    R_ClearXREye ();
+						}
+						VID_XR_EndMultiview ();
 						rendered_multiview = true;
 					}
 				}

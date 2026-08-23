@@ -810,6 +810,7 @@ void R_ClearXREye (void);
 void V_RenderXRMultiview (const iw_xr_frame_snapshot_t *snapshot);
 qboolean VID_XR_UsingMultiview (void);
 qboolean VID_XR_BeginMultiview (unsigned *fbo, int *width, int *height);
+qboolean VID_XR_BeginMultiviewOverlayEye (unsigned eye, unsigned *fbo, int *width, int *height);
 void VID_XR_EndMultiview (void);
 qboolean VID_XR_GetStereoFrame (const iw_xr_frame_snapshot_t **snapshot);
 qboolean VID_XR_GetHeadPosition (float position[3]);

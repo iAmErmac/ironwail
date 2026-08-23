@@ -2973,30 +2973,24 @@ void R_SetXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye)
 		VectorSubtract (svs.clients[0].edict->v.origin, cl_entities[cl.viewentity].origin, server_delta);
 		VectorAdd (r_refdef.vieworg, server_delta, r_refdef.vieworg);
 	}
-    if (cl.onground)
-        r_xr_stair_ground_time = cl.time;
-    if (vr_smooth_stairs.value == 0.f || cl.time - r_xr_stair_ground_time > 0.12)
-    {
-        r_xr_stair_smooth_z = r_refdef.vieworg[2];
-        r_xr_stair_smooth_time = cl.time;
-        r_xr_stair_smooth_valid = true;
-    }
-    else if (!r_xr_stair_smooth_valid)
-    {
-        r_xr_stair_smooth_z = r_refdef.vieworg[2];
-        r_xr_stair_smooth_time = cl.time;
-        r_xr_stair_smooth_valid = true;
-    }
-    else
+    if (!r_xr_stair_smooth_valid || r_xr_stair_smooth_time != cl.time)
     {
         double stair_dt = CLAMP (0.0, cl.time - r_xr_stair_smooth_time, 0.1);
-        r_xr_stair_smooth_time = cl.time;
-        if (r_xr_stair_smooth_z < r_refdef.vieworg[2])
-            r_xr_stair_smooth_z = CLAMP (r_refdef.vieworg[2] - 18.f, r_xr_stair_smooth_z + (float)stair_dt * 160.f, r_refdef.vieworg[2]);
+        float stair_step = q_min ((float)stair_dt * 160.f, 2.25f);
+        // Keep a low presentation rate from turning a fixed correction speed into visible stair jumps.
+        if (cl.onground)
+            r_xr_stair_ground_time = cl.time;
+        // A short descent remains stair movement; a larger drop must still snap to avoid a floating fall.
+        if (vr_smooth_stairs.value == 0.f || !r_xr_stair_smooth_valid || (cl.time - r_xr_stair_ground_time > 0.12 && r_refdef.vieworg[2] < r_xr_stair_smooth_z - 24.f))
+            r_xr_stair_smooth_z = r_refdef.vieworg[2];
+        else if (r_xr_stair_smooth_z < r_refdef.vieworg[2])
+            r_xr_stair_smooth_z = CLAMP (r_refdef.vieworg[2] - 18.f, r_xr_stair_smooth_z + stair_step, r_refdef.vieworg[2]);
         else if (r_xr_stair_smooth_z > r_refdef.vieworg[2])
-            r_xr_stair_smooth_z = CLAMP (r_refdef.vieworg[2], r_xr_stair_smooth_z - (float)stair_dt * 160.f, r_refdef.vieworg[2] + 18.f);
-        r_refdef.vieworg[2] = r_xr_stair_smooth_z;
+            r_xr_stair_smooth_z = CLAMP (r_refdef.vieworg[2], r_xr_stair_smooth_z - stair_step, r_refdef.vieworg[2] + 18.f);
+        r_xr_stair_smooth_time = cl.time;
+        r_xr_stair_smooth_valid = true;
     }
+    r_refdef.vieworg[2] = r_xr_stair_smooth_z;
     VectorCopy (r_refdef.vieworg, r_xr_center_vieworg);
 	dx = snapshot->views[1].position[0] - snapshot->views[0].position[0];
 	dy = snapshot->views[1].position[1] - snapshot->views[0].position[1];
