@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 #include "quakedef.h"
 #include "xr_input.h"
+#include "xr_interaction.h"
 #include "q_ctype.h"
 
 #define	STRINGTEMP_BUFFERS		1024
@@ -169,11 +170,12 @@ Writes new values for v_forward, v_up, and v_right based on angles
 makevectors(vector)
 ==============
 */
+/* The disposable offhand entity is local-only, but its QuakeC builtins must use the tracked firing pose. */
 static qboolean PF_UseXRControllerAim (void)
 {
 	if (!sv.active || cls.demoplayback || cl.maxclients != 1 || !sv_player)
 		return false;
-	return PROG_TO_EDICT (pr_global_struct->self) == sv_player;
+	return XR_Interaction_UseOffhandAim () || PROG_TO_EDICT (pr_global_struct->self) == sv_player;
 }
 
 static void PF_makevectors (void)
@@ -201,7 +203,7 @@ static qboolean PF_IsXRLocalProjectile (edict_t *e)
 {
 	if (!sv.active || cls.demoplayback || cl.maxclients != 1 || !sv_player || e == sv_player)
 		return false;
-	return e->v.owner == EDICT_TO_PROG (sv_player) || PROG_TO_EDICT (pr_global_struct->self) == sv_player;
+	return XR_Interaction_UseOffhandAim () || e->v.owner == EDICT_TO_PROG (sv_player) || PROG_TO_EDICT (pr_global_struct->self) == sv_player;
 }
 static void PF_setorigin (void)
 {
@@ -694,6 +696,16 @@ static void PF_sound (void)
 	volume = G_FLOAT(OFS_PARM3) * 255;
 	attenuation = G_FLOAT(OFS_PARM4);
 
+    /* Local offhand weapon code runs on a disposable entity; keep its audio on one stable channel. */
+    if (XR_Interaction_UseOffhandAim () && entity == PROG_TO_EDICT (pr_global_struct->self) && sv_player)
+    {
+        if ((XR_Interaction_OffhandWeaponItem () == IT_NAILGUN || XR_Interaction_OffhandWeaponItem () == IT_SUPER_NAILGUN || XR_Interaction_OffhandWeaponItem () == IT_LIGHTNING || XR_Interaction_OffhandWeaponItem () == HIT_LASER_CANNON) &&
+            channel == 0 && !XR_Interaction_AllowOffhandContinuousAutoSound ()) return;
+        entity = sv_player;
+        /* Preserve QuakeC sound roles: auto sounds and weapon sounds need independent offhand channels. */
+        channel = channel == 0 ? 6 : 7;
+    }
+
 	SV_StartSound (entity, channel, sample, volume, attenuation);
 }
 
@@ -745,6 +757,27 @@ static void PF_traceline (void)
 		}
 	}
 
+	/* Preserve each QuakeC trace's range and spread while aiming the local offhand trace at its tracked-hand reference. */
+	if (XR_Interaction_UseOffhandAim ())
+	{
+		vec3_t reference, raw_forward, shot_delta, corrected_forward, perpendicular;
+		float forward_distance;
+		if (R_GetXROffhandAimReference (reference) &&
+			R_GetXRMainHandWeaponPose (NULL, raw_forward, NULL, NULL))
+		{
+			VectorSubtract (v2, v1, shot_delta);
+			VectorSubtract (reference, v1, corrected_forward);
+			if (VectorNormalize (raw_forward) > 0.f && VectorNormalize (corrected_forward) > 0.f)
+			{
+				forward_distance = DotProduct (shot_delta, raw_forward);
+				VectorMA (shot_delta, -forward_distance, raw_forward, perpendicular);
+				VectorScale (corrected_forward, forward_distance, shot_delta);
+				VectorAdd (shot_delta, perpendicular, shot_delta);
+				VectorAdd (v1, shot_delta, v2);
+			}
+		}
+	}
+
 	/* FIXME FIXME FIXME: Why do we hit this with certain progs.dat ?? */
 	if (developer.value) {
 	  if (IS_NAN(v1[0]) || IS_NAN(v1[1]) || IS_NAN(v1[2]) ||
@@ -758,8 +791,8 @@ static void PF_traceline (void)
 		v1[0] = v1[1] = v1[2] = 0;
 	if (IS_NAN(v2[0]) || IS_NAN(v2[1]) || IS_NAN(v2[2]))
 		v2[0] = v2[1] = v2[2] = 0;
-
-	trace = SV_Move (v1, vec3_origin, vec3_origin, v2, nomonsters, ent);
+	/* Ignore the canonical player only for the local offhand trace, preventing lightning from self-hitting. */
+	trace = SV_Move (v1, vec3_origin, vec3_origin, v2, nomonsters, XR_Interaction_UseOffhandAim () && sv_player ? sv_player : ent);
 
 	pr_global_struct->trace_allsolid = trace.allsolid;
 	pr_global_struct->trace_startsolid = trace.startsolid;

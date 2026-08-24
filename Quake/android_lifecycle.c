@@ -152,12 +152,12 @@ qboolean IW_Android_Init(const char *base_dir, int argc, const char *const *argv
     IW_Android_QueueLaunchArgs(argc, argv);
     Cbuf_Execute();
 #if defined(ANDROID_GLES3)
-    if (!keybindings[K_LTRIGGER]) Key_SetBinding(K_LTRIGGER, "+jump");
+    if (!keybindings[K_LTRIGGER] || !strcmp(keybindings[K_LTRIGGER], "+jump")) Key_SetBinding(K_LTRIGGER, "+vr_offhandattack");
     if (!keybindings[K_RTRIGGER]) Key_SetBinding(K_RTRIGGER, "+attack");
     if (!keybindings[K_RTHUMB]) Key_SetBinding(K_RTHUMB, "toggleconsole");
     if (!keybindings[K_BBUTTON]) Key_SetBinding(K_BBUTTON, "+jump");
     if (!keybindings[K_ABUTTON]) Key_SetBinding(K_ABUTTON, "+movedown");
-    if (!keybindings[K_LGRIP]) Key_SetBinding(K_LGRIP, "+speed");
+    if (!keybindings[K_LGRIP] || !strcmp(keybindings[K_LGRIP], "+speed")) Key_SetBinding(K_LGRIP, "+vr_offhandweaponwheel");
     if (!keybindings[K_RGRIP]) Key_SetBinding(K_RGRIP, "+vr_weaponwheel");
     if (!keybindings[K_YBUTTON]) Key_SetBinding(K_YBUTTON, "+showscores");
     if (!keybindings[K_XBUTTON]) Key_SetBinding(K_XBUTTON, "messagemode");

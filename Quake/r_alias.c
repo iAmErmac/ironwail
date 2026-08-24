@@ -377,7 +377,9 @@ anim = (int)(cl.time * 10) & 3;
         state = GLS_CULL_BACK | GLS_ATTRIBS (1);
 #endif
 
-	opaque_state = (state | GLS_BLEND_OPAQUE) & ~(GLS_BLEND_ALPHA_OIT | GLS_NO_ZWRITE);
+	if (R_XRViewmodelMirrored (ibuf.ent))
+	state = (state & ~GLS_MASK_CULL) | GLS_CULL_FRONT;
+opaque_state = (state | GLS_BLEND_OPAQUE) & ~(GLS_BLEND_ALPHA_OIT | GLS_NO_ZWRITE);
 	transparent_state = (state | GLS_BLEND_ALPHA) & ~(GLS_BLEND_OPAQUE | GLS_CULL_BACK);
 
 	if (translucent)

@@ -36,10 +36,10 @@ static int	ramp2[8] = {0x6f, 0x6e, 0x6d, 0x6c, 0x6b, 0x6a, 0x68, 0x66};
 static int	ramp3[8] = {0x6d, 0x6b, 6, 5, 4, 3};
 
 particle_t	*particles;
-static qboolean r_vr_laser_dot_active;
-static vec3_t r_vr_laser_dot_origin;
-static uint32_t r_vr_laser_dot_color;
-static float r_vr_laser_dot_scale;
+static qboolean r_vr_laser_dot_active[IW_XR_HAND_COUNT];
+static vec3_t r_vr_laser_dot_origin[IW_XR_HAND_COUNT];
+static uint32_t r_vr_laser_dot_color[IW_XR_HAND_COUNT];
+static float r_vr_laser_dot_scale[IW_XR_HAND_COUNT];
 int			r_numparticles, r_numactiveparticles;
 
 static float uvscale;
@@ -97,15 +97,16 @@ particle_t *R_AllocParticle (void)
 R_InitParticles
 ===============
 */
-void R_SetVRLaserDot (qboolean active, const vec3_t origin, uint32_t color, float scale)
+void R_SetVRLaserDot (iw_xr_hand_t hand, qboolean active, const vec3_t origin, uint32_t color, float scale)
 {
-	r_vr_laser_dot_active = active;
-	if (active)
-	{
-		VectorCopy (origin, r_vr_laser_dot_origin);
-		r_vr_laser_dot_color = color;
-		r_vr_laser_dot_scale = scale;
-	}
+    if (hand < 0 || hand >= IW_XR_HAND_COUNT) return;
+    r_vr_laser_dot_active[hand] = active;
+    if (active)
+    {
+        VectorCopy (origin, r_vr_laser_dot_origin[hand]);
+        r_vr_laser_dot_color[hand] = color;
+        r_vr_laser_dot_scale[hand] = scale;
+    }
 }
 
 void R_InitParticles (void)
@@ -711,8 +712,9 @@ static void R_DrawParticles_Real (qboolean alpha, qboolean showtris)
 	float			scalex, scaley;
 	qboolean		dither, oit;
 	qboolean draw_regular = r_particles.value && (showtris || alpha == ((int)r_particles.value != 2));
-	qboolean draw_laser_dot = r_vr_laser_dot_active && !showtris && alpha;
-	int				i;
+	qboolean draw_laser_dot = false;
+    int i, hand;
+    for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand) draw_laser_dot |= r_vr_laser_dot_active[hand] && !showtris && alpha;
 
 	if (!draw_regular && !draw_laser_dot)
 		return;
@@ -763,15 +765,14 @@ static void R_DrawParticles_Real (qboolean alpha, qboolean showtris)
 		//johnfitz
 	}
 
-	if (draw_laser_dot)
+	for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand)
 	{
-		if (numpartverts == countof(partverts))
-			R_FlushParticleBatch ();
-
+		if (!draw_laser_dot || !r_vr_laser_dot_active[hand]) continue;
+		if (numpartverts == countof(partverts)) R_FlushParticleBatch ();
 		v = &partverts[numpartverts++];
-		VectorCopy (r_vr_laser_dot_origin, v->pos);
-		v->scale = r_vr_laser_dot_scale;
-		*(uint32_t *)&v->color = showtris ? 0xffffffff : r_vr_laser_dot_color;
+		VectorCopy (r_vr_laser_dot_origin[hand], v->pos);
+		v->scale = r_vr_laser_dot_scale[hand];
+		*(uint32_t *)&v->color = showtris ? 0xffffffff : r_vr_laser_dot_color[hand];
 	}
 
 	R_FlushParticleBatch ();

@@ -143,6 +143,7 @@ if (EXISTS "${IRONWAIL_VR_PAK_BUILDER}")
         COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${IRONWAIL_VR_PAK_BUILDER}"
             -Source "${IRONWAIL_VR_PAK_SOURCE_DIR}"
             -Output "${IRONWAIL_VR_PAK_GENERATED}"
+            -WeaponWheelConfig "${CMAKE_CURRENT_SOURCE_DIR}/Quake/weaponwheel.json"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${IRONWAIL_VR_PAK_GENERATED}"
             "$<TARGET_FILE_DIR:ironwail>/ironwail_vr.pak"

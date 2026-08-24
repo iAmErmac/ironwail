@@ -5510,6 +5510,7 @@ static const menukeybind_t default_keybinds[] =
 	{"*",				"",						0},
 	{"",				"",						0},
 	{"+attack",			"Attack",				0},
+	{"+vr_offhandattack", "Offhand attack", 0},
 	{"impulse 10",		"Next weapon",			0},
 	{"impulse 12",		"Previous weapon",		0},
 	{"impulse 1",			"Axe",					0},
@@ -5535,6 +5536,7 @@ static const menukeybind_t default_keybinds[] =
 	{"screenshot",		"Screenshot",			0},
 	{"+showscores",		"Show score",			0},
 	{"+vr_weaponwheel", "Weapon wheel", MBF_GAMEPAD_ONLY },
+	{"+vr_offhandweaponwheel", "Offhand wheel", MBF_GAMEPAD_ONLY },
 	{"messagemode",		"Text chat",			MBF_REQUIRED | MBF_KBM_ONLY},
 	// Keep this marker so QSS/FTE bindlist files remain compatible.
 	{"+voip",			"Voice chat",			MBF_REQUIRED},

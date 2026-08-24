@@ -130,6 +130,7 @@ cvar_t vr_weapon_pitch = {"vr_weapon_pitch", "-45", CVAR_ARCHIVE};
 cvar_t vr_weapon_xoffset = {"vr_weapon_xoffset", "0", CVAR_ARCHIVE};
 cvar_t vr_weapon_yoffset = {"vr_weapon_yoffset", "0", CVAR_ARCHIVE};
 cvar_t vr_weapon_zoffset = {"vr_weapon_zoffset", "10", CVAR_ARCHIVE};
+cvar_t vr_offhand_render_flip = {"vr_offhand_render_flip", "1", CVAR_ARCHIVE};
 cvar_t vr_laser_sight = {"vr_laser_sight", "0", CVAR_ARCHIVE};
 cvar_t vr_laser_beam = {"vr_laser_beam", "0", CVAR_ARCHIVE};
 cvar_t vr_laser_color = {"vr_laser_color", "FF0000", CVAR_ARCHIVE};
@@ -2189,6 +2190,7 @@ void	VID_Init (void)
     Cvar_RegisterVariable (&vr_weapon_xoffset);
     Cvar_RegisterVariable (&vr_weapon_yoffset);
     Cvar_RegisterVariable (&vr_weapon_zoffset);
+    Cvar_RegisterVariable (&vr_offhand_render_flip);
     Cvar_RegisterVariable (&vr_laser_sight);
     Cvar_RegisterVariable (&vr_laser_beam);
     Cvar_RegisterVariable (&vr_laser_color);

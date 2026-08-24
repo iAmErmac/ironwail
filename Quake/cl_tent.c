@@ -22,6 +22,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // cl_tent.c -- client side temporary entities
 
 #include "quakedef.h"
+#include "xr_input.h"
+#include "xr_interaction.h"
 
 int			num_temp_entities;
 entity_t	cl_temp_entities[MAX_TEMP_ENTITIES];
@@ -59,11 +61,15 @@ CL_ParseBeam
 void CL_ParseBeam (qmodel_t *m)
 {
 	int		ent;
+	qboolean offhand;
 	vec3_t	start, end;
 	beam_t	*b;
 	int		i;
 
 	ent = MSG_ReadShort ();
+	offhand = XR_Interaction_IsLocalOffhandBeamEntity (ent);
+	/* The disposable entity is never network-visible; retain the beam under the local player slot. */
+	if (offhand) ent = cl.viewentity;
 
 	start[0] = MSG_ReadCoord (cl.protocolflags);
 	start[1] = MSG_ReadCoord (cl.protocolflags);
@@ -78,6 +84,7 @@ void CL_ParseBeam (qmodel_t *m)
 		if (b->entity == ent)
 		{
 			b->entity = ent;
+			b->offhand = offhand;
 			b->model = m;
 			b->starttime = cl.time - 0.001;
 			b->endtime = cl.time + 0.2;
@@ -92,6 +99,7 @@ void CL_ParseBeam (qmodel_t *m)
 		if (!b->model || b->starttime > cl.time || b->endtime < cl.time)
 		{
 			b->entity = ent;
+			b->offhand = offhand;
 			b->model = m;
 			b->starttime = cl.time - 0.001;
 			b->endtime = cl.time + 0.2;
@@ -314,7 +322,9 @@ void CL_UpdateTEnts (void)
 	// if coming from the player, update the start position
 		if (b->entity == cl.viewentity)
 		{
-			if (!R_GetXRMainHandWeaponPose (b->start, NULL, NULL, NULL))
+			if (b->offhand)
+				R_GetXRHandAimPose (XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND), b->start, NULL, NULL, NULL);
+			else if (!R_GetXRMainHandWeaponPose (b->start, NULL, NULL, NULL))
 				VectorCopy (cl_entities[cl.viewentity].origin, b->start);
 		}
 

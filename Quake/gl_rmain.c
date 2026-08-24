@@ -42,6 +42,8 @@ vec3_t		*r_pointfile;
 int			r_visframecount;	// bumped when going to a new PVS
 int			r_framecount;		// used for dlight push checking
 
+extern cvar_t vr_weapon_pitch, vr_weapon_xoffset, vr_weapon_yoffset, vr_weapon_zoffset, vr_offhand_render_flip;
+
 mplane_t	frustum[4];
 float		r_matview[16];
 float		r_matproj[16];
@@ -115,44 +117,60 @@ static float r_xr_stair_smooth_z;
 static double r_xr_stair_smooth_time;
 static double r_xr_stair_ground_time;
 static qboolean r_xr_viewmodel_orientation_valid;
+static entity_t *r_xr_mainhand_viewmodel, *r_xr_offhand_viewmodel;
 static vec3_t r_xr_viewmodel_forward, r_xr_viewmodel_right, r_xr_viewmodel_up;
 static qboolean r_xr_controller_aim_valid;
 static vec3_t r_xr_controller_forward, r_xr_controller_right, r_xr_controller_up, r_xr_controller_origin;
 static qboolean r_xr_hand_tracking_valid[IW_XR_HAND_COUNT], r_xr_hand_aim_valid[IW_XR_HAND_COUNT];
 static vec3_t r_xr_hand_tracking_origin[IW_XR_HAND_COUNT], r_xr_hand_tracking_forward[IW_XR_HAND_COUNT], r_xr_hand_tracking_right[IW_XR_HAND_COUNT], r_xr_hand_tracking_up[IW_XR_HAND_COUNT];
 static vec3_t r_xr_hand_aim_origin[IW_XR_HAND_COUNT], r_xr_hand_aim_forward[IW_XR_HAND_COUNT], r_xr_hand_aim_right[IW_XR_HAND_COUNT], r_xr_hand_aim_up[IW_XR_HAND_COUNT];
-static qboolean r_xr_laser_valid, r_xr_pointer_valid, r_xr_teleport_marker_valid;
-static vec3_t r_xr_laser_start, r_xr_laser_end, r_xr_pointer_start, r_xr_pointer_end, r_xr_teleport_marker_origin;
+typedef struct { qboolean valid; vec3_t start, end, forward; } xr_laser_t;
+static xr_laser_t r_xr_laser[IW_XR_HAND_COUNT];
+static qboolean r_xr_pointer_valid, r_xr_teleport_marker_valid;
+static vec3_t r_xr_offhand_aim_reference;
+static qboolean r_xr_offhand_aim_reference_valid;
+static vec3_t r_xr_pointer_start, r_xr_pointer_end, r_xr_teleport_marker_origin;
 static uint32_t r_xr_teleport_marker_color;
 qboolean R_GetXRViewmodelMatrix (entity_t *e, float matrix[16], const vec3_t origin, unsigned char scale)
 {
-	vec3_t forward, up;
+	vec3_t forward, right, up;
 	float scalefactor, correction, c, s;
-	if (e != &cl.viewent || !r_xr_eye_pass || !r_xr_viewmodel_orientation_valid)
+	qboolean offhand = e == r_xr_offhand_viewmodel;
+    qboolean mainhand = e == &cl.viewent || e == r_xr_mainhand_viewmodel;
+    int weapon;
+	if ((!offhand && !mainhand) || !r_xr_eye_pass || (mainhand && !r_xr_viewmodel_orientation_valid))
 		return false;
-	VectorCopy (r_xr_viewmodel_forward, forward);
-	VectorCopy (r_xr_viewmodel_up, up);
-	correction = (cl.stats[STAT_ACTIVEWEAPON] == IT_SHOTGUN || cl.stats[STAT_ACTIVEWEAPON] == IT_ROCKET_LAUNCHER) ? 5.f : 0.f;
-	if (correction)
+	if (offhand)
 	{
-		vec3_t original_forward, original_up;
-		c = cosf (DEG2RAD (correction));
-		s = sinf (DEG2RAD (correction));
-		VectorCopy (forward, original_forward);
-		VectorCopy (up, original_up);
-		VectorScale (original_forward, c, forward);
-		VectorMA (forward, s, original_up, forward);
-		VectorScale (original_up, c, up);
-		VectorMA (up, -s, original_forward, up);
+		if (!R_GetXRHandAimPose(XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND), NULL, forward, right, up))
+			return false;
+		if (vr_offhand_render_flip.value == 0.f)
+			VectorScale (right, -1.f, right);
 	}
+	else
+	{
+		VectorCopy (r_xr_viewmodel_forward, forward);
+		VectorCopy (r_xr_viewmodel_right, right);
+		VectorCopy (r_xr_viewmodel_up, up);
+	}
+    weapon = offhand ? XR_Interaction_OffhandWeaponItem () : XR_Interaction_MainhandWeaponItem ();
+    correction = (weapon == IT_SHOTGUN || weapon == IT_ROCKET_LAUNCHER) ? 5.f : 0.f;
+    if (correction)
+    {
+        vec3_t original_forward, original_up;
+        c = cosf (DEG2RAD (correction)); s = sinf (DEG2RAD (correction));
+        VectorCopy (forward, original_forward); VectorCopy (up, original_up);
+        VectorScale (original_forward, c, forward); VectorMA (forward, s, original_up, forward);
+        VectorScale (original_up, c, up); VectorMA (up, -s, original_forward, up);
+    }
 	scalefactor = ENTSCALE_DECODE(scale);
 	matrix[0] = forward[0] * scalefactor;
 	matrix[1] = forward[1] * scalefactor;
 	matrix[2] = forward[2] * scalefactor;
 	matrix[3] = 0.f;
-	matrix[4] = r_xr_viewmodel_right[0] * scalefactor;
-	matrix[5] = r_xr_viewmodel_right[1] * scalefactor;
-	matrix[6] = r_xr_viewmodel_right[2] * scalefactor;
+	matrix[4] = right[0] * scalefactor;
+	matrix[5] = right[1] * scalefactor;
+	matrix[6] = right[2] * scalefactor;
 	matrix[7] = 0.f;
 	matrix[8] = up[0] * scalefactor;
 	matrix[9] = up[1] * scalefactor;
@@ -164,16 +182,29 @@ qboolean R_GetXRViewmodelMatrix (entity_t *e, float matrix[16], const vec3_t ori
 	matrix[15] = 1.f;
 	return true;
 }
+qboolean R_XRViewmodelMirrored (const entity_t *e) { return e == r_xr_offhand_viewmodel && vr_offhand_render_flip.value != 0.f; }
 qboolean R_GetXRHandPose (iw_xr_hand_t hand, vec3_t origin, vec3_t forward, vec3_t right, vec3_t up)
 {
-    if (hand < 0 || hand >= IW_XR_HAND_COUNT || !r_xr_hand_aim_valid[hand]) return false;
-    if (origin) VectorCopy(r_xr_hand_aim_origin[hand], origin);
-    if (forward) VectorCopy(r_xr_hand_aim_forward[hand], forward);
-    if (right) VectorCopy(r_xr_hand_aim_right[hand], right);
-    if (up) VectorCopy(r_xr_hand_aim_up[hand], up);
+    const vec3_t *hand_origin, *hand_forward, *hand_right, *hand_up;
+    if (hand < 0 || hand >= IW_XR_HAND_COUNT) return false;
+    /* Some mobile runtimes expose grip before aim; retain tracked-hand aiming in that case. */
+    if (r_xr_hand_aim_valid[hand])
+    {
+        hand_origin = &r_xr_hand_aim_origin[hand]; hand_forward = &r_xr_hand_aim_forward[hand];
+        hand_right = &r_xr_hand_aim_right[hand]; hand_up = &r_xr_hand_aim_up[hand];
+    }
+    else if (r_xr_hand_tracking_valid[hand])
+    {
+        hand_origin = &r_xr_hand_tracking_origin[hand]; hand_forward = &r_xr_hand_tracking_forward[hand];
+        hand_right = &r_xr_hand_tracking_right[hand]; hand_up = &r_xr_hand_tracking_up[hand];
+    }
+    else return false;
+    if (origin) VectorCopy(*hand_origin, origin);
+    if (forward) VectorCopy(*hand_forward, forward);
+    if (right) VectorCopy(*hand_right, right);
+    if (up) VectorCopy(*hand_up, up);
     return true;
 }
-
 qboolean R_GetXRHandAim (iw_xr_hand_t hand, vec3_t origin, vec3_t forward)
 {
     return R_GetXRHandPose(hand, origin, forward, NULL, NULL);
@@ -194,17 +225,39 @@ qboolean R_GetXRHandAimPose (iw_xr_hand_t hand, vec3_t origin, vec3_t forward, v
     return R_GetXRHandPose(hand, origin, forward, right, up);
 }
 
+qboolean R_GetXROffhandAimReference (vec3_t target)
+{
+	if (!r_xr_offhand_aim_reference_valid)
+		return false;
+	if (target)
+		VectorCopy (r_xr_offhand_aim_reference, target);
+	return true;
+}
 qboolean R_GetXRMainHandWeaponPose (vec3_t origin, vec3_t forward, vec3_t right, vec3_t up)
 {
-    if (!r_xr_controller_aim_valid)
+    if (XR_Interaction_UseOffhandAim())
+    {
+        iw_xr_hand_t hand = XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND);
+        if (R_GetXRHandAimPose(hand, origin, forward, right, up)) return true;
+        if (r_xr_laser[hand].valid)
+        {
+            vec3_t basis_up = {0.f, 0.f, 1.f};
+            if (origin) VectorCopy(r_xr_laser[hand].start, origin);
+            if (forward) VectorCopy(r_xr_laser[hand].forward, forward);
+            if (fabsf(r_xr_laser[hand].forward[2]) > 0.98f) VectorSet(basis_up, 0.f, 1.f, 0.f);
+            if (right) { CrossProduct(r_xr_laser[hand].forward, basis_up, right); VectorNormalize(right); }
+            if (up) { vec3_t basis_right; CrossProduct(r_xr_laser[hand].forward, basis_up, basis_right); VectorNormalize(basis_right); CrossProduct(basis_right, r_xr_laser[hand].forward, up); VectorNormalize(up); }
+            return true;
+        }
         return false;
+    }
+    if (!r_xr_controller_aim_valid) return false;
     if (origin) VectorCopy(r_xr_controller_origin, origin);
     if (forward) VectorCopy(r_xr_controller_forward, forward);
     if (right) VectorCopy(r_xr_controller_right, right);
     if (up) VectorCopy(r_xr_controller_up, up);
     return true;
 }
-
 void R_SetXRTeleportMarker (const vec3_t origin, qboolean active, uint32_t color)
 {
 	r_xr_teleport_marker_valid = active;
@@ -238,56 +291,66 @@ static uint32_t R_XRLaserColor (float alpha)
 	return ((uint32_t)(CLAMP (0.f, alpha, 1.f) * 255.f) << 24) | ((uint32_t)rgb[2] << 16) | ((uint32_t)rgb[1] << 8) | (uint32_t)rgb[0];
 }
 
-static qboolean R_XRLaserHiddenForMelee (void)
+static qboolean R_XRLaserHiddenForMelee (int weapon)
 {
-	int weapon = cl.stats[STAT_ACTIVEWEAPON];
-	return vr_laser_hide_melee.value != 0.f && (weapon == IT_AXE || weapon == RIT_AXE || weapon == HIT_MJOLNIR);
+    return vr_laser_hide_melee.value != 0.f && (weapon == IT_AXE || weapon == RIT_AXE || weapon == HIT_MJOLNIR);
 }
 
-static void R_XRPrepareLaser (void)
+static void R_XRPrepareLasers (void)
 {
-	vec3_t target;
-	uint32_t color;
-
-	if (!r_xr_eye_pass)
-	{
-		r_xr_laser_valid = false;
-		return;
-	}
-	if (r_xr_eye_index != 0)
-		return;
-	r_xr_laser_valid = false;
-    if (!r_xr_controller_aim_valid || (!vr_laser_sight.value && !vr_laser_beam.value) || R_XRLaserHiddenForMelee ())
-		return;
-	VectorCopy (r_xr_controller_origin, r_xr_laser_start);
-	VectorMA (r_xr_laser_start, 8192.f, r_xr_controller_forward, target);
-	TraceLine (r_xr_laser_start, target, r_xr_laser_end);
-	r_xr_laser_valid = true;
-
-	if (vr_laser_sight.value)
-	{
-		dlight_t *light = CL_AllocDlight (0x56524c53);
-		color = R_XRLaserColor (1.f);
-		VectorCopy (r_xr_laser_end, light->origin);
-		VectorSet (light->color, (color & 255) / 255.f, ((color >> 8) & 255) / 255.f, ((color >> 16) & 255) / 255.f);
-		light->radius = 16.f;
-		light->die = cl.time + 0.1;
-		light->decay = 0.f;
-	}
+    iw_xr_hand_t mainhand = XR_Input_PhysicalHandForRole (XR_HAND_MAINHAND);
+    iw_xr_hand_t offhand = XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND);
+    int hand;
+    for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand) r_xr_laser[hand].valid = false;    if (r_xr_eye_pass && r_xr_eye_index == 0)
+    {
+        r_xr_offhand_aim_reference_valid = false;
+        if (!XR_Interaction_WheelActive () && XR_Interaction_OffhandWeaponItem ())
+        {
+            vec3_t start, forward, target;
+            if (R_GetXRHandAimPose (offhand, start, forward, NULL, NULL))
+            {
+                VectorMA (start, 8192.f, forward, target);
+                TraceLine (start, target, r_xr_offhand_aim_reference);
+                r_xr_offhand_aim_reference_valid = true;
+            }
+        }
+    }
+    if (!r_xr_eye_pass || r_xr_eye_index != 0 || XR_Interaction_WheelActive () || (!vr_laser_sight.value && !vr_laser_beam.value)) return;
+    /* Each laser uses its owning hand's logical weapon, never STAT_ACTIVEWEAPON globally. */
+    for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand)
+    {
+        int weapon = hand == mainhand ? XR_Interaction_MainhandWeaponItem () : (hand == offhand ? XR_Interaction_OffhandWeaponItem () : 0);
+        xr_laser_t *laser = &r_xr_laser[hand];
+        vec3_t target;
+        uint32_t color;
+        if (!weapon || R_XRLaserHiddenForMelee (weapon) ||
+            (hand == mainhand ? !R_GetXRMainHandWeaponPose (laser->start, laser->forward, NULL, NULL) :
+             !R_GetXRHandAimPose ((iw_xr_hand_t)hand, laser->start, laser->forward, NULL, NULL))) continue;
+        VectorMA (laser->start, 8192.f, laser->forward, target);
+        TraceLine (laser->start, target, laser->end);
+        laser->valid = true;
+        if (vr_laser_sight.value)
+        {
+            dlight_t *light = CL_AllocDlight (0x56524c53 + hand);
+            color = R_XRLaserColor (1.f);
+            VectorCopy (laser->end, light->origin);
+            VectorSet (light->color, (color & 255) / 255.f, ((color >> 8) & 255) / 255.f, ((color >> 16) & 255) / 255.f);
+            light->radius = 16.f; light->die = cl.time + 0.1; light->decay = 0.f;
+        }
+    }
 }
 
-static void R_XRUpdateLaserDot (void)
+static void R_XRUpdateLaserDots (void)
 {
-	vec3_t origin;
-	if (!r_xr_laser_valid || !vr_laser_sight.value)
-	{
-		R_SetVRLaserDot (false, vec3_origin, 0, 0.f);
-		return;
-	}
-	VectorMA (r_xr_laser_end, -0.5f, r_xr_controller_forward, origin);
-	R_SetVRLaserDot (true, origin, R_XRLaserColor (vr_laser_alpha.value), CLAMP (0.1f, vr_laser_sight_scale.value, 20.f));
+    int hand;
+    for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand)
+    {
+        xr_laser_t *laser = &r_xr_laser[hand];
+        vec3_t origin;
+        if (!laser->valid || !vr_laser_sight.value) R_SetVRLaserDot ((iw_xr_hand_t)hand, false, vec3_origin, 0, 0.f);
+        else { VectorMA (laser->end, -0.5f, laser->forward, origin); R_SetVRLaserDot ((iw_xr_hand_t)hand, true, origin, R_XRLaserColor (vr_laser_alpha.value), CLAMP (0.1f, vr_laser_sight_scale.value, 20.f)); }
+    }
 }
-
 static void R_XRDrawLaserBeam (void);
 
 static qboolean R_XRIsProjectileModel (const entity_t *e)
@@ -1678,9 +1741,8 @@ void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 R_IsViewModelVisible
 =============
 */
-static qboolean R_IsViewModelVisible (void)
+static qboolean R_IsViewModelVisible (const entity_t *e)
 {
-	entity_t *e = &cl.viewent;
 	if (XR_Interaction_WheelActive () || !r_drawviewmodel.value || !r_drawentities.value || chase_active.value || scr_viewsize.value >= 130)
 		return false;
 
@@ -1704,17 +1766,39 @@ R_DrawViewModel -- johnfitz -- gutted
 */
 void R_DrawViewModel (void)
 {
-	entity_t *e = &cl.viewent;
+    entity_t mainhand_entity, *mainhand = &cl.viewent;
+	entity_t offhand;
+    /* The canonical view entity can be borrowed for offhand fire; keep main presentation independent. */
+    if (r_xr_eye_pass && XR_Interaction_GetMainhandViewmodel(&mainhand_entity))
+        mainhand = &mainhand_entity;
+	qboolean draw_mainhand = R_IsViewModelVisible (mainhand);
+	qboolean draw_offhand = r_xr_eye_pass && XR_Interaction_GetOffhandViewmodel (&offhand) && R_IsViewModelVisible (&offhand);
 
-	if (!R_IsViewModelVisible ())
+	if (!draw_mainhand && !draw_offhand)
 		return;
 
 	GL_BeginGroup ("View model");
-
 	GL_DepthRange (ZRANGE_VIEWMODEL);
-	R_DrawAliasModels (&e, 1);
+	if (draw_mainhand)
+    {
+        r_xr_mainhand_viewmodel = mainhand;
+        R_DrawAliasModels (&mainhand, 1);
+        r_xr_mainhand_viewmodel = NULL;
+    }
+	if (draw_offhand)
+	{
+		vec3_t forward, right, up;
+		if (R_GetXRHandAimPose (XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND), offhand.origin, forward, right, up))
+		{
+			VectorMA (offhand.origin, vr_weapon_xoffset.value, forward, offhand.origin);
+			VectorMA (offhand.origin, vr_weapon_yoffset.value, right, offhand.origin);
+			VectorMA (offhand.origin, vr_weapon_zoffset.value, up, offhand.origin);
+			r_xr_offhand_viewmodel = &offhand;
+			R_DrawAliasModels (&r_xr_offhand_viewmodel, 1);
+			r_xr_offhand_viewmodel = NULL;
+		}
+	}
 	GL_DepthRange (ZRANGE_FULL);
-
 	GL_EndGroup ();
 }
 
@@ -1814,7 +1898,7 @@ static void R_XRDrawPointer(void) {
     VectorMA(r_xr_pointer_end, -1.5f, vright, a); VectorMA(r_xr_pointer_end, 1.5f, vright, b); R_EmitLine(a,b,color);
     VectorMA(r_xr_pointer_end, -1.5f, vup, a); VectorMA(r_xr_pointer_end, 1.5f, vup, b); R_EmitLine(a,b,color);
 }
-static void R_XRDrawLaserBeam (void)
+static void R_XRDrawLaserBeamForHand (const xr_laser_t *laser)
 {
 	debugvert_t verts[16];
 	uint16_t idx[48];
@@ -1823,9 +1907,9 @@ static void R_XRDrawLaserBeam (void)
 	float length, radius;
 	int i;
 
-	if (!r_xr_laser_valid || !vr_laser_beam.value)
+	if (!laser->valid || !vr_laser_beam.value)
 		return;
-	VectorSubtract (r_xr_laser_end, r_xr_laser_start, direction);
+	VectorSubtract (laser->end, laser->start, direction);
 	length = VectorNormalize (direction);
 	if (length <= 0.01f)
 		return;
@@ -1845,8 +1929,8 @@ static void R_XRDrawLaserBeam (void)
 		float angle = (float)i * (2.f * (float)M_PI / 8.f);
 		VectorScale (side, cosf (angle), radial);
 		VectorMA (radial, sinf (angle), up, radial);
-		VectorMA (r_xr_laser_start, radius, radial, verts[i * 2].pos);
-		VectorMA (r_xr_laser_end, radius, radial, verts[i * 2 + 1].pos);
+		VectorMA (laser->start, radius, radial, verts[i * 2].pos);
+		VectorMA (laser->end, radius, radial, verts[i * 2 + 1].pos);
 		verts[i * 2].color = color;
 		verts[i * 2 + 1].color = color;
 		idx[i * 6] = (uint16_t)(i * 2);
@@ -1878,6 +1962,13 @@ static void R_XRDrawLaserBeam (void)
 		glDrawElements (GL_TRIANGLES, countof (idx), GL_UNSIGNED_SHORT, ofs);
 	}
 }
+static void R_XRDrawLaserBeam (void)
+{
+    int hand;
+    for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand)
+        R_XRDrawLaserBeamForHand (&r_xr_laser[hand]);
+}
+
 static void R_XRDrawTeleportMarker (void)
 {
     debugvert_t verts[32]; uint16_t idx[96]; GLuint buf; GLbyte *ofs; int i;
@@ -2478,7 +2569,7 @@ void R_ShowTris (void)
 	R_DrawSpriteModels_ShowTris (entlist + ofs[2*mod_sprite], ofs[2*mod_sprite+2] - ofs[2*mod_sprite]);
 
 	// viewmodel
-	if (R_IsViewModelVisible ())
+	if (R_IsViewModelVisible (&cl.viewent))
 	{
 		entity_t *e = &cl.viewent;
 
@@ -2569,8 +2660,8 @@ R_RenderScene
 */
 void R_RenderScene (void)
 {
-	R_XRPrepareLaser ();
-	R_XRUpdateLaserDot ();
+	R_XRPrepareLasers ();
+	R_XRUpdateLaserDots ();
 	R_SetupScene (); //johnfitz -- this does everything that should be done once per call to RenderScene
     R_Clear ();
 
@@ -2705,7 +2796,6 @@ R_RenderView
 ================
 */
 extern cvar_t vr_stabilize_mode;
-extern cvar_t vr_weapon_pitch, vr_weapon_xoffset, vr_weapon_yoffset, vr_weapon_zoffset;
 
 static void R_XRRotateOrientation(const float orientation[4], const float in[3], float out[3])
 {
@@ -2778,11 +2868,12 @@ static void R_XRApplyWeaponPose(const iw_xr_frame_snapshot_t *snapshot)
 	qboolean stabilized = false;
 	const float *hand_position, *hand_orientation, *offhand_position;
 
+	if (!snapshot || !VID_XR_GetActions(&actions))
+		return;
+	/* A non-XR mirror/UI pass must retain the latest stereo controller poses. */
 	r_xr_controller_aim_valid = false;
 	memset (r_xr_hand_aim_valid, 0, sizeof (r_xr_hand_aim_valid));
     memset (r_xr_hand_tracking_valid, 0, sizeof (r_xr_hand_tracking_valid));
-	if (!snapshot || !VID_XR_GetActions(&actions))
-		return;
 	{
 		int i;
 		for (i = 0; i < IW_XR_HAND_COUNT; ++i)

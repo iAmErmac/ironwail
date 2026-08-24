@@ -3,6 +3,7 @@
 #include "xr_bridge.h"
 #include "xr_input.h"
 #include "xr_interaction.h"
+#include "xr_interaction.h"
 
 extern qboolean VID_XR_GetActions(iw_xr_action_snapshot_t *actions);
 extern cvar_t vr_dominant_hand;
@@ -42,16 +43,6 @@ static int xr_dash_blocked_frames;
 
 static void XR_Input_ApplyPlayerDelta(const vec3_t delta);
 
-qboolean XR_Input_WantsJump(void)
-{
-    iw_xr_action_snapshot_t actions;
-    iw_xr_hand_t dominant, offhand;
-    if (key_dest != key_game || !VID_XR_GetActions(&actions)) return false;
-    dominant = XR_Input_PhysicalHandForRole(XR_HAND_MAINHAND);
-    offhand = XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND);
-    return (actions.hand[offhand].buttons & IW_XR_BUTTON_TRIGGER) != 0 ||
-        (actions.hand[dominant].buttons & IW_XR_BUTTON_SECONDARY) != 0;
-}
 qboolean XR_Input_WantsCutsceneSkip(void)
 {
     iw_xr_action_snapshot_t actions;
@@ -450,6 +441,7 @@ void XR_Input_Update(void)
         return;
     }
     XR_Input_Key(14, K_RGRIP, (actions.hand[dominant].grip > 0.5f || (actions.hand[dominant].buttons & IW_XR_BUTTON_GRIP)) != 0);
+    XR_Input_Key(13, K_LGRIP, (!vr_stabilize_mode.value || (actions.hand[dominant].grip <= 0.5f && (actions.hand[dominant].buttons & IW_XR_BUTTON_GRIP) == 0)) && (actions.hand[offhand].grip > 0.5f || (actions.hand[offhand].buttons & IW_XR_BUTTON_GRIP)));
     was_ui = key_dest != key_game;
     XR_Interaction_Update(&actions);
     if (was_ui && key_dest == key_game)
@@ -460,7 +452,7 @@ void XR_Input_Update(void)
         xr_ui_release_suppressed = false;
     xr_modal_confirm_held = false;
     XR_Input_UpdateTeleport(&actions, XR_Input_MovementHand());
-    if ((actions.hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) && !xr_main_trigger_previous) VID_XR_Haptic(dominant, 0.30f, 0.025f);
+    if ((actions.hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) && !xr_main_trigger_previous && !XR_Interaction_OffhandAttackActive ()) VID_XR_Haptic(dominant, 0.30f, 0.025f);
     xr_main_trigger_previous = (actions.hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) != 0;
     if (xr_ui_release_suppressed || XR_Interaction_ConsumesGameplay()) {
         XR_Input_Key(0, K_RTRIGGER, false);
@@ -478,7 +470,7 @@ void XR_Input_Update(void)
     }
     XR_Input_Key(0, K_RTRIGGER, (actions.hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) != 0);
     XR_Input_Key(1, K_LTRIGGER, (actions.hand[offhand].buttons & IW_XR_BUTTON_TRIGGER) != 0);
-    XR_Input_Key(13, K_LGRIP, (!vr_stabilize_mode.value || (actions.hand[dominant].grip <= 0.5f && (actions.hand[dominant].buttons & IW_XR_BUTTON_GRIP) == 0)) && (actions.hand[offhand].grip > 0.5f || (actions.hand[offhand].buttons & IW_XR_BUTTON_GRIP)));
+
 
     {
         qboolean menu_toggle = (actions.hand[IW_XR_HAND_LEFT].buttons & IW_XR_BUTTON_MENU) != 0 || (actions.hand[IW_XR_HAND_RIGHT].buttons & IW_XR_BUTTON_MENU) != 0 ||
@@ -577,8 +569,6 @@ qboolean XR_Input_Move(usercmd_t *cmd)
     {
         x = actions.hand[movement].stick[0];
         y = actions.hand[movement].stick[1];
-        jump = (actions.hand[XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND)].buttons & IW_XR_BUTTON_TRIGGER) != 0 ||
-            (actions.hand[XR_Input_PhysicalHandForRole(XR_HAND_MAINHAND)].buttons & IW_XR_BUTTON_SECONDARY) != 0;
     }
     else
     {
@@ -617,7 +607,7 @@ qboolean XR_Input_Move(usercmd_t *cmd)
             xr_roomscale_position_valid = false;
     }
 
-    if (cl.inwater && (jump || cmd->upmove > 0.f))
+    if (cl.inwater && cmd->upmove > 0.f)
         cmd->upmove = q_max(cmd->upmove, cl_upspeed.value * 2.f);
 
     if (vr_teleport.value == 0.f && length > deadzone)

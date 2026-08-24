@@ -50,8 +50,27 @@ static char xr_weapon_models[16][MAX_QPATH];
 static char xr_weapon_local_fields[16][32];
 static int xr_weapon_local_field_values[16];
 
-static qboolean wheel_active, wheel_bind_active, keyboard_active, keyboard_trigger, keyboard_select, keyboard_caps, keyboard_trigger_suppressed, virtual_mouse_trigger, virtual_mouse_trigger_suppressed, two_hand_wheel_suppressed;
+static qboolean wheel_active, wheel_bind_active, offhand_wheel_bind_active, offhand_attack_active, keyboard_active, keyboard_trigger, keyboard_select, keyboard_caps, keyboard_trigger_suppressed, virtual_mouse_trigger, virtual_mouse_trigger_suppressed, two_hand_wheel_suppressed;
 static int wheel_selection = -1, keyboard_mode, wheel_hand, keyboard_row, keyboard_col, keyboard_nav_x, keyboard_nav_y, menu_scroll_direction;
+/* Each hand owns a presentation weapon; Quake retains one authoritative weapon selection. */
+static int offhand_weapon_item;
+static struct { qboolean active; int item, expected_main, haptic_hand; double deadline; } offhand_transfer;
+static struct { int phase, item, main_item; double deadline; } offhand_fire;
+static struct { qboolean executing, animation_active; float frame, attack_finished, animation_start_frame; double next_attack_time, animation_start_time, animation_end_time; } offhand_local_fire;
+static struct { int entity; double deadline; } offhand_beam;
+
+static qboolean offhand_continuous_auto_sound_played;
+
+/* A disposable QuakeC attack must never leak timing state into the next offhand weapon. */
+static void xr_offhand_reset_local_fire(void)
+{
+    memset(&offhand_local_fire, 0, sizeof(offhand_local_fire));
+    offhand_beam.entity = 0;
+    offhand_beam.deadline = 0.0;
+    offhand_continuous_auto_sound_played = false;
+}
+static entity_t offhand_fire_main_viewmodel;
+static qboolean offhand_fire_main_viewmodel_valid;
 static float keyboard_x = 0.5f, keyboard_y = 0.5f, virtual_mouse_x = 0.5f, virtual_mouse_y = 0.5f, vignette_value, vignette_last_yaw;
 static qpic_t *xr_vignette_pic;
 static qboolean vignette_yaw_valid;
@@ -68,8 +87,20 @@ static double wheel_spin_time;
 static void xr_weaponwheel_reload_f(void);
 static void xr_weaponwheel_resolve_models(void);
 static iw_xr_hand_t xr_mainhand(void) { return XR_Input_PhysicalHandForRole(XR_HAND_MAINHAND); }
+static qboolean xr_offhand_continuous_weapon (void) { return offhand_weapon_item == IT_NAILGUN || offhand_weapon_item == IT_SUPER_NAILGUN || offhand_weapon_item == IT_LIGHTNING || offhand_weapon_item == HIT_LASER_CANNON; }
 static void xr_weaponwheel_bind_down(void) { wheel_bind_active = true; }
 static void xr_weaponwheel_bind_up(void) { wheel_bind_active = false; }
+static void xr_offhand_weaponwheel_bind_down(void) { offhand_wheel_bind_active = true; }
+static void xr_offhand_weaponwheel_bind_up(void) { offhand_wheel_bind_active = false; }
+static void xr_offhand_attack_bind_down(void) { offhand_attack_active = true; }
+static void xr_offhand_attack_bind_up(void) { offhand_attack_active = false; }
+
+static qboolean xr_wheel_pose(int hand, vec3_t origin, vec3_t forward, vec3_t right, vec3_t up)
+{
+    if (hand == xr_mainhand())
+        return R_GetXRMainHandWeaponPose(origin, forward, right, up);
+    return R_GetXRHandAimPose(hand, origin, forward, right, up);
+}
 
 static qboolean xr_can_wheel(void)
 {
@@ -88,14 +119,14 @@ static void xr_wheel_close(void)
     }
 }
 
-static void xr_wheel_open(void)
+static void xr_wheel_open(int hand)
 {
     if (!xr_can_wheel() || wheel_active) return;
     xr_weaponwheel_reload_f();
     xr_weaponwheel_resolve_models();
-    if (!R_GetXRMainHandWeaponPose(wheel_origin, NULL, NULL, NULL) || !R_GetXRMainHandWeaponPose(NULL, wheel_forward, wheel_right, wheel_up)) return;
+    if (!xr_wheel_pose(hand, wheel_origin, NULL, NULL, NULL) || !xr_wheel_pose(hand, NULL, wheel_forward, wheel_right, wheel_up)) return;
     wheel_active = true;
-    wheel_hand = xr_mainhand();
+    wheel_hand = hand;
     VID_XR_Haptic(wheel_hand, 0.35f, 0.03f);
     wheel_cursor[0] = wheel_cursor[1] = 0.f;
     wheel_selection = -1;
@@ -110,14 +141,26 @@ static void xr_wheel_cursor_from_pose(void)
 {
     vec3_t forward, right, up;
     float scale = sinf(DEG2RAD(CLAMP(5.f, vr_weaponwheel_deflection.value, 60.f)));
-    if (!R_GetXRMainHandWeaponPose(NULL, forward, right, up) || scale <= 0.01f) return;
+    if (!xr_wheel_pose(wheel_hand, NULL, forward, right, up) || scale <= 0.01f) return;
     wheel_cursor[0] = CLAMP(-1.f, DotProduct(forward, wheel_right) / scale, 1.f);
     wheel_cursor[1] = CLAMP(-1.f, DotProduct(forward, wheel_up) / scale, 1.f);
 }
 
+static qboolean xr_offhand_weapon_has_ammo (int item)
+{
+    switch (item) {
+    case IT_SHOTGUN: case IT_SUPER_SHOTGUN: return cl.stats[STAT_SHELLS] > 0;
+    case IT_NAILGUN: case IT_SUPER_NAILGUN: return cl.stats[STAT_NAILS] > 0;
+    case IT_GRENADE_LAUNCHER: case IT_ROCKET_LAUNCHER: return cl.stats[STAT_ROCKETS] > 0;
+    case IT_LIGHTNING: case HIT_LASER_CANNON: return cl.stats[STAT_CELLS] > 0;
+    default: return true;
+    }
+}
+
 static qboolean xr_wheel_item_available(int item)
 {
-    return (cl.stats[STAT_ITEMS] & item) != 0 || cl.stats[STAT_ACTIVEWEAPON] == item;
+    /* cl.items is the authoritative full inventory mask; STAT_ITEMS is a presentation mirror. */
+    return (cl.items & item) != 0 || (cl.stats[STAT_ITEMS] & item) != 0 || cl.stats[STAT_ACTIVEWEAPON] == item;
 }
 
 static void xr_weaponwheel_update_local_fields(void)
@@ -148,7 +191,9 @@ static qboolean xr_wheel_local_field_matches(int slot)
 
 static qboolean xr_wheel_slot_owned(int slot)
 {
-    return xr_wheel_item_available(xr_weapons[slot].item) && xr_wheel_local_field_matches(slot);
+    if (!xr_wheel_item_available(xr_weapons[slot].item) || !xr_offhand_weapon_has_ammo(xr_weapons[slot].item)) return false;
+    /* Only JSON variants that opt into a local field use QuakeC-state filtering. */
+    return !xr_weapon_local_fields[slot][0] || xr_wheel_local_field_matches(slot);
 }
 
 static qboolean xr_wheel_slot_visible(int slot)
@@ -156,11 +201,118 @@ static qboolean xr_wheel_slot_visible(int slot)
     int i;
     if (!xr_wheel_slot_owned(slot)) return false;
     for (i = 0; i < xr_weapon_count; ++i)
-        if (i != slot && xr_weapons[i].replaces_item == xr_weapons[slot].item && xr_wheel_slot_owned(i))
+        /* Replacement hiding is reserved for explicit local-state variants, not stock expansion weapons. */
+        if (i != slot && xr_weapon_local_fields[i][0] && xr_weapons[i].replaces_item == xr_weapons[slot].item &&
+            xr_wheel_slot_owned(i))
             return false;
     return true;
 }
 
+static int xr_weapon_slot_index(int item)
+{
+    int i;
+    for (i = 0; i < xr_weapon_count; ++i)
+        if (xr_weapons[i].item == item) return i;
+    return -1;
+}
+
+static void xr_select_weapon_item(int item)
+{
+    int slot = xr_weapon_slot_index(item);
+    if (slot >= 0) Cbuf_AddText(va("impulse %i\n", xr_weapons[slot].impulse));
+}
+
+/* Multiplayer temporarily selects the offhand weapon for the canonical network command, while preserving the main-hand viewmodel locally. */
+static void xr_offhand_fire_update(void)
+{
+    if (cl.maxclients == 1) {
+        offhand_fire.phase = 0;
+        offhand_fire_main_viewmodel_valid = false;
+        return;
+    }
+    if (offhand_fire.phase == 0)
+    {
+        if (!offhand_attack_active || !offhand_weapon_item || wheel_active) return;
+        offhand_fire.item = offhand_weapon_item;
+        offhand_fire.main_item = cl.stats[STAT_ACTIVEWEAPON];
+        offhand_fire_main_viewmodel = cl.viewent;
+        offhand_fire_main_viewmodel_valid = true;
+        offhand_fire.deadline = realtime + 1.0;
+        if (cl.stats[STAT_ACTIVEWEAPON] == offhand_fire.item)
+            offhand_fire.phase = 2;
+        else
+        {
+            offhand_fire.phase = 1;
+            xr_select_weapon_item(offhand_fire.item);
+        }
+        return;
+    }
+    if (offhand_fire.phase == 1)
+    {
+        if (cl.stats[STAT_ACTIVEWEAPON] == offhand_fire.item)
+            offhand_fire.phase = 2;
+        else if (realtime >= offhand_fire.deadline)
+            offhand_fire.phase = 0;
+        return;
+    }
+    if (offhand_fire.phase == 2 && !offhand_attack_active)
+    {
+        offhand_fire.phase = 3;
+        offhand_fire.deadline = realtime + 1.0;
+        if (offhand_fire.main_item && offhand_fire.main_item != offhand_fire.item)
+            xr_select_weapon_item(offhand_fire.main_item);
+    }
+    else if (offhand_fire.phase == 3 &&
+        (cl.stats[STAT_ACTIVEWEAPON] == offhand_fire.main_item || realtime >= offhand_fire.deadline))
+        offhand_fire.phase = 0;
+    if (offhand_fire.phase == 0) offhand_fire_main_viewmodel_valid = false;
+}
+static int xr_wheel_fallback_slot(int excluded_item)
+{
+    int i, start = xr_weapon_slot_index(excluded_item);
+    for (i = 1; i <= xr_weapon_count; ++i) {
+        int slot = (start + i) % xr_weapon_count;
+        if (slot >= 0 && xr_weapons[slot].item != excluded_item && xr_wheel_slot_visible(slot))
+            return slot;
+    }
+    return -1;
+}
+
+static void xr_offhand_transfer_update(void)
+{
+    if (!offhand_transfer.active) return;
+    if (cl.stats[STAT_ACTIVEWEAPON] == offhand_transfer.expected_main) {
+        offhand_weapon_item = offhand_transfer.item;
+        xr_offhand_reset_local_fire();
+        offhand_transfer.active = false;
+        VID_XR_Haptic(offhand_transfer.haptic_hand, 0.8f, 0.08f);
+    } else if (realtime >= offhand_transfer.deadline)
+        offhand_transfer.active = false;
+}
+
+/* Taking the active weapon waits for QuakeC to select a fallback before ownership changes, so one inventory weapon cannot appear in both hands. */
+static void xr_offhand_assign_weapon(int item)
+{
+    int fallback;
+
+    if (item == offhand_weapon_item || offhand_transfer.active || !xr_offhand_weapon_has_ammo(item)) return;
+    xr_offhand_reset_local_fire();
+    if (item != cl.stats[STAT_ACTIVEWEAPON]) {
+        offhand_weapon_item = item;
+        VID_XR_Haptic(wheel_hand, 0.8f, 0.08f);
+        return;
+    }
+
+    fallback = xr_wheel_fallback_slot(item);
+    if (fallback < 0) return;
+    offhand_transfer.active = true;
+    offhand_transfer.item = item;
+    offhand_transfer.expected_main = xr_weapons[fallback].item;
+    offhand_transfer.haptic_hand = wheel_hand;
+    offhand_transfer.deadline = realtime + 1.0;
+    VID_XR_Haptic(wheel_hand, 0.8f, 0.08f);
+    Cbuf_AddText(va("impulse %i\n", xr_weapons[fallback].impulse));
+}
 static int xr_wheel_visible_count(void)
 {
     int i, count = 0;
@@ -192,12 +344,28 @@ static void xr_wheel_select(float x, float y)
     if (best != wheel_selection && best >= 0) VID_XR_Haptic(wheel_hand, 0.6f, 0.05f);
     wheel_selection = best;
 }
+static void xr_mainhand_assign_weapon(int slot)
+{
+    if (xr_weapons[slot].item == offhand_weapon_item) {
+        if (offhand_transfer.active || cl.stats[STAT_ACTIVEWEAPON] == offhand_weapon_item) return;
+        offhand_transfer.active = true;
+        offhand_transfer.item = cl.stats[STAT_ACTIVEWEAPON];
+        offhand_transfer.expected_main = offhand_weapon_item;
+        offhand_transfer.haptic_hand = wheel_hand;
+        offhand_transfer.deadline = realtime + 1.0;
+        VID_XR_Haptic(wheel_hand, 0.8f, 0.08f);
+        Cbuf_AddText(va("impulse %i\n", xr_weapons[slot].impulse));
+    } else if (cl.stats[STAT_ACTIVEWEAPON] != xr_weapons[slot].item) {
+        VID_XR_Haptic(wheel_hand, 0.8f, 0.08f);
+        Cbuf_AddText(va("impulse %i\n", xr_weapons[slot].impulse));
+    }
+}
 static void xr_wheel_commit(void)
 {
-    if (wheel_selection >= 0 && cl.stats[STAT_ACTIVEWEAPON] != xr_weapons[wheel_selection].item) {
-        VID_XR_Haptic(wheel_hand, 0.8f, 0.08f);
-        Cbuf_AddText(va("impulse %i\n", xr_weapons[wheel_selection].impulse));
-    }
+    if (wheel_selection >= 0 && wheel_hand != xr_mainhand())
+        xr_offhand_assign_weapon(xr_weapons[wheel_selection].item);
+    else if (wheel_selection >= 0)
+        xr_mainhand_assign_weapon(wheel_selection);
     xr_wheel_close();
 }
 
@@ -441,28 +609,48 @@ void XR_Interaction_Init(void)
     Cmd_AddCommand("weaponwheel_reload", xr_weaponwheel_reload_f);
     Cmd_AddCommand("+vr_weaponwheel", xr_weaponwheel_bind_down);
     Cmd_AddCommand("-vr_weaponwheel", xr_weaponwheel_bind_up);
+    Cmd_AddCommand("+vr_offhandweaponwheel", xr_offhand_weaponwheel_bind_down);
+    Cmd_AddCommand("-vr_offhandweaponwheel", xr_offhand_weaponwheel_bind_up);
+    Cmd_AddCommand("+vr_offhandattack", xr_offhand_attack_bind_down);
+    Cmd_AddCommand("-vr_offhandattack", xr_offhand_attack_bind_up);
+    if (keybindings[K_LGRIP] && !strcmp(keybindings[K_LGRIP], "+speed")) Key_SetBinding(K_LGRIP, "+vr_offhandweaponwheel");
+    if (keybindings[K_LTRIGGER] && !strcmp(keybindings[K_LTRIGGER], "+jump")) Key_SetBinding(K_LTRIGGER, "+vr_offhandattack");
 
     xr_weaponwheel_reload_f();
 }
 
 void XR_Interaction_Shutdown(void)
 {
-    xr_wheel_close(); xr_keyboard_close(); xr_virtual_pointer_clear(); keyboard_trigger_suppressed = false; virtual_mouse_trigger_suppressed = false; two_hand_wheel_suppressed = false; vignette_value = 0.f; vignette_yaw_valid = false;
+    xr_wheel_close(); xr_keyboard_close(); xr_virtual_pointer_clear(); wheel_bind_active = offhand_wheel_bind_active = false; offhand_weapon_item = 0; offhand_transfer.active = false; offhand_fire.phase = 0; offhand_local_fire.executing = false; offhand_local_fire.frame = offhand_local_fire.attack_finished = 0.f; offhand_fire_main_viewmodel_valid = false; keyboard_trigger_suppressed = false; virtual_mouse_trigger_suppressed = false; two_hand_wheel_suppressed = false; vignette_value = 0.f; vignette_yaw_valid = false;
 }
 
 void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
 {
-    int dominant, offhand, mouse_hand; float move, yaw_delta; qboolean grip, main_grip, trigger, mouse_trigger, mouse_confirm, mouse_grip, menu_combo, both_grips;
+    int dominant, offhand, mouse_hand; float move, yaw_delta; qboolean grip, main_grip, offhand_grip, wheel_hold, trigger, mouse_trigger, mouse_confirm, mouse_grip, menu_combo, both_grips;
     if (!actions || !actions->active) { XR_Interaction_Shutdown(); return; }
     xr_weaponwheel_update_local_fields();
-    if (key_dest != key_game) wheel_bind_active = false;
+    xr_offhand_transfer_update();
+    xr_offhand_fire_update();
+    if (!offhand_attack_active && xr_offhand_continuous_weapon ())
+    {
+        offhand_local_fire.animation_active = false;
+        XR_Interaction_ResetOffhandContinuousAudio ();
+    }
+    if (offhand_weapon_item && (!xr_wheel_item_available(offhand_weapon_item) || !xr_offhand_weapon_has_ammo (offhand_weapon_item) ||
+        (!offhand_transfer.active && cl.stats[STAT_ACTIVEWEAPON] == offhand_weapon_item))) {
+        offhand_weapon_item = 0;
+        xr_offhand_reset_local_fire();
+    }
+    if (offhand_local_fire.frame && cl.time >= offhand_local_fire.next_attack_time) offhand_local_fire.frame = 0.f;
+    if (key_dest != key_game) wheel_bind_active = offhand_wheel_bind_active = false;
     if (wheel_active && !xr_can_wheel()) xr_wheel_close();
     dominant = XR_Input_PhysicalHandForRole(XR_HAND_MAINHAND); offhand = XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND); mouse_hand = XR_Input_MouseHand();
     main_grip = actions->hand[dominant].grip > 0.5f || (actions->hand[dominant].buttons & IW_XR_BUTTON_GRIP) != 0;
-    grip = wheel_bind_active;
-    both_grips = main_grip && (actions->hand[offhand].grip > 0.5f || (actions->hand[offhand].buttons & IW_XR_BUTTON_GRIP) != 0);
+    offhand_grip = actions->hand[offhand].grip > 0.5f || (actions->hand[offhand].buttons & IW_XR_BUTTON_GRIP) != 0;
+    grip = wheel_bind_active || offhand_wheel_bind_active;
+    both_grips = main_grip && offhand_grip;
     if (both_grips) two_hand_wheel_suppressed = true;
-    else if (!main_grip && !(actions->hand[offhand].grip > 0.5f || (actions->hand[offhand].buttons & IW_XR_BUTTON_GRIP) != 0)) two_hand_wheel_suppressed = false;
+    else if (!main_grip && !offhand_grip) two_hand_wheel_suppressed = false;
     trigger = (actions->hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) != 0;
     mouse_trigger = (actions->hand[mouse_hand].buttons & IW_XR_BUTTON_TRIGGER) != 0;
 
@@ -489,7 +677,7 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
         keyboard_select = select;
         if (actions->hand[dominant].buttons & IW_XR_BUTTON_SECONDARY) xr_keyboard_close();
     } else if (key_dest == key_menu) {
-        int menu_hand = XR_Input_MenuHand();
+        int menu_hand = (vr_mouse.value || mouse_grip) ? mouse_hand : XR_Input_MenuHand();
         int scroll = actions->hand[menu_hand].stick[1] > 0.6f ? 1 : actions->hand[menu_hand].stick[1] < -0.6f ? -1 : 0;
         if (scroll && scroll != menu_scroll_direction)
             M_Keydown(scroll > 0 ? K_MWHEELUP : K_MWHEELDOWN, false);
@@ -508,7 +696,7 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
         menu_scroll_direction = 0;
         keyboard_active = true; keyboard_mode = 0; keyboard_caps = false; keyboard_trigger = keyboard_select = false;
         keyboard_nav_x = keyboard_nav_y = 0; xr_keyboard_set_selection(0, 0); xr_wheel_close();
-    } else if (wheel_active && !wheel_bind_active) {
+    } else if (wheel_active && !(wheel_hand == dominant ? wheel_bind_active : offhand_wheel_bind_active)) {
         menu_scroll_direction = 0;
         xr_wheel_cursor_from_pose();
         xr_wheel_select(wheel_cursor[0], wheel_cursor[1]);
@@ -521,12 +709,13 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
         xr_wheel_close();
     } else if (wheel_active) {
         menu_scroll_direction = 0;
+        wheel_hold = wheel_hand == dominant ? wheel_bind_active : offhand_wheel_bind_active;
         xr_wheel_cursor_from_pose();
         xr_wheel_select(wheel_cursor[0], wheel_cursor[1]);
-        if (!grip) xr_wheel_commit();
+        if (!wheel_hold) xr_wheel_commit();
     } else if (grip && !menu_combo && !both_grips && !two_hand_wheel_suppressed) {
         menu_scroll_direction = 0;
-        xr_wheel_open();
+        xr_wheel_open(wheel_bind_active ? dominant : offhand);
     } else {
         menu_scroll_direction = 0;
         xr_virtual_pointer_clear();
@@ -556,6 +745,135 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
 
 qboolean XR_Interaction_ConsumesGameplay(void) { return wheel_active || keyboard_active || keyboard_trigger_suppressed || virtual_mouse_trigger || virtual_mouse_trigger_suppressed; }
 qboolean XR_Interaction_WheelActive(void) { return wheel_active; }
+qboolean XR_Interaction_OffhandAttackActive(void) { return offhand_attack_active && offhand_weapon_item && !wheel_active; }
+qboolean XR_Interaction_LocalOffhandAttackRequested(void) { return cl.maxclients == 1 && XR_Interaction_OffhandAttackActive(); }
+qboolean XR_Interaction_LocalOffhandAttackReady(double time) { return XR_Interaction_LocalOffhandAttackRequested () && time >= offhand_local_fire.next_attack_time; }
+void XR_Interaction_SetLocalOffhandCooldown(double time, float attack_finished)
+{
+    float delay;
+    switch (offhand_weapon_item) {
+    case IT_AXE: delay = 0.5f; break;
+    case IT_SHOTGUN: delay = 0.5f; break;
+    case IT_SUPER_SHOTGUN: delay = 0.7f; break;
+    case IT_NAILGUN: case IT_SUPER_NAILGUN: case IT_LIGHTNING: delay = 0.1f; break;
+    case HIT_LASER_CANNON: delay = 0.1f; break;
+    case IT_GRENADE_LAUNCHER: delay = 0.6f; break;
+    case IT_ROCKET_LAUNCHER: delay = 0.8f; break;
+    default: delay = 0.2f; break;
+    }
+    if (xr_offhand_continuous_weapon ())
+        offhand_local_fire.next_attack_time = time + delay;
+    else
+        offhand_local_fire.next_attack_time = attack_finished > time ? attack_finished : time + delay;
+}
+void XR_Interaction_BeginLocalOffhandAttack(void) {
+    offhand_local_fire.executing = true;
+}
+void XR_Interaction_EndLocalOffhandAttack(void) { offhand_local_fire.executing = false; }
+void XR_Interaction_BeginLocalOffhandAnimation(double time, float frame)
+{
+    if (xr_offhand_continuous_weapon () && offhand_local_fire.animation_active)
+        return;
+    offhand_local_fire.animation_active = true;
+    offhand_local_fire.animation_start_time = time;
+    offhand_local_fire.animation_start_frame = frame;
+    offhand_local_fire.animation_end_time = time;
+}
+
+void XR_Interaction_SetLocalOffhandWeaponState(float frame, float attack_finished) {
+    if (attack_finished > offhand_local_fire.attack_finished + 0.001f)
+        VID_XR_Haptic(XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND), 0.35f, 0.025f);
+    offhand_local_fire.frame = frame;
+    offhand_local_fire.attack_finished = attack_finished;
+    if (frame > 0.f)
+        offhand_local_fire.animation_start_frame = frame;
+    if (offhand_local_fire.animation_active)
+    {
+        offhand_local_fire.animation_end_time = q_max (attack_finished, offhand_local_fire.next_attack_time);
+    }
+}
+float XR_Interaction_LocalOffhandWeaponFrame(void) { return offhand_local_fire.frame; }
+static float xr_local_offhand_presentation_frame(int numframes)
+{
+    float interval = 0.1f;
+    int first, frame;
+    if (!offhand_local_fire.animation_active || numframes <= 1)
+        return offhand_local_fire.frame;
+    first = CLAMP(0, (int)offhand_local_fire.animation_start_frame, numframes - 1);
+    if (!first) first = 1;
+    /* Quake viewmodels advance their weapon frames at 10 Hz, independently of the next-shot delay. */
+    frame = first + (int)((cl.time - offhand_local_fire.animation_start_time) / interval);
+    if (frame >= numframes)
+    {
+        offhand_local_fire.animation_active = false;
+        return 0.f;
+    }
+    return frame;
+}float XR_Interaction_LocalOffhandAttackFinished(void) { return offhand_local_fire.attack_finished; }
+void XR_Interaction_SetLocalOffhandBeamEntity(int entity, double time)
+{
+    offhand_beam.entity = entity;
+    offhand_beam.deadline = time + 0.25;
+}
+qboolean XR_Interaction_IsLocalOffhandBeamEntity(int entity)
+{
+    return entity == offhand_beam.entity && cl.time <= offhand_beam.deadline;
+}
+qboolean XR_Interaction_AllowOffhandContinuousAutoSound(void)
+{
+    if (offhand_continuous_auto_sound_played) return false;
+    offhand_continuous_auto_sound_played = true;
+    return true;
+}
+void XR_Interaction_ResetOffhandContinuousAudio(void) { offhand_continuous_auto_sound_played = false; }
+qboolean XR_Interaction_UseOffhandAim(void) { return offhand_local_fire.executing || (offhand_fire.phase == 2 && offhand_attack_active); }
+int XR_Interaction_MainhandWeaponItem(void) { return offhand_fire_main_viewmodel_valid ? offhand_fire.main_item : cl.stats[STAT_ACTIVEWEAPON]; }
+int XR_Interaction_OffhandWeaponItem(void) { return offhand_weapon_item; }
+/* Render entities stay hand-owned even while cl.viewent temporarily follows the firing weapon. */
+static qboolean xr_get_weapon_viewmodel(entity_t *out, int item, qboolean animate)
+{
+    int i;
+    if (!out || !item) return false;
+    xr_weaponwheel_resolve_models();
+    for (i = 0; i < xr_weapon_count; ++i) {
+        if (xr_weapons[i].item != item || !xr_weapons[i].model) continue;
+        *out = cl.viewent;
+        out->model = xr_weapons[i].model;
+        if (!animate) {
+            out->frame = 0;
+            out->lerpflags = 0;
+        }
+        return true;
+    }
+    return false;
+}
+
+qboolean XR_Interaction_GetMainhandViewmodel(entity_t *out)
+{
+    if (!out || wheel_active || !offhand_fire_main_viewmodel_valid) return false;
+    *out = offhand_fire_main_viewmodel;
+    return true;
+}
+
+static int xr_alias_frame_count (qmodel_t *model)
+{
+    if (!model || model->type != mod_alias) return 0;
+    return ((aliashdr_t *)Mod_Extradata (model))->numframes;
+}
+
+qboolean XR_Interaction_GetOffhandViewmodel(entity_t *out)
+{
+    if (!offhand_weapon_item || wheel_active) return false;
+    if (!xr_get_weapon_viewmodel(out, offhand_weapon_item, false)) return false;
+    if (cl.maxclients == 1)
+    {
+        /* Local fire preserves its own frame timeline because cl.viewent remains the main-hand presentation. */
+        out->frame = (int)xr_local_offhand_presentation_frame (xr_alias_frame_count (out->model));
+    }
+    else if (offhand_fire.phase == 2 && cl.stats[STAT_ACTIVEWEAPON] == offhand_weapon_item) out->frame = cl.viewent.frame;
+    out->lerpflags = LERP_RESETMOVE | LERP_RESETANIM;
+    return true;
+}
 qboolean XR_Interaction_GetVirtualPointer(float start[3], float hit[3]) { if (!pointer_active) return false; if (start) VectorCopy(pointer_start_xr, start); if (hit) VectorCopy(pointer_hit_xr, hit); return true; }
 
 static void xr_weaponwheel_place_model(entity_t *ent, const vec3_t target, const vec3_t angles)
@@ -592,7 +910,7 @@ void XR_Interaction_AddWorldEntities(void)
     }
     else
         R_SetXRTeleportMarker(NULL, false, 0);
-    if (!wheel_active || !R_GetXRMainHandWeaponPose(wheel_origin, NULL, NULL, NULL) || !R_GetXRMainHandWeaponPose(NULL, forward, right, up)) return;
+    if (!wheel_active || !xr_wheel_pose(wheel_hand, wheel_origin, NULL, NULL, NULL) || !xr_wheel_pose(wheel_hand, NULL, forward, right, up)) return;
     worldscale = CLAMP(1.f, vr_world_scale.value, 60.f);
     distance = vr_weaponwheel_distance.value * worldscale;
     radius = vr_weaponwheel_radius.value * worldscale;
@@ -682,7 +1000,7 @@ void XR_Interaction_Draw(void)
     GL_SetCanvas(CANVAS_DEFAULT);
     {
         vec3_t xr_origin;
-        if (wheel_active && !R_GetXRMainHandWeaponPose(xr_origin, NULL, NULL, NULL)) {
+        if (wheel_active && !xr_wheel_pose(wheel_hand, xr_origin, NULL, NULL, NULL)) {
         int cx = vid.guiwidth / 2, cy = vid.guiheight / 2;
         Draw_Fill(cx - 155, cy - 155, 310, 310, 0, 0.55f);
         for (i = 0; i < (int)xr_weapon_count; ++i) {

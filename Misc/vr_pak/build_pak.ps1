@@ -1,11 +1,13 @@
 param(
     [Parameter(Mandatory = $true)][string]$Source,
-    [Parameter(Mandatory = $true)][string]$Output
+    [Parameter(Mandatory = $true)][string]$Output,
+    [Parameter(Mandatory = $true)][string]$WeaponWheelConfig
 )
 
 $sourceRoot = (Resolve-Path -LiteralPath $Source).Path.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
 $files = @(Get-ChildItem -LiteralPath $sourceRoot -Recurse -File | Where-Object { $_.Name -ne "build_pak.ps1" -and $_.Extension -ne ".pak" } | Sort-Object FullName)
 $entries = @()
+$wheelConfigPath = (Resolve-Path -LiteralPath $WeaponWheelConfig).Path
 $offset = 12
 foreach ($file in $files) {
     $relative = $file.FullName.Substring($sourceRoot.Length).TrimStart('\', '/').Replace('\', '/')
@@ -15,6 +17,10 @@ foreach ($file in $files) {
     $entries += [pscustomobject]@{ Name = $relative; Data = $data; Offset = $offset }
     $offset += $data.Length
 }
+
+$wheelConfigData = [IO.File]::ReadAllBytes($wheelConfigPath)
+$entries += [pscustomobject]@{ Name = "weaponwheel.json"; Data = $wheelConfigData; Offset = $offset }
+$offset += $wheelConfigData.Length
 
 $directoryOffset = $offset
 $directoryLength = 64 * $entries.Count

@@ -547,7 +547,7 @@ void R_EntityMatrix (float matrix[16], vec3_t origin, vec3_t angles, unsigned ch
 
 void R_InitParticles (void);
 particle_t *R_AllocParticle (void);
-void R_SetVRLaserDot (qboolean active, const vec3_t origin, uint32_t color, float scale);
+void R_SetVRLaserDot (iw_xr_hand_t hand, qboolean active, const vec3_t origin, uint32_t color, float scale);
 void R_DrawParticles (qboolean alpha);
 void R_DrawParticles_ShowTris (void);
 void CL_RunParticles (void);
@@ -797,11 +797,13 @@ void R_BindXRFinalTarget (void);
 qboolean R_GetXRCanvasOffset (float *x, float *y);
 float R_GetXRMessageOffset (void);
 qboolean R_GetXRViewmodelMatrix (entity_t *e, float matrix[16], const vec3_t origin, unsigned char scale);
+qboolean R_XRViewmodelMirrored (const entity_t *e);
 qboolean R_GetXRHandAim (iw_xr_hand_t hand, vec3_t origin, vec3_t forward);
 qboolean R_GetXRHandPose (iw_xr_hand_t hand, vec3_t origin, vec3_t forward, vec3_t right, vec3_t up);
 qboolean R_GetXRHandTrackingPose (iw_xr_hand_t hand, vec3_t origin, vec3_t forward, vec3_t right, vec3_t up);
 qboolean R_GetXRHandAimPose (iw_xr_hand_t hand, vec3_t origin, vec3_t forward, vec3_t right, vec3_t up);
 qboolean R_GetXRMainHandWeaponPose (vec3_t origin, vec3_t forward, vec3_t right, vec3_t up);
+qboolean R_GetXROffhandAimReference (vec3_t target);
 void R_SetXRTeleportMarker (const vec3_t origin, qboolean active, uint32_t color);
 qboolean R_XRTransformRoomscaleDelta (const float xr[3], float quake[3]);
 void R_ApplyXRProjectileVisualOffset (const entity_t *e, vec3_t origin);

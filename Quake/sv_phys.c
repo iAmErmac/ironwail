@@ -22,7 +22,12 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // sv_phys.c
 
 #include "quakedef.h"
+#include "progs.h"
 #include "xr_input.h"
+#include "xr_interaction.h"
+
+/* Not all embedded progs headers expose this runtime lookup helper. */
+func_t PR_FindProgram (const char *name);
 
 /*
 
@@ -944,7 +949,134 @@ SV_Physics_Client
 Player character actions
 ================
 */
-void SV_Physics_Client (edict_t	*ent, int num)
+static float SV_XROffhandCurrentAmmo (const edict_t *ent, int weapon)
+{
+    /* Mission-pack energy weapons are distinct inventory bits but consume the base cell pool. */
+    if (weapon == HIT_MJOLNIR || weapon == HIT_LASER_CANNON)
+        return ent->v.ammo_cells;
+
+    switch (weapon)
+    {
+    case IT_SHOTGUN: case IT_SUPER_SHOTGUN: return ent->v.ammo_shells;
+    case IT_NAILGUN: case IT_SUPER_NAILGUN: return ent->v.ammo_nails;
+    case IT_GRENADE_LAUNCHER: case IT_ROCKET_LAUNCHER: return ent->v.ammo_rockets;
+    case IT_LIGHTNING: return ent->v.ammo_cells;
+    default: return 0.f;
+    }
+}
+
+/* Run the game's normal QuakeC attack on a short-lived player copy, then copy only gameplay results back. This gives single-player offhand fire independent aim and animation without replacing the canonical player entity. */
+static void SV_XRLocalOffhandAttack (edict_t *ent)
+{
+	static qboolean reported_missing_attack, reported_missing_cooldown;
+	edict_t *offhand;
+	func_t attack;
+	eval_t *attack_finished_field, *thunderbolt_width_field;
+	vec3_t forward, right, up;
+	int i, weapon;
+
+	if (!XR_Interaction_LocalOffhandAttackReady (qcvm->time) || ent->v.health <= 0)
+		return;
+	attack = PR_FindProgram ("W_Attack");
+	if (!attack)
+	{
+		if (!reported_missing_attack)
+		{
+			Con_Printf ("XR offhand: W_Attack is unavailable in this progs.dat.\n");
+			reported_missing_attack = true;
+		}
+		return;
+	}
+	offhand = ED_Alloc ();
+	memcpy (&offhand->v, &ent->v, qcvm->edict_size - offsetof (edict_t, v));
+	weapon = XR_Interaction_OffhandWeaponItem ();
+	if (weapon == IT_LIGHTNING || weapon == HIT_LASER_CANNON)
+		XR_Interaction_SetLocalOffhandBeamEntity (NUM_FOR_EDICT (offhand), cl.time);
+	offhand->v.weapon = weapon;
+	offhand->v.weaponframe = XR_Interaction_LocalOffhandWeaponFrame ();
+	offhand->v.currentammo = SV_XROffhandCurrentAmmo (ent, weapon);
+	VectorSet (offhand->v.view_ofs, 0.f, 0.f, 0.f);
+	offhand->v.button0 = 1.f;
+	attack_finished_field = GetEdictFieldValueByName (offhand, "attack_finished");
+    thunderbolt_width_field = GetEdictFieldValueByName (offhand, "t_width");
+	if (!attack_finished_field)
+	{
+		if (!reported_missing_cooldown)
+		{
+			Con_Printf ("XR offhand: attack_finished is unavailable in this progs.dat.\n");
+			reported_missing_cooldown = true;
+		}
+		ED_Free (offhand);
+		return;
+	}
+	attack_finished_field->_float = XR_Interaction_LocalOffhandAttackFinished ();
+	VectorCopy (pr_global_struct->v_forward, forward);
+	VectorCopy (pr_global_struct->v_right, right);
+	VectorCopy (pr_global_struct->v_up, up);
+	pr_global_struct->self = EDICT_TO_PROG (offhand);
+	XR_Interaction_BeginLocalOffhandAttack ();
+	R_GetXRMainHandWeaponPose (offhand->v.origin, NULL, NULL, NULL);
+	PR_ExecuteProgram (attack);
+	XR_Interaction_BeginLocalOffhandAnimation (cl.time, offhand->v.weaponframe);
+	/* Some QuakeC melee weapons advance through scheduled weapon frames before striking. */
+	if (weapon == IT_AXE || weapon == HIT_MJOLNIR)
+	{
+		for (i = 0; i < 8 && offhand->v.think && offhand->v.nextthink > qcvm->time; ++i)
+		{
+			func_t melee_think = offhand->v.think;
+			pr_global_struct->time = offhand->v.nextthink;
+			offhand->v.nextthink = 0.f;
+			R_GetXRMainHandWeaponPose (offhand->v.origin, NULL, NULL, NULL);
+			PR_ExecuteProgram (melee_think);
+		}
+		pr_global_struct->time = qcvm->time;
+	}
+	XR_Interaction_EndLocalOffhandAttack ();
+
+	XR_Interaction_SetLocalOffhandCooldown (qcvm->time, attack_finished_field->_float);
+	XR_Interaction_SetLocalOffhandWeaponState (offhand->v.weaponframe, attack_finished_field->_float);
+	ent->v.ammo_shells = offhand->v.ammo_shells;
+	ent->v.ammo_nails = offhand->v.ammo_nails;
+	ent->v.ammo_rockets = offhand->v.ammo_rockets;
+	ent->v.ammo_cells = offhand->v.ammo_cells;
+	/* Preserve optional QuakeC weapon state across disposable offhand attack entities. */
+    if (thunderbolt_width_field)
+    {
+        eval_t *player_width_field = GetEdictFieldValueByName (ent, "t_width");
+        if (player_width_field) player_width_field->_float = thunderbolt_width_field->_float;
+    }
+	for (i = 0; i < qcvm->num_edicts; ++i)
+	{
+		edict_t *spawned = EDICT_NUM (i);
+		if (!spawned->free && spawned->v.owner == EDICT_TO_PROG (offhand))
+			spawned->v.owner = EDICT_TO_PROG (ent);
+	}
+	ED_Free (offhand);
+	pr_global_struct->self = EDICT_TO_PROG (ent);
+	VectorCopy (forward, pr_global_struct->v_forward);
+	VectorCopy (right, pr_global_struct->v_right);
+	VectorCopy (up, pr_global_struct->v_up);
+}
+
+static void SV_XRUpdateOffhandContinuousSound (edict_t *ent)
+{
+    static qboolean was_firing;
+    static double stop_time;
+    int weapon = XR_Interaction_OffhandWeaponItem ();
+    qboolean firing = svs.maxclients == 1 && XR_Interaction_OffhandAttackActive () &&
+        (weapon == IT_NAILGUN || weapon == IT_SUPER_NAILGUN || weapon == IT_LIGHTNING || weapon == HIT_LASER_CANNON);
+    if (firing) stop_time = 0.0;
+    else if (was_firing) stop_time = realtime + 1.0;
+    if (stop_time && realtime >= stop_time)
+    {
+        S_StopSound (NUM_FOR_EDICT (ent), 6);
+        S_StopSound (NUM_FOR_EDICT (ent), 7);
+        stop_time = 0.0;
+    }
+    was_firing = firing;
+}
+
+void SV_Physics_Client (edict_t *ent, int num)
 {
 	qboolean wasunderwater, forceunderwater;
 
@@ -957,6 +1089,10 @@ void SV_Physics_Client (edict_t	*ent, int num)
 	pr_global_struct->time = qcvm->time;
 	pr_global_struct->self = EDICT_TO_PROG(ent);
 	PR_ExecuteProgram (pr_global_struct->PlayerPreThink);
+
+    // Single-player offhand fire reuses the loaded game's attack routine, then restores main-hand state.
+    SV_XRLocalOffhandAttack (ent);
+    SV_XRUpdateOffhandContinuousSound (ent);
 
 	if (XR_Input_OwnsInput () && svs.maxclients == 1 && ent->v.waterlevel == 2 &&
 	    ent->v.button2 && (svs.clients[num - 1].cmd.forwardmove != 0 || svs.clients[num - 1].cmd.sidemove != 0))

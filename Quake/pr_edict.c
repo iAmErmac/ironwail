@@ -386,6 +386,12 @@ static dfunction_t *ED_FindFunction (const char *fn_name)
 	return NULL;
 }
 
+func_t PR_FindProgram (const char *name)
+{
+	 dfunction_t *func = ED_FindFunction (name);
+	 return func ? (func_t)(func - qcvm->functions) : 0;
+}
+
 /*
 ============
 GetEdictFieldValue

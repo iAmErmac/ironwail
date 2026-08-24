@@ -297,7 +297,8 @@ static void R_FlushBModelCalls (void)
 		for (oit = 0; oit < countof (glprogs.world); oit++)
 			for (dither = 0; dither < countof (glprogs.world[oit]); dither++)
 				for (mode = 0; mode < countof (glprogs.world[oit][dither]); mode++)
-					if (bmodel_batch_program == glprogs.world[oit][dither][mode])
+					if (bmodel_batch_program == glprogs.world[oit][dither][mode] ||
+						bmodel_batch_program == glprogs.world_multiview[oit][dither][mode])
 						gles_world_program = true;
 		for (oit = 0; oit < countof (glprogs.skycubemap); oit++)
 			for (dither = 0; dither < countof (glprogs.skycubemap[oit]); dither++)

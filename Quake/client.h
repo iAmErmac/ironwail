@@ -83,6 +83,7 @@ typedef struct
 typedef struct
 {
 	int		entity;
+	qboolean	offhand;
 	struct qmodel_s	*model;
 	float	starttime;
 	float	endtime;
