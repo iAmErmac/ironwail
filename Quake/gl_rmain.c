@@ -560,6 +560,7 @@ cvar_t	r_drawentities = {"r_drawentities","1",CVAR_NONE};
 cvar_t	r_drawviewmodel = {"r_drawviewmodel","1",CVAR_NONE};
 cvar_t	r_speeds = {"r_speeds","0",CVAR_NONE};
 #if defined(ANDROID_GLES3)
+cvar_t	r_gles_perf_capture = {"r_gles_perf_capture","0",CVAR_NONE};
 cvar_t	r_gles_vao_validate = {"r_gles_vao_validate","0",CVAR_NONE};
 cvar_t	r_gles_static_vao = {"r_gles_static_vao","1",CVAR_NONE};
 cvar_t	r_gles_ubo_validate = {"r_gles_ubo_validate","0",CVAR_NONE};
@@ -1722,6 +1723,10 @@ R_DrawEntitiesOnList
 */
 void R_DrawEntitiesOnList (qboolean alphapass) //johnfitz -- added parameter
 {
+#if defined(ANDROID_GLES3)
+    if (!alphapass && r_gles_perf_capture.value)
+        glperf_stats.visible_entities = cl_numvisedicts;
+#endif
 	int		*ofs;
 	entity_t **entlist = cl_sorted_visedicts;
 
@@ -3128,6 +3133,9 @@ void R_RenderView (void)
 	time1 = 0; /* avoid compiler warning */
 	if (r_speeds.value)
 	{
+		#if defined(ANDROID_GLES3)
+		if (!r_gles_perf_capture.value)
+#endif
 		glFinish ();
 		time1 = Sys_DoubleTime ();
 

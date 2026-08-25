@@ -93,6 +93,9 @@ extern	cvar_t	r_drawentities;
 extern	cvar_t	r_drawworld;
 extern	cvar_t	r_drawviewmodel;
 extern	cvar_t	r_speeds;
+#if defined(ANDROID_GLES3)
+extern	cvar_t	r_gles_perf_capture;
+#endif
 extern	cvar_t	gl_texture_anisotropy;
 extern	cvar_t	r_pos;
 extern	cvar_t	r_waterwarp;
@@ -410,6 +413,11 @@ typedef struct glperf_stats_s {
  int world_batch_batches;
  int world_batch_fallbacks;
  size_t world_batch_indices;
+ int world_surface_scans;
+ int world_marked_surface_refs;
+ int world_visible_surfaces;
+ int world_submitted_surfaces;
+ int visible_entities;
  size_t upload_array;
  size_t upload_element;
  size_t upload_uniform;

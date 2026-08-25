@@ -67,6 +67,8 @@ static void R_MarkVisSurfaces (byte* vis)
 {
 #if defined(ANDROID_GLES3)
 	int i, j;
+	if (r_gles_perf_capture.value)
+        glperf_stats.world_surface_scans += cl.worldmodel->numsurfaces;
 	for (i = 0; i < cl.worldmodel->numsurfaces; i++)
 		cl.worldmodel->surfaces[i].visframe = 0;
 	for (i = 0; i < cl.worldmodel->numleafs; i++)
@@ -75,7 +77,14 @@ static void R_MarkVisSurfaces (byte* vis)
 		if (!(vis[i >> 3] & (1 << (i & 7))))
 			continue;
 		for (j = 0; j < leaf->nummarksurfaces; j++)
-			cl.worldmodel->surfaces[leaf->firstmarksurface[j]].visframe = r_visframecount;
+		{
+			if (r_gles_perf_capture.value)
+                glperf_stats.world_marked_surface_refs++;
+			msurface_t *surf = &cl.worldmodel->surfaces[leaf->firstmarksurface[j]];
+			if (r_gles_perf_capture.value && surf->visframe != r_visframecount)
+				glperf_stats.world_visible_surfaces++;
+			surf->visframe = r_visframecount;
+		}
 	}
 #else
 	int			i;
@@ -393,8 +402,11 @@ static void R_FlushBModelCalls (void)
 #endif
                     GL_PerfCountDraws (1);
 #if defined(ANDROID_GLES3)
-                    glperf_stats.world_batch_emitted_draws++;
+                    if (r_gles_perf_capture.value)
+                        glperf_stats.world_batch_emitted_draws++;
 #endif
+                    if (r_gles_perf_capture.value)
+                        glperf_stats.world_submitted_surfaces += draw_surfaces;
                     glDrawElements (GL_TRIANGLES, draw_indices, GL_UNSIGNED_INT,
                         (const void *)((size_t)first_index * sizeof (GLuint)));
                 }
