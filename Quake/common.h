@@ -380,13 +380,22 @@ typedef struct
 {
 	char	name[MAX_QPATH];
 	int		filepos, filelen;
+	int		zip_index;
+	qboolean	compressed;
 } packfile_t;
+
+typedef enum
+{
+	PACK_TYPE_PAK,
+	PACK_TYPE_PK3
+} packtype_t;
 
 typedef struct pack_s
 {
 	char	filename[MAX_OSPATH];
 	int		handle;
 	int		numfiles;
+	packtype_t	type;
 	packfile_t	*files;
 } pack_t;
 
@@ -420,6 +429,10 @@ int COM_OpenFile (const char *filename, int *handle, unsigned int *path_id);
 int COM_FOpenFile (const char *filename, FILE **file, unsigned int *path_id);
 qboolean COM_FileExists (const char *filename, unsigned int *path_id);
 void COM_CloseFile (int h);
+
+pack_t *FS_Pk3LoadArchive (const char *packfile);
+FILE *FS_Pk3OpenFile (const pack_t *pack, const packfile_t *file);
+qboolean FS_Pk3CanonicalizePath (const char *path, char *out, size_t outsize);
 
 // these procedures open a file using COM_FindFile and loads it into a proper
 // buffer. the buffer is allocated with a total size of com_filesize + 1. the

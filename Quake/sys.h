@@ -75,6 +75,7 @@ typedef int64_t qfileofs_t;
 // returns the file size or -1 if file is not present.
 // the file should be in BINARY mode for stupid OSs that care
 qfileofs_t Sys_FileOpenRead (const char *path, int *hndl);
+int Sys_FileOpenStdio (FILE *file);
 
 // Returns a file handle
 int Sys_FileOpenWrite (const char *path);

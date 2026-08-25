@@ -162,6 +162,16 @@ qfileofs_t Sys_FileOpenRead (const char *path, int *hndl)
 	return retval;
 }
 
+int Sys_FileOpenStdio (FILE *file)
+{
+	int i;
+	if (!file)
+		return -1;
+	i = findhandle ();
+	sys_handles[i] = file;
+	return i;
+}
+
 int Sys_FileOpenWrite (const char *path)
 {
 	FILE	*f;

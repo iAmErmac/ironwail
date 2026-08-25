@@ -2004,6 +2004,8 @@ static int COM_FindFile (const char *filename, int *handle, FILE **file,
 	char		netpath[MAX_OSPATH];
 	pack_t		*pak;
 	int			i;
+	char pk3name[MAX_QPATH];
+	qboolean have_pk3name = false;
 
 	if (file && handle)
 		Sys_Error ("COM_FindFile: both handle and file set");
@@ -2020,7 +2022,18 @@ static int COM_FindFile (const char *filename, int *handle, FILE **file,
 			pak = search->pack;
 			for (i = 0; i < pak->numfiles; i++)
 			{
-				if (strcmp(pak->files[i].name, filename) != 0)
+				if (pak->type == PACK_TYPE_PK3)
+				{
+					if (!have_pk3name)
+					{
+						have_pk3name = true;
+						if (!FS_Pk3CanonicalizePath(filename, pk3name, sizeof(pk3name)))
+							break;
+					}
+					if (strcmp(pak->files[i].name, pk3name) != 0)
+						continue;
+				}
+				else if (strcmp(pak->files[i].name, filename) != 0)
 					continue;
 				// found it!
 				com_filesize = pak->files[i].filelen;
@@ -2029,15 +2042,35 @@ static int COM_FindFile (const char *filename, int *handle, FILE **file,
 					*path_id = search->path_id;
 				if (handle)
 				{
-					*handle = pak->handle;
-					Sys_FileSeek (pak->handle, pak->files[i].filepos);
+					if (pak->type == PACK_TYPE_PK3 && pak->files[i].compressed)
+					{
+						FILE *tmp = FS_Pk3OpenFile(pak, &pak->files[i]);
+						*handle = Sys_FileOpenStdio(tmp);
+						if (*handle < 0)
+						{
+							com_filesize = -1;
+							return -1;
+						}
+					}
+					else
+					{
+						*handle = pak->handle;
+						Sys_FileSeek (pak->handle, pak->files[i].filepos);
+					}
 					return com_filesize;
 				}
 				else if (file)
 				{ /* open a new file on the pakfile */
-					*file = Sys_fopen (pak->filename, "rb");
-					if (*file)
-						fseek (*file, pak->files[i].filepos, SEEK_SET);
+					if (pak->type == PACK_TYPE_PK3 && pak->files[i].compressed)
+						*file = FS_Pk3OpenFile(pak, &pak->files[i]);
+					else
+					{
+						*file = Sys_fopen (pak->filename, "rb");
+						if (*file)
+							fseek (*file, pak->files[i].filepos, SEEK_SET);
+					}
+					if (!*file)
+						com_filesize = -1;
 					return com_filesize;
 				}
 				else /* for COM_FileExists() */
@@ -2426,6 +2459,7 @@ static pack_t *COM_LoadPackFile (const char *packfile)
 	q_strlcpy (pack->filename, packfile, sizeof(pack->filename));
 	pack->handle = packhandle;
 	pack->numfiles = numpackfiles;
+	pack->type = PACK_TYPE_PAK;
 	pack->files = newfiles;
 
 	//Sys_Printf ("Added packfile %s (%i files)\n", packfile, numpackfiles);
@@ -2505,6 +2539,53 @@ static void COM_AddEnginePak (void)
 	}	com_modified = modified;
 }
 
+static int COM_Pk3NameCompare(const void *a, const void *b)
+{
+	const char *left = a;
+	const char *right = b;
+	int result = q_strcasecmp(left, right);
+	return result ? result : strcmp(left, right);
+}
+
+static void COM_AddPk3Files(const char *gamedir, unsigned int path_id)
+{
+	char (*names)[MAX_OSPATH] = NULL;
+	findfile_t *find;
+	int count = 0, capacity = 0, i;
+
+	for (find = Sys_FindFirst(gamedir, NULL); find; find = Sys_FindNext(find))
+	{
+		if ((find->attribs & FA_DIRECTORY) || q_strcasecmp(COM_FileGetExtension(find->name), "pk3"))
+			continue;
+		if (count == capacity)
+		{
+			int next = capacity ? capacity * 2 : 8;
+			char (*grown)[MAX_OSPATH] = realloc(names, (size_t)next * sizeof(*names));
+			if (!grown)
+				Sys_Error("COM_AddPk3Files: out of memory");
+			names = grown;
+			capacity = next;
+		}
+		q_strlcpy(names[count++], find->name, sizeof(*names));
+	}
+	qsort(names, count, sizeof(*names), COM_Pk3NameCompare);
+	for (i = 0; i < count; ++i)
+	{
+		char path[MAX_OSPATH];
+		pack_t *pack;
+		searchpath_t *search;
+		q_snprintf(path, sizeof(path), "%s/%s", gamedir, names[i]);
+		pack = FS_Pk3LoadArchive(path);
+		if (!pack)
+			continue;
+		search = Z_Malloc(sizeof(*search));
+		search->path_id = path_id;
+		search->pack = pack;
+		search->next = com_searchpaths;
+		com_searchpaths = search;
+	}
+	free(names);
+}
 /*
 =================
 COM_AddGameDirectory -- johnfitz -- modified based on topaz's tutorial
@@ -2576,6 +2657,8 @@ void COM_AddGameDirectory (const char *dir)
 			if (i == 0 && j == 0 && path_id == 1u)
 				COM_AddEnginePak ();
 		}
+
+		COM_AddPk3Files(com_gamedir, path_id);
 	}
 }
 
