@@ -273,6 +273,7 @@ static void R_FlushBModelCalls (void)
 		GLbyte *ofs;
 		int i, oit, dither, mode;
 		qboolean gles_world_program = false;
+		qboolean gles_water_program = false;
 		qboolean gles_skycubemap_program = false;
 
 		for (i = 0; i < num_bmodel_calls; i++)
@@ -289,6 +290,10 @@ static void R_FlushBModelCalls (void)
 				for (mode = 0; mode < countof (glprogs.world[oit][dither]); mode++)
 					if (bmodel_batch_program == glprogs.world[oit][dither][mode])
 						gles_world_program = true;
+		for (oit = 0; oit < countof (glprogs.water); oit++)
+			for (dither = 0; dither < countof (glprogs.water[oit]); dither++)
+				if (bmodel_batch_program == glprogs.water[oit][dither])
+					gles_water_program = true;
 		for (oit = 0; oit < countof (glprogs.skycubemap); oit++)
 			for (dither = 0; dither < countof (glprogs.skycubemap[oit]); dither++)
 				if (bmodel_batch_program == glprogs.skycubemap[oit][dither])
@@ -335,7 +340,7 @@ static void R_FlushBModelCalls (void)
 			{
 				int surfindex;
 				GL_Uniform4fvFunc (0, 3, identity_matrix);
-				if (gles_world_program)
+				if (gles_world_program || gles_water_program)
 					GL_Uniform1fFunc (132, bmodel_calls.bound.params[i].alpha);
                 for (surfindex = 0; surfindex < cl.worldmodel->numsurfaces; surfindex++)
                 {

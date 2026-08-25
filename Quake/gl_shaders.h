@@ -852,7 +852,12 @@ GLES_LIGHTSTYLE_BUFFER
 "\tresult.rgb = result.rgb + (result.rgb * light * 2.0 - result.rgb) * result.a;\n"
 "\tresult.rgb += texture(FullbrightTex, in_uv).rgb;\n"
 "\tresult.a = in_alpha;\n"
-"\tout_fragcolor = clamp(result, 0.0, 1.0);\n"
+"\tresult = clamp(result, 0.0, 1.0);\n"
+"\tvec3 fog_pos = in_pos - EyePos;\n"
+"\tfloat fog = exp2(abs(Fog.w) * -dot(fog_pos, fog_pos));\n"
+"\tfog = clamp(fog, 0.0, 1.0);\n"
+"\tresult.rgb = Fog.rgb + (result.rgb - Fog.rgb) * fog;\n"
+"\tout_fragcolor = result;\n"
 "}\n";
 ////////////////////////////////////////////////////////////////
 //
@@ -895,6 +900,7 @@ static const char water_vertex_shader_gles[] =
 FRAMEDATA_BUFFER
 WORLD_VERTEX_BUFFER
 "layout(location=0) uniform vec4 WorldMatrix[3];\n"
+"layout(location=132) uniform float EntityAlpha;\n"
 "layout(location=0) flat out float out_alpha;\n"
 "layout(location=1) out vec2 out_uv;\n"
 "layout(location=2) out vec3 out_pos;\n"
@@ -906,7 +912,7 @@ WORLD_VERTEX_BUFFER
 "\tgl_Position = ViewProj * vec4(world_pos, 1.0);\n"
 "\tout_uv = in_uv.xy;\n"
 "\tout_pos = world_pos - EyePos;\n"
-"\tout_alpha = 0.75;\n"
+"\tout_alpha = EntityAlpha;\n"
 "}\n";
 
 static const char water_fragment_shader_gles[] =
@@ -1411,6 +1417,8 @@ FRAMEDATA_BUFFER
 "\tfloat dot1 = r_avertexnormal_dot(pose1.nor, shadevector);\n"
 "\tfloat dot2 = r_avertexnormal_dot(pose2.nor, shadevector);\n"
 "\tout_color = clamp(LightColor * vec4(vec3(mix(dot1, dot2, float(PoseBlend.z) / 65536.0)), 1.0), 0.0, 1.0);\n"
+"\tuint overbright = floatBitsToUint(Fog.w) >> 31;\n"
+"\tout_color.rgb = ldexp(out_color.rgb, ivec3(overbright));\n"
 "}\n";
 
 ////////////////////////////////////////////////////////////////
@@ -1486,22 +1494,35 @@ OIT_OUTPUT (out_fragcolor)
 "}\n";
 
 static const char alias_fragment_shader_gles[] =
+FRAMEDATA_BUFFER
 "layout(binding=0) uniform sampler2D Tex;\n"
 "layout(binding=1) uniform sampler2D FullbrightTex;\n"
 "layout(location=0) in vec2 in_texcoord;\n"
 "layout(location=1) in vec4 in_color;\n"
+"layout(location=2) in vec3 in_pos;\n"
 "layout(location=0) out vec4 out_fragcolor;\n"
 "void main()\n"
 "{\n"
 "\tvec4 result = texture(Tex, in_texcoord);\n"
 "#if ALPHATEST\n"
 "\tif (result.a < 0.666) discard;\n"
-"#endif\n"
 "\tresult.rgb *= in_color.rgb;\n"
+"#else\n"
+"\tvec3 base_color = result.rgb;\n"
+"\tfloat inverse_alpha = 1.0 - result.a;\n"
+"\tresult.rgb *= in_color.rgb;\n"
+"\tresult.rgb *= result.a;\n"
+"\tresult.rgb += base_color * inverse_alpha;\n"
+"#endif\n"
 "\tresult.rgb += texture(FullbrightTex, in_texcoord).rgb;\n"
+"\tresult.rgb = clamp(result.rgb, 0.0, 1.0);\n"
+"\tfloat fog = exp2(abs(Fog.w) * -dot(in_pos, in_pos));\n"
+"\tfog = clamp(fog, 0.0, 1.0);\n"
+"\tresult.rgb = Fog.rgb + (result.rgb - Fog.rgb) * fog;\n"
 "\tresult.a = in_color.a;\n"
 "\tout_fragcolor = result;\n"
 "}\n";
+
 ////////////////////////////////////////////////////////////////
 //
 // Sprites
