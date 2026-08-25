@@ -321,6 +321,8 @@ void R_Init (void)
 #endif
 	Cvar_RegisterVariable (&r_speeds);
 #if defined(ANDROID_GLES3)
+	Cvar_RegisterVariable (&r_gles_perf_capture);
+
 	Cvar_RegisterVariable (&r_gles_vao_validate);
 	Cvar_RegisterVariable (&r_gles_static_vao);
 	Cvar_RegisterVariable (&r_gles_ubo_validate);
