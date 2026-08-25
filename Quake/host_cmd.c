@@ -24,6 +24,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "q_ctype.h"
 #include "json.h"
+#if defined(IRO_RIFT_ANDROID)
+#include "android_lifecycle.h"
+#endif
 #include <time.h>
 #ifndef WITHOUT_CURL
 #include <curl/curl.h>
@@ -573,7 +576,20 @@ typedef struct download_s
 static qboolean Download (const char *url, download_t *download)
 {
 #ifdef WITHOUT_CURL
+#if defined(IRO_RIFT_ANDROID)
+	char *body = IW_Android_DownloadText (url);
+	if (body)
+	{
+		size_t len = strlen (body);
+		size_t written = download->write_fn (body, 1, len, download->write_data);
+		free (body);
+		download->response = 200;
+		return written == len;
+	}
+	download->error = "Android HTTPS request failed.";
+#else
 	download->error = "download support disabled at compile time.";
+#endif
 	return false;
 #else
 	CURL				*curl;
@@ -677,6 +693,9 @@ static SDL_atomic_t		extramods_json_cancel;
 static SDL_Thread*		extramods_json_downloader;
 static SDL_atomic_t		extramods_install_cancel;
 static SDL_Thread*		extramods_install_thread;
+#if defined(IRO_RIFT_ANDROID)
+static SDL_atomic_t        *android_addon_progress;
+#endif
 
 const char *Modlist_GetFullName (const filelist_item_t *item)
 {
@@ -942,6 +961,19 @@ static size_t WriteModChunk (void *buffer, size_t size, size_t nmemb, void *stre
 	return ret;
 }
 
+#if defined(IRO_RIFT_ANDROID)
+void Modlist_AndroidDownloadProgress (int bytes)
+{
+	if (android_addon_progress)
+		SDL_AtomicSet (android_addon_progress, bytes);
+}
+
+qboolean Modlist_AndroidDownloadCancelled (void)
+{
+	return SDL_AtomicGet (&extramods_install_cancel) != 0;
+}
+#endif
+
 static void Modlist_FinishInstalling (void *param)
 {
 	if (extramods_install_thread)
@@ -1011,6 +1043,11 @@ static int Modlist_InstallerThread (void *param)
 	for (i = 0; i < 1000; i++)
 	{
 		q_snprintf (tmp, sizeof (tmp), "%s/%s/pak0.%s.tmp", basedir, item->name, COM_TempSuffix (i));
+		Sys_remove (tmp);
+	}
+	for (i = 0; i < 1000; i++)
+	{
+		q_snprintf (tmp, sizeof (tmp), "%s/%s/pak0.%s.tmp", basedir, item->name, COM_TempSuffix (i));
 		file = Sys_fopen (tmp, "wb");
 		if (file)
 			break;
@@ -1034,8 +1071,18 @@ static int Modlist_InstallerThread (void *param)
 	download.abort			= &extramods_install_cancel;
 
 	q_snprintf (url, sizeof (url), "%s/%s", extramods_addons_url, info->download);
+#if defined(IRO_RIFT_ANDROID)
+	/* Java owns the TLS stream but native code owns the temporary-file lifecycle. */
+	fclose (file);
+	android_addon_progress = &info->bytes_downloaded;
+	ok = IW_Android_DownloadFile (url, tmp);
+	android_addon_progress = NULL;
+	if (ok)
+		SDL_AtomicSet (&info->bytes_downloaded, (int) info->bytes_total);
+#else
 	ok = Download (url, &download);
 	fclose (file);
+#endif
 
 	if (!ok)
 	{
@@ -1049,6 +1096,7 @@ static int Modlist_InstallerThread (void *param)
 	}
 
 	q_snprintf (path, sizeof (path), "%s/%s/pak0.pak", basedir, item->name);
+	Sys_remove (path);
 	if (Sys_rename (tmp, path) != 0)
 	{
 		Sys_remove (tmp);

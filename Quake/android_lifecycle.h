@@ -27,6 +27,8 @@ void IW_Android_TouchPointer(int action, int pointer_id, float x, float y);
 void IW_Android_Look(int delta_x, int delta_y);
 int IW_Android_ScreenMode(void);
 void IW_Android_Pause(qboolean paused);
+char *IW_Android_DownloadText(const char *url);
+qboolean IW_Android_DownloadFile(const char *url, const char *destination);
 void IW_Android_AudioFocus(qboolean focused);
 void IW_Android_Shutdown(void);
 
