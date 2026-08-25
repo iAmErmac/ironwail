@@ -869,7 +869,12 @@ GLES_LIGHTSTYLE_BUFFER
 "\tresult.rgb = result.rgb + (result.rgb * light * 2.0 - result.rgb) * result.a;\n"
 "\tresult.rgb += texture(FullbrightTex, in_uv).rgb;\n"
 "\tresult.a = in_alpha;\n"
-"\tout_fragcolor = clamp(result, 0.0, 1.0);\n"
+"\tresult = clamp(result, 0.0, 1.0);\n"
+"\tvec3 fog_pos = in_pos - EyePos;\n"
+"\tfloat fog = exp2(abs(Fog.w) * -dot(fog_pos, fog_pos));\n"
+"\tfog = clamp(fog, 0.0, 1.0);\n"
+"\tresult.rgb = Fog.rgb + (result.rgb - Fog.rgb) * fog;\n"
+"\tout_fragcolor = result;\n"
 "}\n";
 ////////////////////////////////////////////////////////////////
 //
@@ -912,6 +917,7 @@ static const char water_vertex_shader_gles[] =
 FRAMEDATA_BUFFER
 WORLD_VERTEX_BUFFER
 "layout(location=0) uniform vec4 WorldMatrix[3];\n"
+"layout(location=132) uniform float EntityAlpha;\n"
 "layout(location=0) flat out float out_alpha;\n"
 "layout(location=1) out vec2 out_uv;\n"
 "layout(location=2) out vec3 out_pos;\n"
@@ -923,7 +929,7 @@ WORLD_VERTEX_BUFFER
 "\tgl_Position = ViewProj * vec4(world_pos, 1.0);\n"
 "\tout_uv = in_uv.xy;\n"
 "\tout_pos = world_pos - EyePos;\n"
-"\tout_alpha = 0.75;\n"
+"\tout_alpha = EntityAlpha;\n"
 "}\n";
 
 static const char water_fragment_shader_gles[] =
