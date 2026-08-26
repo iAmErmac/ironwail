@@ -525,6 +525,9 @@ R_NewMap
 */
 void R_NewMap (void)
 {
+#if defined(ANDROID_GLES3)
+	R_ResetGLESWorldVisibility ();
+#endif
 	int		i;
 
 	for (i=0 ; i<256 ; i++)

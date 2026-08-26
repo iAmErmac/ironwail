@@ -58,6 +58,60 @@ typedef struct gpumark_frame_s {
 
 byte *SV_FatPVS (vec3_t org, qmodel_t *worldmodel);
 
+#if defined(ANDROID_GLES3)
+static int *gles_visible_heads;
+static int *gles_visible_tails;
+static int *gles_visible_next;
+static int *gles_visible_sort_indices;
+static msurface_t *gles_visible_sort_base;
+static msurface_t *gles_visible_surface_base;
+static int gles_visible_surface_count;
+static int gles_visible_surface_used;
+static int gles_visible_command_count;
+
+void R_ResetGLESWorldVisibility (void)
+{
+    gles_visible_heads = NULL;
+    gles_visible_tails = NULL;
+    gles_visible_next = NULL;
+    gles_visible_sort_indices = NULL;
+    gles_visible_sort_base = NULL;
+    gles_visible_surface_base = NULL;
+    gles_visible_surface_count = 0;
+    gles_visible_surface_used = 0;
+    gles_visible_command_count = 0;
+}
+
+static void R_InitGLESWorldVisibility (void)
+{
+    qmodel_t *world = cl.worldmodel;
+    int command_count = world->texofs[TEXTYPE_COUNT];
+
+    if (gles_visible_surface_base == world->surfaces &&
+        gles_visible_surface_count == world->numsurfaces &&
+        gles_visible_command_count == command_count)
+        return;
+
+    gles_visible_surface_base = world->surfaces;
+    gles_visible_sort_base = world->surfaces;
+    gles_visible_surface_count = world->numsurfaces;
+    gles_visible_command_count = command_count;
+    gles_visible_heads = (int *) Hunk_AllocNameNoFill (sizeof(*gles_visible_heads) * command_count, "gles visible heads");
+    gles_visible_tails = (int *) Hunk_AllocNameNoFill (sizeof(*gles_visible_tails) * command_count, "gles visible tails");
+    gles_visible_next = (int *) Hunk_AllocNameNoFill (sizeof(*gles_visible_next) * world->numsurfaces, "gles visible next");
+    gles_visible_sort_indices = (int *) Hunk_AllocNameNoFill (sizeof(*gles_visible_sort_indices) * world->numsurfaces, "gles visible sort");
+}
+static int GLES_CompareVisibleSurface (const void *a, const void *b)
+{
+    int ia = *(const int *)a;
+    int ib = *(const int *)b;
+    if (gles_visible_sort_base[ia].vbo_firstindex < gles_visible_sort_base[ib].vbo_firstindex)
+        return -1;
+    if (gles_visible_sort_base[ia].vbo_firstindex > gles_visible_sort_base[ib].vbo_firstindex)
+        return 1;
+    return ia - ib;
+}
+#endif
 /*
 ===============
 R_MarkVisSurfaces
@@ -67,10 +121,11 @@ static void R_MarkVisSurfaces (byte* vis)
 {
 #if defined(ANDROID_GLES3)
 	int i, j;
-	if (r_gles_perf_capture.value)
-        glperf_stats.world_surface_scans += cl.worldmodel->numsurfaces;
-	for (i = 0; i < cl.worldmodel->numsurfaces; i++)
-		cl.worldmodel->surfaces[i].visframe = 0;
+
+	R_InitGLESWorldVisibility ();
+	for (i = 0; i < gles_visible_command_count; i++)
+		gles_visible_heads[i] = gles_visible_tails[i] = -1;
+	gles_visible_surface_used = 0;
 	for (i = 0; i < cl.worldmodel->numleafs; i++)
 	{
 		mleaf_t *leaf = &cl.worldmodel->leafs[i + 1];
@@ -78,14 +133,67 @@ static void R_MarkVisSurfaces (byte* vis)
 			continue;
 		for (j = 0; j < leaf->nummarksurfaces; j++)
 		{
+			int surface_index = leaf->firstmarksurface[j];
+			msurface_t *surf = &cl.worldmodel->surfaces[surface_index];
+			int command;
+
 			if (r_gles_perf_capture.value)
-                glperf_stats.world_marked_surface_refs++;
-			msurface_t *surf = &cl.worldmodel->surfaces[leaf->firstmarksurface[j]];
-			if (r_gles_perf_capture.value && surf->visframe != r_visframecount)
-				glperf_stats.world_visible_surfaces++;
+				glperf_stats.world_marked_surface_refs++;
+			if (surf->visframe == r_visframecount)
+				continue;
 			surf->visframe = r_visframecount;
+			if (r_gles_perf_capture.value)
+				glperf_stats.world_visible_surfaces++;
+			if (R_CullBox (surf->mins, surf->maxs))
+			{
+				if (r_gles_perf_capture.value)
+					glperf_stats.world_frustum_culled++;
+				continue;
+			}
+			command = surf->vbo_cmd - cl.worldmodel->firstcmd;
+			if (command < 0 || command >= gles_visible_command_count)
+			{
+				if (r_gles_perf_capture.value)
+					glperf_stats.world_visible_invalid_commands++;
+				continue;
+			}
+			if (gles_visible_surface_used >= gles_visible_surface_count)
+			{
+				if (r_gles_perf_capture.value)
+					glperf_stats.world_visible_capacity_overflows++;
+				continue;
+			}
+            gles_visible_next[surface_index] = -1;
+            if (gles_visible_tails[command] < 0)
+                gles_visible_heads[command] = surface_index;
+            else
+                gles_visible_next[gles_visible_tails[command]] = surface_index;
+            gles_visible_tails[command] = surface_index;
+			gles_visible_surface_used++;
 		}
+
 	}
+
+    for (i = 0; i < gles_visible_command_count; i++)
+    {
+        int count = 0;
+        int a;
+        int current = gles_visible_heads[i];
+        while (current >= 0)
+        {
+            gles_visible_sort_indices[count++] = current;
+            current = gles_visible_next[current];
+        }
+        if (count > 1)
+        {
+            qsort (gles_visible_sort_indices, count, sizeof(*gles_visible_sort_indices), GLES_CompareVisibleSurface);
+            gles_visible_heads[i] = gles_visible_sort_indices[0];
+            gles_visible_tails[i] = gles_visible_sort_indices[count - 1];
+            for (a = 0; a + 1 < count; a++)
+                gles_visible_next[gles_visible_sort_indices[a]] = gles_visible_sort_indices[a + 1];
+            gles_visible_next[gles_visible_tails[i]] = -1;
+        }
+    }
 #else
 	int			i;
 	GLuint		buf;
@@ -173,7 +281,7 @@ void R_MarkSurfaces (void)
 	r_visframecount++;
 
 	R_MarkVisSurfaces (vis);
-	R_AddStaticModels (vis);
+	R_AddStaticModels (vis, !nearwaterportal);
 }
 
 /*
@@ -363,52 +471,59 @@ static void R_FlushBModelCalls (void)
 				GL_Uniform4fvFunc (0, 3, identity_matrix);
 				if (gles_world_program || gles_water_program)
 					GL_Uniform1fFunc (132, bmodel_calls.bound.params[i].alpha);
-                for (surfindex = 0; surfindex < cl.worldmodel->numsurfaces; surfindex++)
                 {
-                    msurface_t *surf = &cl.worldmodel->surfaces[surfindex];
-                    int draw_indices;
-                    int first_index;
-                    int draw_surfaces = 1;
-                    if (surf->vbo_cmd != src || surf->visframe != r_visframecount)
+                    int command = src - cl.worldmodel->firstcmd;
+                    int next_surface;
+
+                    if (command < 0 || command >= gles_visible_command_count)
                         continue;
-                    draw_indices = (q_max (surf->numedges, 2) - 2) * 3;
-                    first_index = surf->vbo_firstindex;
-#if defined(ANDROID_GLES3)
-                    if (r_gles_world_batch.value)
+                    for (surfindex = gles_visible_heads[command]; surfindex != -1; surfindex = next_surface)
                     {
-                        int next = surfindex + 1;
-                        while (draw_surfaces < 256 && next < cl.worldmodel->numsurfaces)
-                        {
-                            msurface_t *adjacent = &cl.worldmodel->surfaces[next];
-                            int adjacent_indices;
-                            if (adjacent->vbo_cmd != src || adjacent->visframe != r_visframecount ||
-                                adjacent->vbo_firstindex != first_index + draw_indices)
-                                break;
-                            adjacent_indices = (q_max (adjacent->numedges, 2) - 2) * 3;
-                            if (draw_indices + adjacent_indices > 65535)
-                                break;
-                            draw_indices += adjacent_indices;
-                            draw_surfaces++;
-                            next++;
-                        }
-                        glperf_stats.world_batch_source_draws += draw_surfaces;
-                        glperf_stats.world_batch_indices += draw_indices;
-                        if (draw_surfaces > 1)
-                            glperf_stats.world_batch_batches++;
-                        else
-                            glperf_stats.world_batch_fallbacks++;
-                        surfindex += draw_surfaces - 1;
-                    }
-#endif
-                    GL_PerfCountDraws (1);
+                        msurface_t *surf = &cl.worldmodel->surfaces[surfindex];
+                        int draw_indices = (q_max (surf->numedges, 2) - 2) * 3;
+                        int first_index = surf->vbo_firstindex;
+                        int draw_surfaces = 1;
+
+                        next_surface = gles_visible_next[surfindex];
 #if defined(ANDROID_GLES3)
-                    if (r_gles_perf_capture.value)
-                        glperf_stats.world_batch_emitted_draws++;
+                        if (r_gles_world_batch.value)
+                        {
+                            while (draw_surfaces < 256 && next_surface != -1)
+                            {
+                                msurface_t *adjacent = &cl.worldmodel->surfaces[next_surface];
+                                int adjacent_indices;
+                                if (adjacent->vbo_cmd != src ||
+                                    adjacent->vbo_firstindex != first_index + draw_indices)
+                                    break;
+                                adjacent_indices = (q_max (adjacent->numedges, 2) - 2) * 3;
+                                if (draw_indices + adjacent_indices > 65535)
+                                    break;
+                                draw_indices += adjacent_indices;
+                                draw_surfaces++;
+                                next_surface = gles_visible_next[next_surface];
+                            }
+                            if (r_gles_perf_capture.value)
+                            {
+                                glperf_stats.world_batch_source_draws += draw_surfaces;
+                                glperf_stats.world_batch_indices += draw_indices;
+                                if (draw_surfaces > 1)
+                                    glperf_stats.world_batch_batches++;
+                                else
+                                    glperf_stats.world_batch_fallbacks++;
+                            }
+                        }
 #endif
-                    if (r_gles_perf_capture.value)
-                        glperf_stats.world_submitted_surfaces += draw_surfaces;
-                    glDrawElements (GL_TRIANGLES, draw_indices, GL_UNSIGNED_INT,
-                        (const void *)((size_t)first_index * sizeof (GLuint)));
+                        GL_PerfCountDraws (1);
+#if defined(ANDROID_GLES3)
+                        if (r_gles_perf_capture.value)
+                        {
+                            glperf_stats.world_batch_emitted_draws++;
+                            glperf_stats.world_submitted_surfaces += draw_surfaces;
+                        }
+#endif
+                        glDrawElements (GL_TRIANGLES, draw_indices, GL_UNSIGNED_INT,
+                            (const void *)((size_t)first_index * sizeof (GLuint)));
+                    }
                 }
 			}
 			else

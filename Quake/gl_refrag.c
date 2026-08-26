@@ -45,6 +45,14 @@ http://forums.insideqc.com/viewtopic.php?t=1930
 // leaf count followed by leaf indices, for each static ent with a non-NULL model
 int			*cl_efrags;
 
+static entity_t *r_static_vis_cache[MAX_STATIC_ENTITIES];
+static int r_static_vis_cache_count;
+static qmodel_t *r_static_vis_cache_world;
+static mleaf_t *r_static_vis_cache_leaf;
+static int r_static_vis_cache_num_statics;
+static qboolean r_static_vis_cache_novis;
+static alphamode_t r_static_vis_cache_alpha;
+
 vec3_t		r_emins, r_emaxs;
 
 /*
@@ -110,6 +118,11 @@ R_ClearEfrags
 void R_ClearEfrags (void)
 {
 	VEC_CLEAR (cl_efrags);
+
+	r_static_vis_cache_count = 0;
+	r_static_vis_cache_world = NULL;
+	r_static_vis_cache_leaf = NULL;
+	r_static_vis_cache_num_statics = 0;
 }
 
 /*
@@ -154,11 +167,38 @@ void R_AddEfrags (entity_t *ent)
 R_AddStaticModels
 ===============
 */
-void R_AddStaticModels (const byte *vis)
+void R_AddStaticModels (const byte *vis, qboolean cacheable)
 {
 	int			i, j, start, leafidx, maxleaf, numleafs, *efrags;
 	entity_t	*ent;
+	qboolean novis = r_novis.value != 0 || r_viewleaf->contents == CONTENTS_SOLID || r_viewleaf->contents == CONTENTS_SKY;
 
+	if (cacheable && r_static_vis_cache_world == cl.worldmodel &&
+		r_static_vis_cache_leaf == r_viewleaf &&
+		r_static_vis_cache_num_statics == cl.num_statics &&
+		r_static_vis_cache_novis == novis &&
+		r_static_vis_cache_alpha == R_GetEffectiveAlphaMode ())
+	{
+		for (i = 0; i < r_static_vis_cache_count && cl_numvisedicts < MAX_VISEDICTS; i++)
+			cl_visedicts[cl_numvisedicts++] = r_static_vis_cache[i];
+#if defined(ANDROID_GLES3)
+		if (r_gles_perf_capture.value)
+			glperf_stats.static_entity_cache_hits++;
+#endif
+		return;
+	}
+
+	if (!cacheable)
+	{
+		r_static_vis_cache_count = 0;
+		r_static_vis_cache_world = NULL;
+		r_static_vis_cache_leaf = NULL;
+	}
+
+#if defined(ANDROID_GLES3)
+	if (r_gles_perf_capture.value)
+		glperf_stats.static_entity_scans++;
+#endif
 	for (i = maxleaf = 0, start = cl_numvisedicts, ent = cl_static_entities, efrags = cl_efrags; i < cl.num_statics; i++, ent++)
 	{
 		if (!ent->model)
@@ -200,5 +240,17 @@ void R_AddStaticModels (const byte *vis)
 			cl_visedicts[start + j] = ent;
 			ent->firstleaf >>= shift;
 		}
+	}
+
+	if (cacheable)
+	{
+		r_static_vis_cache_count = cl_numvisedicts - start;
+		for (i = 0; i < r_static_vis_cache_count; i++)
+			r_static_vis_cache[i] = cl_visedicts[start + i];
+		r_static_vis_cache_world = cl.worldmodel;
+		r_static_vis_cache_leaf = r_viewleaf;
+		r_static_vis_cache_num_statics = cl.num_statics;
+		r_static_vis_cache_novis = novis;
+		r_static_vis_cache_alpha = R_GetEffectiveAlphaMode ();
 	}
 }

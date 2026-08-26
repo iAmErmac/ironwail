@@ -120,9 +120,12 @@ void R_RenderView (void);		// must set r_refdef first
 void R_ClearEfrags (void);
 void R_CheckEfrags (void); //johnfitz
 void R_AddEfrags (entity_t *ent);
-void R_AddStaticModels (const byte *vis);
+void R_AddStaticModels (const byte *vis, qboolean cacheable);
 
 void R_NewMap (void);
+#if defined(ANDROID_GLES3)
+void R_ResetGLESWorldVisibility (void);
+#endif
 
 
 void R_ParseParticleEffect (void);

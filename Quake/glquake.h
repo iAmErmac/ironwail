@@ -413,10 +413,14 @@ typedef struct glperf_stats_s {
  int world_batch_batches;
  int world_batch_fallbacks;
  size_t world_batch_indices;
- int world_surface_scans;
+ int static_entity_scans;
+ int static_entity_cache_hits;
  int world_marked_surface_refs;
  int world_visible_surfaces;
  int world_submitted_surfaces;
+ int world_visible_invalid_commands;
+ int world_visible_capacity_overflows;
+ int world_frustum_culled;
  int visible_entities;
  size_t upload_array;
  size_t upload_element;
