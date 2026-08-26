@@ -486,6 +486,12 @@ static qboolean VID_SetMode (int width, int height, int refreshrate, qboolean fu
 #if defined(ANDROID_GLES3)
 	(void)refreshrate;
 	(void)fullscreen;
+	/* Android's Java surface owns the drawable size; game configs must not replace it. */
+	if (vid.width > 0 && vid.height > 0)
+	{
+		width = vid.width;
+		height = vid.height;
+	}
 	vid.width = width;
 	vid.height = height;
 	vid.refreshrate = DEFAULT_REFRESHRATE;

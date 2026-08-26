@@ -250,6 +250,14 @@ void Cmd_StuffCmds_f (void)
 	char	cmds[CMDLINE_LENGTH];
 	int		i, j, plus;
 
+#ifdef IRO_RIFT_ANDROID
+	static qboolean	startup_cmdline_stuffed;
+
+	if (startup_cmdline_stuffed)
+		return;
+	startup_cmdline_stuffed = true;
+#endif
+
 	plus = false;	// On Unix, argv[0] is command name
 
 	for (i = 0, j = 0; cmdline.string[i]; i++)
