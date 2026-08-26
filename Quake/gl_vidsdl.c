@@ -105,6 +105,7 @@ static iw_xr_frame_snapshot_t vid_xr_snapshot;
 cvar_t vr_mode = {"vr_mode", "1", CVAR_ARCHIVE};
 cvar_t vr_render_scale = {"vr_render_scale", "1.0", CVAR_ARCHIVE};
 cvar_t vr_multiview = {"vr_multiview", "1", CVAR_ARCHIVE};
+cvar_t vr_demo_playback = {"vr_demo_playback", "0", CVAR_NONE};
 #if defined(ANDROID_GLES3)
 cvar_t vr_refresh_rate = {"vr_refresh_rate", "72", CVAR_ARCHIVE};
 #else
@@ -298,7 +299,7 @@ qboolean VID_XR_GetStereoFrame(const iw_xr_frame_snapshot_t **snapshot)
 {
     const iw_xr_frame_snapshot_t *frame = NULL;
 
-    if (key_dest != key_game || cl.paused || con_forcedup || cl.intermission != 0 || cls.demoplayback || CL_InCutscene())
+    if (key_dest != key_game || cl.paused || con_forcedup || cl.intermission != 0 || (cls.demoplayback && vr_demo_playback.value == 0.f) || CL_InCutscene())
     {
         if (snapshot)
             *snapshot = NULL;
@@ -1876,7 +1877,7 @@ void GL_BeginRendering (int *x, int *y, int *width, int *height)
     {
         if (vid_xr_frame_active)
         {
-            vid_xr_stereo_frame = vid_xr_frame_should_render && vid_xr_snapshot.view_count >= 2 && key_dest == key_game && !cl.paused && !con_forcedup && cl.intermission == 0 && !cls.demoplayback && !CL_InCutscene() && IW_XRWin_HasStereoTargets(vid_xr_backend);
+            vid_xr_stereo_frame = vid_xr_frame_should_render && vid_xr_snapshot.view_count >= 2 && key_dest == key_game && !cl.paused && !con_forcedup && cl.intermission == 0 && (!cls.demoplayback || vr_demo_playback.value != 0.f) && !CL_InCutscene() && IW_XRWin_HasStereoTargets(vid_xr_backend);
             IW_XRWin_SetStereoSubmission(vid_xr_backend, vid_xr_stereo_frame);
             if (vid_xr_frame_should_render && !vid_xr_stereo_frame)
                 IW_XRWin_BindFrameTarget(vid_xr_backend);
@@ -2171,6 +2172,7 @@ void	VID_Init (void)
     Cvar_RegisterVariable (&vr_mode);
     Cvar_RegisterVariable (&vr_render_scale);
     Cvar_RegisterVariable (&vr_multiview);
+    Cvar_RegisterVariable (&vr_demo_playback);
     Cvar_RegisterVariable (&vr_refresh_rate);
     Cvar_RegisterVariable (&vr_curved_screen);
     Cvar_RegisterVariable (&vr_curve_radius);

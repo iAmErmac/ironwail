@@ -301,8 +301,15 @@ static void R_XRPrepareLasers (void)
     iw_xr_hand_t mainhand = XR_Input_PhysicalHandForRole (XR_HAND_MAINHAND);
     iw_xr_hand_t offhand = XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND);
     int hand;
-    for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand) r_xr_laser[hand].valid = false;    if (r_xr_eye_pass && r_xr_eye_index == 0)
+    if (!r_xr_eye_pass)
     {
+        for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand) r_xr_laser[hand].valid = false;
+        return;
+    }
+    if (r_xr_eye_index != 0)
+        return;
+    for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand) r_xr_laser[hand].valid = false;
+
         r_xr_offhand_aim_reference_valid = false;
         if (!XR_Interaction_WheelActive () && XR_Interaction_OffhandWeaponItem ())
         {
@@ -314,8 +321,7 @@ static void R_XRPrepareLasers (void)
                 r_xr_offhand_aim_reference_valid = true;
             }
         }
-    }
-    if (!r_xr_eye_pass || r_xr_eye_index != 0 || XR_Interaction_WheelActive () || (!vr_laser_sight.value && !vr_laser_beam.value)) return;
+        if (XR_Interaction_WheelActive () || (!vr_laser_sight.value && !vr_laser_beam.value)) return;
     /* Each laser uses its owning hand's logical weapon, never STAT_ACTIVEWEAPON globally. */
     for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand)
     {

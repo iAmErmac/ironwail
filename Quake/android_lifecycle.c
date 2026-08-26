@@ -4,6 +4,7 @@
 #include "xr_virtual_screen.h"
 #include "xr_virtual_environment.h"
 extern cvar_t vr_render_scale;
+extern cvar_t vr_demo_playback;
 extern cvar_t vr_refresh_rate;
 extern cvar_t vr_screen_scale;
 extern cvar_t vr_screen_distance;
@@ -364,7 +365,7 @@ qboolean IW_Android_XRMultiviewRequested(void)
 }
 qboolean IW_Android_XRGameplayStereoEligible(void)
 {
-    return iw_initialized && key_dest == key_game && !cl.paused && !con_forcedup && cl.intermission == 0 && !cls.demoplayback && !CL_InCutscene();
+    return iw_initialized && key_dest == key_game && !cl.paused && !con_forcedup && cl.intermission == 0 && (!cls.demoplayback || vr_demo_playback.value != 0.f) && !CL_InCutscene();
 }
 
 qboolean IW_Android_UsingXRMultiview(void)
