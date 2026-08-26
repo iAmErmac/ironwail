@@ -94,6 +94,8 @@ extern	cvar_t	r_drawviewmodel;
 extern	cvar_t	r_speeds;
 #if defined(ANDROID_GLES3)
 extern	cvar_t	r_gles_perf_capture;
+extern	cvar_t	r_gles_dlight_max;
+extern	cvar_t	r_gles_dlight_test_count;
 #endif
 extern	cvar_t	gl_texture_anisotropy;
 extern	cvar_t	r_pos;
@@ -419,6 +421,9 @@ typedef struct glperf_stats_s {
  int world_visible_capacity_overflows;
  int world_frustum_culled;
  int visible_entities;
+ int dlights_offered;
+ int dlights_retained;
+ int dlights_dropped;
  size_t upload_array;
  size_t upload_element;
  size_t upload_uniform;
