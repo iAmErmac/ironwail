@@ -327,6 +327,8 @@ void R_Init (void)
 	Cvar_RegisterVariable (&r_gles_static_vao);
 	Cvar_RegisterVariable (&r_gles_ubo_validate);
 	Cvar_RegisterVariable (&r_gles_world_batch);
+	Cvar_RegisterVariable (&r_gles_dlight_max);
+	Cvar_RegisterVariable (&r_gles_dlight_test_count);
 #endif
 	Cvar_RegisterVariable (&r_pos);
 	Cvar_RegisterVariable (&r_alphasort);

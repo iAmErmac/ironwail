@@ -123,6 +123,32 @@ void CL_ParseBeam (qmodel_t *m)
 CL_ParseTEnt
 =================
 */
+#if defined(ANDROID_GLES3)
+static void CL_AddTestDlightFanout (const vec3_t pos, const dlight_t *source)
+{
+    dlight_t *test;
+    int i, count = CLAMP (0, (int)r_gles_dlight_test_count.value, MAX_DLIGHTS - 1);
+
+    for (i = 1; i <= count; i++)
+    {
+        test = CL_AllocDlight (0x70000000 + i);
+        VectorCopy (pos, test->origin);
+        test->origin[0] += ((i & 7) - 3.5f) * 4.f;
+        test->origin[1] += (((i >> 3) & 7) - 3.5f) * 4.f;
+        test->origin[2] += ((i >> 6) & 3) * 4.f;
+        test->radius = source->radius;
+        test->die = source->die;
+        test->decay = source->decay;
+        test->color[0] = source->color[0];
+        test->color[1] = source->color[1];
+        test->color[2] = source->color[2];
+        test->minlight = source->minlight;
+    }
+}
+#endif
+#if !defined(ANDROID_GLES3)
+#define CL_AddTestDlightFanout(pos, source) ((void)0)
+#endif
 void CL_ParseTEnt (void)
 {
 	int		type;
@@ -205,6 +231,7 @@ void CL_ParseTEnt (void)
 		dl->radius = 350;
 		dl->die = cl.time + 0.5;
 		dl->decay = 300;
+        CL_AddTestDlightFanout (pos, dl);
 		S_StartSound (-1, 0, cl_sfx_r_exp3, pos, 1, 1);
 		break;
 
@@ -261,6 +288,7 @@ void CL_ParseTEnt (void)
 		dl->radius = 350;
 		dl->die = cl.time + 0.5;
 		dl->decay = 300;
+        CL_AddTestDlightFanout (pos, dl);
 		S_StartSound (-1, 0, cl_sfx_r_exp3, pos, 1, 1);
 		break;
 

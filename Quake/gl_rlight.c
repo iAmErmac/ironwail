@@ -140,7 +140,72 @@ void R_PushDlights (void)
 	gpu_cluster_inputs_t cluster_inputs;
 
 	r_framedata.numlights = 0;
-
+#if defined(ANDROID_GLES3)
+	if (r_dynamic.value)
+	{
+		dlight_t *candidates[MAX_DLIGHTS];
+		float importance[MAX_DLIGHTS];
+		int candidate_index[MAX_DLIGHTS];
+		int offered = 0;
+		int i;
+		for (i = 0; i < MAX_DLIGHTS; i++)
+		{
+			dlight_t *l = &cl_dlights[i];
+			qboolean cull = false;
+			float dist, score;
+			int j, insert;
+			if (l->spawn > cl.time) { l->die = 0.f; continue; }
+			if (l->die < cl.time || !l->radius) continue;
+			for (j = 0; j < 4; j++)
+			{
+				mplane_t *p = &frustum[j];
+				if (DotProduct (p->normal, l->origin) - p->dist + l->radius < 0.f)
+				{ cull = true; break; }
+			}
+			if (cull) continue;
+			{
+				vec3_t delta;
+				VectorSubtract (l->origin, r_refdef.vieworg, delta);
+				dist = sqrtf (DotProduct (delta, delta));
+			}
+			score = q_max (0.f, l->radius - dist) * q_max (l->color[0], q_max (l->color[1], l->color[2]));
+			insert = offered;
+			while (insert > 0 && (score > importance[insert - 1] || (score == importance[insert - 1] && i < candidate_index[insert - 1])))
+			{
+				candidates[insert] = candidates[insert - 1];
+				importance[insert] = importance[insert - 1];
+				candidate_index[insert] = candidate_index[insert - 1];
+				insert--;
+			}
+			candidates[insert] = l;
+			importance[insert] = score;
+			candidate_index[insert] = i;
+			offered++;
+		}
+		if (r_gles_perf_capture.value)
+			glperf_stats.dlights_offered = offered;
+		{
+			int limit = (int)r_gles_dlight_max.value;
+			int retained = offered;
+			if (limit != 4 && limit != 8 && limit != 16 && limit != 32) limit = 0;
+			if (limit > 0 && retained > limit) retained = limit;
+			for (i = 0; i < retained; i++)
+			{
+				dlight_t *l = candidates[i];
+				gpulight_t *out = &r_lightbuffer.lights[r_framedata.numlights++];
+				out->pos[0] = l->origin[0]; out->pos[1] = l->origin[1]; out->pos[2] = l->origin[2];
+				out->radius = l->radius;
+				out->color[0] = l->color[0]; out->color[1] = l->color[1]; out->color[2] = l->color[2];
+				out->minlight = l->minlight;
+			}
+			if (r_gles_perf_capture.value)
+			{
+				glperf_stats.dlights_retained = retained;
+				glperf_stats.dlights_dropped = offered - retained;
+			}
+		}
+	}
+#else
 	if (r_dynamic.value)
 	{
 		dlight_t *l;
@@ -149,40 +214,30 @@ void R_PushDlights (void)
 			gpulight_t *out;
 			qboolean cull = false;
 
-			if (l->spawn > cl.time)
-			{
-				l->die = 0.f;
-				continue;
-			}
+            if (l->spawn > cl.time)
+            {
+                l->die = 0.f;
+                continue;
+            }
 
-			if (l->die < cl.time || !l->radius)
-				continue;
+            if (l->die < cl.time || !l->radius)
+                continue;
 
-			if (!VID_XR_UsingMultiview ())
+            if (!VID_XR_UsingMultiview ())
 			for (j = 0; j < 4; j++)
 			{
 				mplane_t *p = &frustum[j];
-				if (DotProduct (p->normal, l->origin) - p->dist + l->radius < 0.f)
-				{
-					cull = true;
-					break;
-				}
+				if (DotProduct (p->normal, l->origin) - p->dist + l->radius < 0.f) { cull = true; break; }
 			}
-			if (cull)
-				continue;
-
+			if (cull) continue;
 			out = &r_lightbuffer.lights[r_framedata.numlights++];
-			out->pos[0]   = l->origin[0];
-			out->pos[1]   = l->origin[1];
-			out->pos[2]   = l->origin[2];
-			out->radius   = l->radius;
-			out->color[0] = l->color[0];
-			out->color[1] = l->color[1];
-			out->color[2] = l->color[2];
+			out->pos[0] = l->origin[0]; out->pos[1] = l->origin[1]; out->pos[2] = l->origin[2];
+			out->radius = l->radius;
+			out->color[0] = l->color[0]; out->color[1] = l->color[1]; out->color[2] = l->color[2];
 			out->minlight = l->minlight;
 		}
 	}
-
+#endif
 	GL_BeginGroup ("Light clustering");
 
 	R_UploadFrameData ();
