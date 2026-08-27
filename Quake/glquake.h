@@ -96,6 +96,12 @@ extern	cvar_t	r_speeds;
 extern	cvar_t	r_gles_perf_capture;
 extern	cvar_t	r_gles_dlight_max;
 extern	cvar_t	r_gles_dlight_test_count;
+extern	cvar_t	r_gles_world_cull_dist;
+extern	cvar_t	r_gles_liquid_cull_dist;
+extern	cvar_t	r_gles_alpha_cull_dist;
+extern	cvar_t	r_gles_entity_cull_dist;
+extern	cvar_t	r_gles_dlight_cull_dist;
+extern	cvar_t	r_gles_cull_mask_fog;
 #endif
 extern	cvar_t	gl_texture_anisotropy;
 extern	cvar_t	r_pos;
@@ -419,7 +425,19 @@ typedef struct glperf_stats_s {
  int world_submitted_surfaces;
  int world_visible_invalid_commands;
  int world_visible_capacity_overflows;
- int world_frustum_culled;
+	int world_frustum_culled;
+	int world_distance_culled;
+	int liquid_distance_culled;
+	int alpha_distance_culled;
+	int entity_distance_culled;
+	int entity_frustum_culled;
+	int entity_alias_visible;
+	int entity_brush_visible;
+	int entity_sprite_visible;
+	int entity_other_visible;
+	int dlight_distance_culled;
+	int particles_active;
+	int particles_submitted;
  int visible_entities;
  int dlights_offered;
  int dlights_retained;
@@ -485,6 +503,10 @@ float Fog_GetDensity (void);
 void Fog_EnableGFog (void);
 void Fog_DisableGFog (void);
 void Fog_SetupFrame (void);
+void R_SetClearColor (void);
+void Fog_DrawGLESGlobalMask (void);
+float Fog_GLESSkyBlend (float authored);
+void Fog_SetSkyVisible (qboolean visible);
 void Fog_NewMap (void);
 void Fog_Init (void);
 
@@ -726,9 +748,11 @@ typedef struct skybox_s
 	gltexture_t		*cubemap;
 	byte			*cubemap_pixels;
 	void			**cubemap_offsets;
+	float			mean_color[3];
 } skybox_t;
 
 extern skybox_t		*skybox;
+extern float			skyflatcolor[3];
 
 void Sky_Init (void);
 void Sky_ClearAll (void);

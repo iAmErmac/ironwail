@@ -84,12 +84,20 @@ static const char viewblend_vertex_shader[] =
 
 static const char viewblend_fragment_shader[] =
 "layout(location=0) uniform vec4 Color;\n"
+#if defined(ANDROID_GLES3)
+"layout(location=1) uniform vec4 MaskParams;\n"
+#endif
 "\n"
 "layout(location=0) out vec4 out_fragcolor;\n"
 "\n"
 "void main()\n"
 "{\n"
+#if defined(ANDROID_GLES3)
+"	float mask = 1.0 - smoothstep(MaskParams.y, MaskParams.z, gl_FragCoord.y / MaskParams.x);\n"
+"	out_fragcolor = vec4(Color.rgb, Color.a * mask);\n"
+#else
 "	out_fragcolor = Color;\n"
+#endif
 "}\n";
 
 ////////////////////////////////////////////////////////////////
@@ -1077,7 +1085,12 @@ NOISE_FUNCTIONS
 "	vec4 result = texture(SolidLayer, uv + Time / 16.0);\n"
 "	vec4 layer = texture(AlphaLayer, uv + Time / 8.0);\n"
 "	result.rgb = result.rgb + (layer.rgb - result.rgb) * layer.a;\n"
-"	result.rgb = result.rgb + (SkyFog.rgb - result.rgb) * SkyFog.a;\n"
+#if defined(ANDROID_GLES3)
+"	float skyfade = SkyFog.a * (1.0 - smoothstep(0.20, 0.80, abs(normalize(in_dir).z)));\n"
+#else
+"	float skyfade = SkyFog.a;\n"
+#endif
+"	result.rgb = result.rgb + (SkyFog.rgb - result.rgb) * skyfade;\n"
 "	out_fragcolor = result;\n"
 "	out_fragcolor.rgb += bayer(ivec2(gl_FragCoord.xy)) * ScreenDither;\n"
 "}\n";
@@ -1155,7 +1168,12 @@ NOISE_FUNCTIONS
 "#else\n"
 "	out_fragcolor = texture(Skybox, in_dir);\n"
 "#endif\n"
-"	out_fragcolor.rgb = out_fragcolor.rgb + (SkyFog.rgb - out_fragcolor.rgb) * SkyFog.a;\n"
+#if defined(ANDROID_GLES3)
+"	float skyfade = SkyFog.a * (1.0 - smoothstep(0.20, 0.80, abs(normalize(in_dir).z)));\n"
+#else
+"	float skyfade = SkyFog.a;\n"
+#endif
+"	out_fragcolor.rgb = out_fragcolor.rgb + (SkyFog.rgb - out_fragcolor.rgb) * skyfade;\n"
 "#if DITHER\n"
 "	out_fragcolor.rgb = sqrt(out_fragcolor.rgb);\n"
 "	out_fragcolor.rgb += tri(bayer01(ivec2(floor(gl_FragCoord.xy)+0.5))) * ScreenDither;\n"

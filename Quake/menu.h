@@ -37,6 +37,9 @@ enum m_state_e {
 	m_options,
 	m_video,
 	m_graphics,
+#if defined(ANDROID_GLES3)
+	m_gles,
+#endif
 	m_interface,
 	m_game,
 	m_keys,

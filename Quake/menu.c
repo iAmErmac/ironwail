@@ -1132,6 +1132,9 @@ static enum m_state_e M_GetBaseState (enum m_state_e state)
 	{
 	case m_video:
 	case m_graphics:
+#if defined(ANDROID_GLES3)
+	case m_gles:
+#endif
 	case m_gamepad:
 	case m_interface:
 	case m_game:
@@ -3082,6 +3085,22 @@ void M_Menu_Gamepad_f (void)
 #define TITLE_BAR			"\35\36\37"
 #define TITLE(str)			TITLE_BAR " " str " " TITLE_BAR
 
+#if defined(ANDROID_GLES3)
+#define GLES_OPTIONS_MENU(begin_menu, item, end_menu)					\
+	begin_menu (GLES_OPTIONS, m_gles, TITLE("Performance"))		\
+		item (OPT_GLES_WORLD_CULL, "Map Cull Dist.")					\
+		item (OPT_GLES_LIQUID_CULL, "Liquid Cull Dist.")				\
+		item (OPT_GLES_ALPHA_CULL, "Alpha Cull Dist.")				\
+		item (OPT_GLES_ENTITY_CULL, "Entity Cull Dist.")				\
+		item (OPT_GLES_DLIGHT_CULL, "Light Cull Dist.")				\
+		item (OPT_GLES_CULL_MASK_FOG, "Global Fade Dist.")				\
+	end_menu ()
+#define GLES_OPTIONS_LINK(item)		item (OPT_GLES, "Performance")
+#else
+#define GLES_OPTIONS_MENU(begin_menu, item, end_menu)
+#define GLES_OPTIONS_LINK(item)
+#endif
+
 ////////////////////////////////////////////////////////////////////////
 #define OPTIONS_LIST(begin_menu, item, end_menu)						\
 	begin_menu (OPTIONS, m_options, "")									\
@@ -3090,6 +3109,7 @@ void M_Menu_Gamepad_f (void)
 		item (OPT_CONTRAST,				"Contrast")						\
 		item (OPT_VIDEO,				"Display")						\
 		item (OPT_GRAPHICS,				"Graphics")						\
+	GLES_OPTIONS_LINK (item)											\
 		item (OPT_INTERFACE,			"Interface")					\
 		item (SPACER,					"")								\
 		item (OPT_CUSTOMIZE,			"Key Setup")					\
@@ -3104,6 +3124,7 @@ void M_Menu_Gamepad_f (void)
 		item (OPT_CONSOLE,				"Console")						\
 		item (OPT_DEFAULTS,				"Reset All")					\
 	end_menu ()															\
+	GLES_OPTIONS_MENU (begin_menu, item, end_menu)						\
 	begin_menu (VIDEO_OPTIONS, m_video, TITLE("Display"))				\
 		item (OPT_RESOLUTION,			"Resolution")					\
 		item (OPT_DISPLAYMODE,			"Display Mode")					\
@@ -3589,6 +3610,43 @@ static void M_CycleCvar (cvar_t *cvar, int minval, int maxval, int dir)
 	Cvar_SetValueQuick (cvar, (float) value);
 }
 
+#if defined(ANDROID_GLES3)
+void M_DrawSlider (int x, int y, float range, const char *desc);
+
+static int M_GLESDistanceValue (float value, int first, int last)
+{
+	int distance = (int)value;
+	if (value == (float)distance && distance >= first && distance <= last && !((distance - first) & 63))
+		return distance;
+	return 0;
+}
+
+static void M_AdjustGLESDistance (cvar_t *cvar, int first, int last, int dir)
+{
+	int value = M_GLESDistanceValue (cvar->value, first, last);
+	int index = value ? 1 + (value - first) / 64 : 0;
+	int maxindex = 1 + (last - first) / 64;
+	index = CLAMP (0, index + dir, maxindex);
+	Cvar_SetValueQuick (cvar, index ? (float)(first + (index - 1) * 64) : 0.f);
+}
+
+static qboolean M_SetGLESDistanceSlider (cvar_t *cvar, int first, int last, float fraction)
+{
+	int maxindex = 1 + (last - first) / 64;
+	int index = (int)(CLAMP (0.f, fraction, 1.f) * maxindex + 0.5f);
+	Cvar_SetValueQuick (cvar, index ? (float)(first + (index - 1) * 64) : 0.f);
+	return true;
+}
+
+static void M_DrawGLESDistanceSlider (int x, int y, cvar_t *cvar, int first, int last)
+{
+	int value = M_GLESDistanceValue (cvar->value, first, last);
+	int maxindex = 1 + (last - first) / 64;
+	float fraction = value ? (1 + (value - first) / 64) / (float)maxindex : 0.f;
+	M_DrawSlider (x, y, fraction, value ? va ("%d", value) : "Disabled");
+}
+#endif
+
 void M_AdjustSliders (int dir)
 {
 	int	curr_alwaysrun, target_alwaysrun;
@@ -3782,6 +3840,27 @@ void M_AdjustSliders (int dir)
 	case OPT_STARTDEMOS:
 		Cbuf_AddText ("toggle cl_startdemos\n");
 		break;
+
+#if defined(ANDROID_GLES3)
+	case OPT_GLES_WORLD_CULL:
+		M_AdjustGLESDistance (&r_gles_world_cull_dist, 1024, 8192, dir);
+		break;
+	case OPT_GLES_LIQUID_CULL:
+		M_AdjustGLESDistance (&r_gles_liquid_cull_dist, 1024, 8192, dir);
+		break;
+	case OPT_GLES_ALPHA_CULL:
+		M_AdjustGLESDistance (&r_gles_alpha_cull_dist, 1024, 8192, dir);
+		break;
+	case OPT_GLES_ENTITY_CULL:
+		M_AdjustGLESDistance (&r_gles_entity_cull_dist, 1024, 8192, dir);
+		break;
+	case OPT_GLES_DLIGHT_CULL:
+		M_AdjustGLESDistance (&r_gles_dlight_cull_dist, 512, 4096, dir);
+		break;
+	case OPT_GLES_CULL_MASK_FOG:
+		M_CycleCvar (&r_gles_cull_mask_fog, 0, 3, dir);
+		break;
+#endif
 
 	//
 	// Video options
@@ -4124,6 +4203,18 @@ qboolean M_SetSliderValue (int option, float f)
 		f = LERP (MIN_GYRO_NOISE_THRESH, MAX_GYRO_NOISE_THRESH, f);
 		Cvar_SetValueQuick (&gyro_noise_thresh, f);
 		return true;
+#if defined(ANDROID_GLES3)
+	case OPT_GLES_WORLD_CULL:
+		return M_SetGLESDistanceSlider (&r_gles_world_cull_dist, 1024, 8192, f);
+	case OPT_GLES_LIQUID_CULL:
+		return M_SetGLESDistanceSlider (&r_gles_liquid_cull_dist, 1024, 8192, f);
+	case OPT_GLES_ALPHA_CULL:
+		return M_SetGLESDistanceSlider (&r_gles_alpha_cull_dist, 1024, 8192, f);
+	case OPT_GLES_ENTITY_CULL:
+		return M_SetGLESDistanceSlider (&r_gles_entity_cull_dist, 1024, 8192, f);
+	case OPT_GLES_DLIGHT_CULL:
+		return M_SetGLESDistanceSlider (&r_gles_dlight_cull_dist, 512, 4096, f);
+#endif
 	default:
 		return false;
 	}
@@ -4168,6 +4259,20 @@ qboolean M_SliderClick (float cx, float cy)
 	return true;
 }
 
+#if defined(ANDROID_GLES3)
+static void M_DrawGLESCullMask (int x, int y, float value)
+{
+	if (value == 1.f)
+		M_Print (x, y, "Light");
+	else if (value == 2.f)
+		M_Print (x, y, "Medium");
+	else if (value == 3.f)
+		M_Print (x, y, "Heavy");
+	else
+		M_Print (x, y, "Disabled");
+}
+#endif
+
 static void M_Options_DrawItem (int y, int item)
 {
 	char		buf[256];
@@ -4192,6 +4297,9 @@ static void M_Options_DrawItem (int y, int item)
 	case OPT_CUSTOMIZE:
 	case OPT_GAMEPAD:
 	case OPT_MODS:
+	#if defined(ANDROID_GLES3)
+	case OPT_GLES:
+	#endif
 	case GPAD_OPT_CALIBRATE:
 		M_Print (x - 4, y, "...");
 		break;
@@ -4268,6 +4376,27 @@ static void M_Options_DrawItem (int y, int item)
 	case OPT_STARTDEMOS:
 		M_DrawCheckbox (x, y, cl_startdemos.value);
 		break;
+
+#if defined(ANDROID_GLES3)
+	case OPT_GLES_WORLD_CULL:
+		M_DrawGLESDistanceSlider (x, y, &r_gles_world_cull_dist, 1024, 8192);
+		break;
+	case OPT_GLES_LIQUID_CULL:
+		M_DrawGLESDistanceSlider (x, y, &r_gles_liquid_cull_dist, 1024, 8192);
+		break;
+	case OPT_GLES_ALPHA_CULL:
+		M_DrawGLESDistanceSlider (x, y, &r_gles_alpha_cull_dist, 1024, 8192);
+		break;
+	case OPT_GLES_ENTITY_CULL:
+		M_DrawGLESDistanceSlider (x, y, &r_gles_entity_cull_dist, 1024, 8192);
+		break;
+	case OPT_GLES_DLIGHT_CULL:
+		M_DrawGLESDistanceSlider (x, y, &r_gles_dlight_cull_dist, 512, 4096);
+		break;
+	case OPT_GLES_CULL_MASK_FOG:
+		M_DrawGLESCullMask (x, y, r_gles_cull_mask_fog.value);
+		break;
+#endif
 
 	case OPT_LANGUAGE:
 		M_Print (x, y, language.string);
@@ -4818,6 +4947,11 @@ void M_Options_Key (int k)
 		case OPT_GRAPHICS:
 			M_Options_Init (m_graphics);
 			break;
+#if defined(ANDROID_GLES3)
+		case OPT_GLES:
+			M_Options_Init (m_gles);
+			break;
+#endif
 		case OPT_INTERFACE:
 			M_Options_Init (m_interface);
 			break;

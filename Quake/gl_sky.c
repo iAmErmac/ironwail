@@ -469,6 +469,27 @@ void Sky_LoadSkyBox (const char *name)
 	}
 
 	memset (&newsky, 0, sizeof (newsky));
+	{
+		double color[3] = {0.0, 0.0, 0.0};
+		size_t pixels = 0;
+		for (i = 0; i < 6; i++)
+		{
+			int p, count = data[i] ? width[i] * height[i] : 0;
+			for (p = 0; p < count; p++)
+			{
+				color[0] += data[i][p * 4 + 0];
+				color[1] += data[i][p * 4 + 1];
+				color[2] += data[i][p * 4 + 2];
+			}
+			pixels += (size_t) count;
+		}
+		if (pixels)
+		{
+			newsky.mean_color[0] = (float) (color[0] / (pixels * 255.0));
+			newsky.mean_color[1] = (float) (color[1] / (pixels * 255.0));
+			newsky.mean_color[2] = (float) (color[2] / (pixels * 255.0));
+		}
+	}
 
 	if (samesize > 0) // create a single cubemap texture if all faces are the same size
 	{
@@ -721,7 +742,7 @@ void Sky_DrawSkyBox (void)
 	fog[0] = r_framedata.fogdata[0];
 	fog[1] = r_framedata.fogdata[1];
 	fog[2] = r_framedata.fogdata[2];
-	fog[3] = r_framedata.fogdata[3] > 0.f ? skyfog : 0.f;
+	fog[3] = r_framedata.fogdata[3] > 0.f ? Fog_GLESSkyBlend (skyfog) : 0.f;
 
 	GL_UseProgram (glprogs.skyboxside[softemu == SOFTEMU_COARSE]);
 	GL_SetState (GLS_BLEND_OPAQUE | GLS_NO_ZTEST | GLS_NO_ZWRITE | GLS_CULL_NONE | GLS_ATTRIBS(2));

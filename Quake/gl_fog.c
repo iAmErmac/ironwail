@@ -47,6 +47,25 @@ static float fade_done; //time when fade will be done
 
 extern float skyfog;
 
+#if defined(ANDROID_GLES3)
+extern cvar_t r_gles_world_cull_dist;
+extern cvar_t r_gles_liquid_cull_dist;
+extern cvar_t r_gles_alpha_cull_dist;
+extern cvar_t r_gles_entity_cull_dist;
+extern cvar_t r_gles_dlight_cull_dist;
+extern cvar_t r_gles_cull_mask_fog;
+static qboolean gles_sky_visible;
+static qboolean gles_fog_cache_valid;
+static float gles_fog_cache_density;
+static float gles_fog_cache_color[3];
+static float gles_fog_cache_authored_color[3];
+static float gles_fog_cache_sky_color[3];
+static int gles_fog_cache_limit;
+static int gles_fog_cache_level;
+static qboolean gles_fog_cache_sky_visible;
+static skybox_t *gles_fog_cache_skybox;
+#endif
+
 /*
 =============
 Fog_Update
@@ -297,6 +316,76 @@ float Fog_GetDensity (void)
 		return fog_density;
 }
 
+#if defined(ANDROID_GLES3)
+static int Fog_GLESCullDistance (float value)
+{
+    int distance = (int)value;
+    if (value == (float)distance && distance >= 1024 && distance <= 8192 && !(distance & 63))
+        return distance;
+    return 0;
+}
+
+static int Fog_GLESOverlayDistance (void)
+{
+	int limit = 0;
+	int value;
+	value = Fog_GLESCullDistance (r_gles_world_cull_dist.value); if (value && (!limit || value < limit)) limit = value;
+	value = Fog_GLESCullDistance (r_gles_liquid_cull_dist.value); if (value && (!limit || value < limit)) limit = value;
+	value = Fog_GLESCullDistance (r_gles_alpha_cull_dist.value); if (value && (!limit || value < limit)) limit = value;
+	value = Fog_GLESCullDistance (r_gles_entity_cull_dist.value); if (value && (!limit || value < limit)) limit = value;
+	return limit;
+}
+
+static int Fog_GLESMaskLevel (float value)
+{
+	if (value == 1.f || value == 2.f || value == 3.f)
+		return (int) value;
+	return 0;
+}
+
+void Fog_SetSkyVisible (qboolean visible)
+{
+	gles_sky_visible = visible;
+}
+#else
+void Fog_SetSkyVisible (qboolean visible)
+{
+	(void) visible;
+}
+#endif
+
+void Fog_DrawGLESGlobalMask (void)
+{
+#if defined(ANDROID_GLES3)
+	int level = Fog_GLESMaskLevel (r_gles_cull_mask_fog.value);
+
+	if (!level || !gles_fog_cache_limit)
+		return;
+
+	GL_UseProgram (glprogs.viewblend);
+	GL_SetState (GLS_BLEND_ALPHA | GLS_NO_ZWRITE | GLS_CULL_NONE | GLS_ATTRIBS(0));
+	glDepthFunc (GL_EQUAL);
+	GL_Uniform4fFunc (0, gles_fog_cache_color[0], gles_fog_cache_color[1],
+		gles_fog_cache_color[2], 1.f);
+	GL_Uniform4fFunc (1, (float) vid.height, 0.35f, 0.75f, 1.f);
+	GL_PerfCountDraws (1);
+	glDrawArrays (GL_TRIANGLES, 0, 3);
+	glDepthFunc (gl_clipcontrol_able ? GL_GEQUAL : GL_LEQUAL);
+	GL_Uniform4fFunc (1, 0.f, 0.f, 0.f, 0.f);
+#endif
+}
+
+float Fog_GLESSkyBlend (float authored)
+{
+#if defined(ANDROID_GLES3)
+	static const float sky_coverage[] = {0.f, 0.35f, 0.60f, 0.85f};
+	int level = Fog_GLESMaskLevel (r_gles_cull_mask_fog.value);
+	if (gles_fog_cache_limit && level && authored < sky_coverage[level])
+		return sky_coverage[level];
+#endif
+	return authored;
+}
+
 /*
 =============
 Fog_SetupFrame
@@ -309,11 +398,72 @@ void Fog_SetupFrame (void)
 	const float ExpAdjustment = 1.20112241f; // sqrt(log2(e))
 	const float SphericalCorrection = 0.85f; // compensate higher perceived density with spherical fog
 	const float DensityScale = ExpAdjustment * SphericalCorrection / 64.0f;
-	float density = Fog_GetDensity() * DensityScale;
-	memcpy(r_framedata.fogdata, Fog_GetColor(), 3 * sizeof(float));
+	float authored_density = Fog_GetDensity();
+	float effective_density = authored_density;
+	float *color = Fog_GetColor();
+#if defined(ANDROID_GLES3)
+	int limit = Fog_GLESOverlayDistance ();
+	int level = Fog_GLESMaskLevel (r_gles_cull_mask_fog.value);
+	float sky_color[3];
+	qboolean cache_match;
+
+	if (skybox)
+		memcpy (sky_color, skybox->mean_color, sizeof (sky_color));
+	else
+		memcpy (sky_color, skyflatcolor, sizeof (sky_color));
+	cache_match = gles_fog_cache_valid &&
+		gles_fog_cache_density == authored_density &&
+		gles_fog_cache_limit == limit &&
+		gles_fog_cache_level == level &&
+		gles_fog_cache_sky_visible == gles_sky_visible &&
+		gles_fog_cache_skybox == skybox &&
+		!memcmp (gles_fog_cache_authored_color, color, sizeof (gles_fog_cache_authored_color)) &&
+		!memcmp (gles_fog_cache_sky_color, sky_color, sizeof (gles_fog_cache_sky_color));
+	if (!cache_match)
+	{
+		effective_density = authored_density;
+		memcpy (gles_fog_cache_authored_color, color, sizeof (gles_fog_cache_authored_color));
+		memcpy (gles_fog_cache_sky_color, sky_color, sizeof (gles_fog_cache_sky_color));
+		memcpy (gles_fog_cache_color, color, sizeof (gles_fog_cache_color));
+		if (level > 0 && limit > 0)
+		{
+			static const float coverage[] = {0.f, 0.55f, 0.80f, 0.98f};
+			// Fade before the cutoff so the culler has an atmospheric buffer.
+			const float fade_distance = (float) limit * 0.65f;
+			float overlay = sqrtf (-logf (1.f - coverage[level])) * 64.f /
+				(ExpAdjustment * SphericalCorrection * fade_distance);
+			if (overlay > effective_density)
+				effective_density = overlay;
+			if (authored_density <= 0.f)
+			{
+				if (gles_sky_visible)
+					memcpy (gles_fog_cache_color, sky_color, sizeof (gles_fog_cache_color));
+				else
+				{
+					static const float neutral[3] = {0.3f, 0.3f, 0.3f};
+					memcpy (gles_fog_cache_color, neutral, sizeof (gles_fog_cache_color));
+				}
+			}
+		}
+		gles_fog_cache_density = effective_density;
+		gles_fog_cache_limit = limit;
+		gles_fog_cache_level = level;
+		gles_fog_cache_sky_visible = gles_sky_visible;
+		gles_fog_cache_skybox = skybox;
+		gles_fog_cache_valid = true;
+	}
+	effective_density = gles_fog_cache_density;
+	color = gles_fog_cache_color;
+	if (level > 0 && limit > 0)
+		glClearColor (color[0], color[1], color[2], 0.f);
+	else
+		R_SetClearColor ();
+#endif
+	float density = effective_density * DensityScale;
+	memcpy(r_framedata.fogdata, color, 3 * sizeof(float));
 	memcpy(r_framedata.skyfogdata, r_framedata.fogdata, 3 * sizeof(float));
 	r_framedata.fogdata[3] = density * density;
-	r_framedata.skyfogdata[3] = density > 0.f ? CLAMP (0.f, skyfog, 1.f) : 0.f;
+	r_framedata.skyfogdata[3] = density > 0.f ? CLAMP (0.f, Fog_GLESSkyBlend (skyfog), 1.f) : 0.f;
 }
 
 /*

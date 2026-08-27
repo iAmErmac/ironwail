@@ -701,6 +701,14 @@ static void R_DrawParticles_Real (qboolean alpha, qboolean showtris)
 	if (!r_numactiveparticles)
 		return;
 
+#if defined(ANDROID_GLES3)
+	if (!alpha && !showtris && r_gles_perf_capture.value)
+	{
+		glperf_stats.particles_active = r_numactiveparticles;
+		glperf_stats.particles_submitted = r_numactiveparticles;
+	}
+#endif
+
 	// square particles are drawn opaque (avoiding alpha sorting issues)
 	if (!showtris && alpha != ((int)r_particles.value != 2))
 		return;

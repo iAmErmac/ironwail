@@ -42,6 +42,8 @@ static void IW_Android_QueueLaunchArgs(int argc, const char *const *argv)
             continue;
         if (arg[0] == '+')
         {
+            if (active)
+                Cbuf_AddText("\n");
             Cbuf_AddText(arg + 1);
             Cbuf_AddText(" ");
             active = true;
@@ -108,10 +110,10 @@ qboolean IW_Android_Init(const char *base_dir, int argc, const char *const *argv
     Cvar_SetValueQuick(&scr_crosshairscale, 4.0f);
     IW_LOG("Android defaults: scr_conscale=4 scr_menuscale=4 scr_sbarscale=4 scr_crosshairscale=4 desktop cvars preserved");
 #endif
-    Con_Printf("Android launch arguments:");
+    Con_DPrintf("Android launch arguments:");
     for (i = 0; i < argc; ++i)
-        Con_Printf(" %s", argv[i] ? argv[i] : "");
-    Con_Printf("\n");
+        Con_DPrintf(" %s", argv[i] ? argv[i] : "");
+    Con_DPrintf("\n");
     IW_Android_QueueLaunchArgs(argc, argv);
     Cbuf_Execute();
 #if defined(ANDROID_GLES3)

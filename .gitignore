@@ -12,4 +12,4 @@ build/
 
 # docs
 AGENTS.md
-docs/*.md
+docs/*

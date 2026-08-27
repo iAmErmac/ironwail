@@ -183,7 +183,7 @@ static void GL_Fullbrights_f (cvar_t *var)
 R_SetClearColor_f -- johnfitz
 ====================
 */
-static void R_SetClearColor_f (cvar_t *var)
+void R_SetClearColor (void)
 {
 	byte	*rgb;
 	int		s;
@@ -191,6 +191,11 @@ static void R_SetClearColor_f (cvar_t *var)
 	s = (int)r_clearcolor.value & 0xFF;
 	rgb = (byte*)(d_8to24table + s);
 	glClearColor (rgb[0]/255.0,rgb[1]/255.0,rgb[2]/255.0,0);
+}
+
+static void R_SetClearColor_f (cvar_t *var)
+{
+	R_SetClearColor ();
 }
 
 /*
@@ -329,6 +334,12 @@ void R_Init (void)
 	Cvar_RegisterVariable (&r_gles_world_batch);
 	Cvar_RegisterVariable (&r_gles_dlight_max);
 	Cvar_RegisterVariable (&r_gles_dlight_test_count);
+	Cvar_RegisterVariable (&r_gles_world_cull_dist);
+	Cvar_RegisterVariable (&r_gles_liquid_cull_dist);
+	Cvar_RegisterVariable (&r_gles_alpha_cull_dist);
+	Cvar_RegisterVariable (&r_gles_entity_cull_dist);
+	Cvar_RegisterVariable (&r_gles_dlight_cull_dist);
+	Cvar_RegisterVariable (&r_gles_cull_mask_fog);
 #endif
 	Cvar_RegisterVariable (&r_pos);
 	Cvar_RegisterVariable (&r_alphasort);

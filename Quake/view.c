@@ -548,6 +548,8 @@ V_PolyBlend -- johnfitz -- moved here from gl_rmain.c
 */
 void V_PolyBlend (void)
 {
+	Fog_DrawGLESGlobalMask ();
+
 	if (!gl_polyblend.value || !v_blend[3])
 		return;
 

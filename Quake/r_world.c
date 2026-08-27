@@ -38,6 +38,9 @@ extern GLuint gl_bmodel_vbo;
 extern GLuint gl_bmodel_vao;
 extern cvar_t r_gles_static_vao;
 extern cvar_t r_gles_world_batch;
+extern cvar_t r_gles_world_cull_dist;
+extern cvar_t r_gles_liquid_cull_dist;
+extern cvar_t r_gles_alpha_cull_dist;
 #endif
 extern size_t gl_bmodel_vbo_size;
 extern GLuint gl_bmodel_ibo;
@@ -68,6 +71,45 @@ static msurface_t *gles_visible_surface_base;
 static int gles_visible_surface_count;
 static int gles_visible_surface_used;
 static int gles_visible_command_count;
+
+static int GLES_CullDistance (float value)
+{
+    int distance = (int)value;
+    if (value == (float)distance && distance >= 1024 && distance <= 8192 && !(distance & 63))
+        return distance;
+    return 0;
+}
+
+static qboolean GLES_SurfaceDistanceCull (const msurface_t *surf)
+{
+    int limit;
+    vec3_t delta;
+    float distance2 = 0.f;
+    int i;
+
+    if (surf->flags & SURF_DRAWSKY)
+        return false;
+    if (surf->flags & SURF_DRAWTURB)
+        limit = GLES_CullDistance (r_gles_liquid_cull_dist.value);
+    else if (surf->flags & SURF_DRAWFENCE)
+        limit = GLES_CullDistance (r_gles_alpha_cull_dist.value);
+    else
+        limit = GLES_CullDistance (r_gles_world_cull_dist.value);
+    if (!limit)
+        return false;
+
+    for (i = 0; i < 3; i++)
+    {
+        if (r_refdef.vieworg[i] < surf->mins[i])
+            delta[i] = surf->mins[i] - r_refdef.vieworg[i];
+        else if (r_refdef.vieworg[i] > surf->maxs[i])
+            delta[i] = r_refdef.vieworg[i] - surf->maxs[i];
+        else
+            delta[i] = 0.f;
+        distance2 += delta[i] * delta[i];
+    }
+    return distance2 > (float)limit * (float)limit;
+}
 
 void R_ResetGLESWorldVisibility (void)
 {
@@ -150,6 +192,19 @@ static void R_MarkVisSurfaces (byte* vis)
 					glperf_stats.world_frustum_culled++;
 				continue;
 			}
+			if (GLES_SurfaceDistanceCull (surf))
+			{
+				if (r_gles_perf_capture.value)
+				{
+					if (surf->flags & SURF_DRAWTURB)
+						glperf_stats.liquid_distance_culled++;
+					else if (surf->flags & SURF_DRAWFENCE)
+						glperf_stats.alpha_distance_culled++;
+					else
+						glperf_stats.world_distance_culled++;
+				}
+				continue;
+			}
 			command = surf->vbo_cmd - cl.worldmodel->firstcmd;
 			if (command < 0 || command >= gles_visible_command_count)
 			{
@@ -163,6 +218,8 @@ static void R_MarkVisSurfaces (byte* vis)
 					glperf_stats.world_visible_capacity_overflows++;
 				continue;
 			}
+			if (surf->flags & SURF_DRAWSKY)
+				Fog_SetSkyVisible (true);
             gles_visible_next[surface_index] = -1;
             if (gles_visible_tails[command] < 0)
                 gles_visible_heads[command] = surface_index;
@@ -256,6 +313,7 @@ void R_MarkSurfaces (void)
 	// check this leaf for water portals
 	// TODO: loop through all water surfs and use distance to leaf cullbox
 	nearwaterportal = false;
+	Fog_SetSkyVisible (false);
 	for (i=0; i < r_viewleaf->nummarksurfaces; i++)
 		if (cl.worldmodel->surfaces[r_viewleaf->firstmarksurface[i]].flags & SURF_DRAWTURB)
 			nearwaterportal = true;
@@ -759,6 +817,10 @@ static void R_DrawBrushModels_Real (entity_t **ents, int count, brushpass_t pass
 		state |= GLS_BLEND_OPAQUE;
 	else
 		state |= GLS_BLEND_ALPHA_OIT | GLS_NO_ZWRITE;
+#if defined(ANDROID_GLES3)
+	if (pass >= BP_SKYLAYERS && pass <= BP_SKYSTENCIL)
+		state |= GLS_NO_ZWRITE; // sky is drawn after opaque world and must leave cleared depth for the GLES background mask
+#endif
 
 	
 	R_ResetBModelCalls (program);

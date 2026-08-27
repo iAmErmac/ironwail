@@ -357,14 +357,10 @@ anim = (int)(cl.time * 10) & 3;
 	}
 	GL_UseProgram (glprogs.alias[oit][mode][alphatest][poseverttype]);
 
-	#if defined(ANDROID_GLES3)
-    state = GLS_ATTRIBS (poseverttype == PV_IQM ? 5 : 1);
-#else
-    if (poseverttype == PV_IQM)
-        state = GLS_CULL_BACK | GLS_ATTRIBS (5);
-    else
-        state = GLS_CULL_BACK | GLS_ATTRIBS (1);
-#endif
+	if (poseverttype == PV_IQM)
+		state = GLS_CULL_BACK | GLS_ATTRIBS (5);
+	else
+		state = GLS_CULL_BACK | GLS_ATTRIBS (1);
 
 	opaque_state = (state | GLS_BLEND_OPAQUE) & ~(GLS_BLEND_ALPHA_OIT | GLS_NO_ZWRITE);
 	transparent_state = (state | GLS_BLEND_ALPHA) & ~(GLS_BLEND_OPAQUE | GLS_CULL_BACK);
@@ -693,7 +689,13 @@ static void R_DrawAliasModel_Real (entity_t *e, aliasmode_t mode)
 	// cull it
 	//
 	if (R_CullModelForEntity(e))
+	{
+#if defined(ANDROID_GLES3)
+		if (r_gles_perf_capture.value)
+			glperf_stats.entity_frustum_culled++;
+#endif
 		return;
+	}
 
 	//
 	// transform it

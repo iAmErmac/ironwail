@@ -85,6 +85,20 @@ cvar_t	r_gles_ubo_validate = {"r_gles_ubo_validate","0",CVAR_NONE};
 cvar_t	r_gles_world_batch = {"r_gles_world_batch","1",CVAR_NONE};
 cvar_t	r_gles_dlight_max = {"r_gles_dlight_max","0",CVAR_ARCHIVE};
 cvar_t	r_gles_dlight_test_count = {"r_gles_dlight_test_count","0",CVAR_NONE};
+cvar_t	r_gles_world_cull_dist = {"r_gles_world_cull_dist","0",CVAR_ARCHIVE};
+cvar_t	r_gles_liquid_cull_dist = {"r_gles_liquid_cull_dist","0",CVAR_ARCHIVE};
+cvar_t	r_gles_alpha_cull_dist = {"r_gles_alpha_cull_dist","0",CVAR_ARCHIVE};
+cvar_t	r_gles_entity_cull_dist = {"r_gles_entity_cull_dist","0",CVAR_ARCHIVE};
+cvar_t	r_gles_dlight_cull_dist = {"r_gles_dlight_cull_dist","0",CVAR_ARCHIVE};
+cvar_t	r_gles_cull_mask_fog = {"r_gles_cull_mask_fog","0",CVAR_ARCHIVE};
+
+static int GLES_EntityCullDistance (float value)
+{
+	int distance = (int)value;
+	if (value == (float)distance && distance >= 1024 && distance <= 8192 && !(distance & 63))
+		return distance;
+	return 0;
+}
 #endif
 cvar_t	r_pos = {"r_pos","0",CVAR_NONE};
 cvar_t	r_fullbright = {"r_fullbright","0",CVAR_NONE};
@@ -255,7 +269,7 @@ void GL_CreateFrameBuffers (void)
 #endif
 	#if defined(ANDROID_GLES3)
 	GLenum depth_format = GL_DEPTH_COMPONENT24;
-	Con_Printf ("GLES scene targets: color=RGBA8 depth=DEPTH_COMPONENT24 samples=1 stencil=0 alpha=sorted\n");
+	Con_DPrintf ("GLES scene targets: color=RGBA8 depth=DEPTH_COMPONENT24 samples=1 stencil=0 alpha=sorted\n");
 #else
 	GLenum depth_format = GL_DEPTH24_STENCIL8;
 #endif
@@ -714,7 +728,52 @@ static void R_SortEntities (void)
 		if (!ent->model || ent->alpha == ENTALPHA_ZERO)
 			continue;
 		if (ent->model->type == mod_brush && R_CullModelForEntity (ent))
+		{
+#if defined(ANDROID_GLES3)
+			if (r_gles_perf_capture.value)
+				glperf_stats.entity_frustum_culled++;
+#endif
 			continue;
+		}
+#if defined(ANDROID_GLES3)
+		{
+			int entity_limit = GLES_EntityCullDistance (r_gles_entity_cull_dist.value);
+			if (entity_limit > 0)
+		{
+			if (ent->model->type == mod_alias || ent->model->type == mod_brush)
+			{
+				vec3_t mins, maxs;
+				float distance2 = 0.f;
+				float limit = (float)entity_limit;
+				int k;
+				R_GetEntityBounds (ent, mins, maxs);
+				for (k = 0; k < 3; k++)
+				{
+					float delta = CLAMP (mins[k], r_refdef.vieworg[k], maxs[k]) - r_refdef.vieworg[k];
+					distance2 += delta * delta;
+				}
+				if (distance2 > limit * limit)
+				{
+					if (r_gles_perf_capture.value)
+						glperf_stats.entity_distance_culled++;
+					continue;
+				}
+			}
+		}
+		}
+#endif
+#if defined(ANDROID_GLES3)
+		if (r_gles_perf_capture.value)
+		{
+			switch (ent->model->type)
+			{
+			case mod_alias: glperf_stats.entity_alias_visible++; break;
+			case mod_brush: glperf_stats.entity_brush_visible++; break;
+			case mod_sprite: glperf_stats.entity_sprite_visible++; break;
+			default: glperf_stats.entity_other_visible++; break;
+			}
+		}
+#endif
 		cl_visedicts[j++] = ent;
 	}
 	cl_numvisedicts = j;
@@ -1064,7 +1123,6 @@ void R_SetupView (void)
 		r_framedata.texturedither = 0.f;
 	}
 
-	Fog_SetupFrame (); //johnfitz
 	Sky_SetupFrame ();
 
 // build the transformation matrix for the given view angles
@@ -1106,6 +1164,7 @@ void R_SetupView (void)
 	R_SetFrustum ();
 
 	R_MarkSurfaces (); //johnfitz -- create texture chains from PVS
+	Fog_SetupFrame ();
 
 	R_SortEntities ();
 

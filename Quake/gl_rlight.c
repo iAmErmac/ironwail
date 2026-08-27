@@ -127,6 +127,16 @@ void GLLight_DeleteResources (void)
 	gl_lightclustertexture = 0;
 }
 
+#if defined(ANDROID_GLES3)
+static int GLES_DLightCullDistance (float value)
+{
+    int distance = (int)value;
+    if (value == (float)distance && distance >= 512 && distance <= 4096 && !(distance & 63))
+        return distance;
+    return 0;
+}
+#endif
+
 /*
 =============
 R_PushDlights
@@ -156,6 +166,20 @@ void R_PushDlights (void)
 			int j, insert;
 			if (l->spawn > cl.time) { l->die = 0.f; continue; }
 			if (l->die < cl.time || !l->radius) continue;
+			{
+				int limit = GLES_DLightCullDistance (r_gles_dlight_cull_dist.value);
+				if (limit > 0)
+				{
+					vec3_t delta;
+					VectorSubtract (l->origin, r_refdef.vieworg, delta);
+					if (DotProduct (delta, delta) > (float)(limit + l->radius) * (float)(limit + l->radius))
+					{
+						if (r_gles_perf_capture.value)
+							glperf_stats.dlight_distance_culled++;
+						continue;
+					}
+				}
+			}
 			for (j = 0; j < 4; j++)
 			{
 				mplane_t *p = &frustum[j];
