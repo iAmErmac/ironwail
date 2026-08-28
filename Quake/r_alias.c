@@ -728,6 +728,7 @@ static void R_DrawAliasModel_Real (entity_t *e, aliasmode_t mode)
 	//
 	if (!R_GetXRViewmodelMatrix (e, model_matrix, lerpdata.origin, e->scale))
 		R_EntityMatrix (model_matrix, lerpdata.origin, lerpdata.angles, e->scale);
+	if (e->wheel_scale > 0.f) { int i; for (i = 0; i < 12; ++i) if (i % 4 != 3) model_matrix[i] *= e->wheel_scale; }
 	ApplyTranslation (model_matrix, paliashdr->scale_origin[0], paliashdr->scale_origin[1] * fovscale, paliashdr->scale_origin[2] * fovscale);
 	ApplyScale (model_matrix, paliashdr->scale[0], paliashdr->scale[1] * fovscale, paliashdr->scale[2] * fovscale);
 

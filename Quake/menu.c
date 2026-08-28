@@ -97,7 +97,7 @@ extern cvar_t vr_hud_size;
 extern cvar_t vr_hud_distance;
 extern cvar_t vr_hud_yoffset;
 extern cvar_t vr_hud_render_yoffset;
-extern cvar_t vr_weapon_pitch, vr_weapon_xoffset, vr_weapon_yoffset, vr_weapon_zoffset;
+extern cvar_t vr_weapon_replace, vr_weapon_pitch, vr_weapon_xoffset, vr_weapon_yoffset, vr_weapon_zoffset;
 extern cvar_t vr_laser_sight, vr_laser_beam, vr_laser_color, vr_laser_beam_width, vr_laser_beam_alpha, vr_laser_alpha, vr_laser_sight_scale, vr_laser_hide_melee;
 extern cvar_t vr_turn_mode;
 extern cvar_t vr_turn_angle;
@@ -3183,12 +3183,13 @@ void M_Menu_Gamepad_f (void)
 		item (VR_HUD_OPT_RESET, "Reset Defaults")							\
 	end_menu ()										\
 	begin_menu (VR_WEAPON_OPTIONS, m_vr_weapon, TITLE("VR Weapon"))	\
-		item (VR_WEAPON_OPT_PITCH, "Pitch Adjust")				\
-		item (VR_WEAPON_OPT_XOFFSET, "X Offset")					\
-		item (VR_WEAPON_OPT_YOFFSET, "Y Offset")					\
-		item (VR_WEAPON_OPT_ZOFFSET, "Z Offset")					\
-		item (SPACER, "")									\
-		item (VR_WEAPON_OPT_RESET, "Reset Defaults")					\
+		item (VR_WEAPON_OPT_REPLACE, "Use VR Models" )			\
+		item (VR_WEAPON_OPT_PITCH, "Pitch Adjust" )			\
+		item (VR_WEAPON_OPT_XOFFSET, "X Offset" )					\
+		item (VR_WEAPON_OPT_YOFFSET, "Y Offset" )					\
+		item (VR_WEAPON_OPT_ZOFFSET, "Z Offset" )					\
+		item (SPACER, "" )					\
+		item (VR_WEAPON_OPT_RESET, "Reset Defaults" )					\
 	end_menu ()									\
 		begin_menu (VR_LASER_OPTIONS, m_vr_laser, TITLE("Laser Sight"))	\
 		item (VR_LASER_OPT_SIGHT, "Laser Sight")				\
@@ -3711,6 +3712,7 @@ static void M_VR_ResetLaser (void)
 }
 static void M_VR_ResetWeapon (void)
 {
+	Cvar_SetValueQuick (&vr_weapon_replace, 1.f);
 	Cvar_SetValueQuick (&vr_weapon_pitch, -45.f);
 	Cvar_SetValueQuick (&vr_weapon_xoffset, 0.f);
 	Cvar_SetValueQuick (&vr_weapon_yoffset, 0.f);
@@ -3881,6 +3883,9 @@ void M_AdjustSliders (int dir)
         break;
     case VR_HUD_OPT_YOFFSET:
 		Cvar_SetValueQuick (&vr_hud_render_yoffset, CLAMP (-2.f, vr_hud_render_yoffset.value + dir * 0.01f, 2.f));
+		break;
+	case VR_WEAPON_OPT_REPLACE:
+		Cvar_SetValueQuick (&vr_weapon_replace, !vr_weapon_replace.value);
 		break;
 	case VR_WEAPON_OPT_PITCH:
 		Cvar_SetValueQuick (&vr_weapon_pitch, CLAMP (-90.f, vr_weapon_pitch.value + dir, 90.f));
@@ -4706,6 +4711,9 @@ static void M_Options_DrawItem (int y, int item)
 	case VR_HUD_OPT_YOFFSET:
 		M_DrawSlider (x, y, (vr_hud_render_yoffset.value + 2.f) / 4.f, va ("%.2f", vr_hud_render_yoffset.value));
 		break;
+	case VR_WEAPON_OPT_REPLACE:
+		M_DrawCheckbox (x, y, vr_weapon_replace.value);
+		break;
 	case VR_WEAPON_OPT_PITCH:
 		M_DrawSlider (x, y, (vr_weapon_pitch.value + 90.f) / 180.f, va ("%.0f", vr_weapon_pitch.value));
 		break;
@@ -5371,6 +5379,9 @@ void M_Options_Key (int k)
 			break;
 		case VR_HUD_OPT_RESET:
 			M_VR_ResetHUD ();
+			break;
+		case VR_WEAPON_OPT_REPLACE:
+			Cvar_SetValueQuick (&vr_weapon_replace, !vr_weapon_replace.value);
 			break;
 		case VR_WEAPON_OPT_RESET:
 			M_VR_ResetWeapon ();

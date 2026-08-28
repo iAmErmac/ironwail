@@ -422,6 +422,7 @@ extern	char	com_basedirs[MAX_BASEDIRS][MAX_OSPATH];
 extern	char	com_gamedir[MAX_OSPATH];
 extern	char	com_nightdivedir[MAX_OSPATH];
 extern	THREAD_LOCAL int	file_from_pak;	// global indicating that file came from a pak
+const char *COM_GetGameNames (qboolean full);
 
 void COM_WriteFile (const char *filename, const void *data, int len);
 qboolean COM_WriteFile_OSPath (const char *filename, const void *data, size_t len);

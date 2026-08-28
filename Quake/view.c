@@ -26,6 +26,180 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 extern void VID_XR_Haptic (int hand, float amplitude, float duration_seconds);
 #include "xr_bridge.h"
 #include "xr_input.h"
+#include "json.h"
+extern cvar_t vr_mode, vr_weapon_replace;
+static qboolean vr_weapon_config_loaded;
+static json_t *vr_weapon_configs[64];
+static int vr_weapon_config_count;
+static float vr_weapon_scale = 1.f, vr_weapon_wheel_scale = 1.f;
+static vec3_t vr_weapon_offset;
+
+static qboolean V_GameNameMatches(const char *name)
+{
+    const char *games, *start, *end;
+    size_t length;
+
+    if (!name || !*name) return false;
+    games = COM_GetGameNames(true);
+    for (start = games; *start; start = *end ? end + 1 : end) {
+        while (*start == ';') ++start;
+        if (!*start) break;
+        end = strchr(start, ';');
+        if (!end) end = start + strlen(start);
+        length = (size_t)(end - start);
+        if (strlen(name) == length && !q_strncasecmp(start, name, length)) return true;
+        if (!*end) break;
+    }
+    return false;
+}
+
+static void V_ApplyVRWeaponSettings(const jsonentry_t *entry, float *scale, float *wheel_scale, vec3_t offset)
+{
+    const double *number; const jsonentry_t *value;
+    if (!entry) return;
+    if ((number = JSON_FindNumber(entry, "scale"))) *scale = CLAMP(0.0625f, (float)*number, 15.9375f);
+    if ((number = JSON_FindNumber(entry, "wheel_scale"))) *wheel_scale = CLAMP(0.0625f, (float)*number, 15.9375f);
+    value = JSON_Find(entry, "offset", JSON_ARRAY);
+    if (value && value->firstchild && value->firstchild->next && value->firstchild->next->next && value->firstchild->type == JSON_NUMBER && value->firstchild->next->type == JSON_NUMBER && value->firstchild->next->next->type == JSON_NUMBER) {
+        offset[0] = (float)value->firstchild->number; offset[1] = (float)value->firstchild->next->number; offset[2] = (float)value->firstchild->next->next->number;
+    }
+}
+
+static void V_LoadVRWeaponConfigPath(const char *path)
+{
+    byte *data;
+    if (!path || vr_weapon_config_count >= (int)Q_COUNTOF(vr_weapon_configs)) return;
+    data = COM_LoadMallocFile_TextMode_OSPath(path, NULL);
+    if (!data) return;
+    vr_weapon_configs[vr_weapon_config_count] = JSON_Parse((const char *)data);
+    if (vr_weapon_configs[vr_weapon_config_count]) ++vr_weapon_config_count;
+    free(data);
+}
+
+static void V_LoadVRWeaponPackConfigs(searchpath_t *search)
+{
+    int i;
+    if (!search || vr_weapon_config_count >= (int)Q_COUNTOF(vr_weapon_configs)) return;
+    V_LoadVRWeaponPackConfigs(search->next);
+    if (!search->pack || search->pack->type != PACK_TYPE_PK3) return;
+    for (i = 0; i < search->pack->numfiles; ++i) {
+        FILE *file;
+        byte *data;
+        int len;
+        if (strcmp(search->pack->files[i].name, "vr_weapons.json")) continue;
+        len = search->pack->files[i].filelen;
+        file = FS_Pk3OpenFile(search->pack, &search->pack->files[i]);
+        if (!file || len < 0) { if (file) fclose(file); return; }
+        data = malloc((size_t)len + 1);
+        if (!data) { fclose(file); return; }
+        if (fread(data, 1, len, file) != (size_t)len) { fclose(file); free(data); return; }
+        fclose(file);
+        data[len] = 0;
+        vr_weapon_configs[vr_weapon_config_count] = JSON_Parse((const char *)data);
+        free(data);
+        if (vr_weapon_configs[vr_weapon_config_count]) ++vr_weapon_config_count;
+        return;
+    }
+}
+
+static void V_LoadVRWeaponLooseConfigs(searchpath_t *search)
+{
+    char path[MAX_OSPATH];
+    if (!search || vr_weapon_config_count >= (int)Q_COUNTOF(vr_weapon_configs)) return;
+    V_LoadVRWeaponLooseConfigs(search->next);
+    if (search->pack || (host_parms && host_parms->exedir && !q_strcasecmp(search->filename, host_parms->exedir)) || (host_parms && host_parms->basedir && !q_strcasecmp(search->filename, host_parms->basedir))) return;
+    q_snprintf(path, sizeof(path), "%s/vr_weapons.json", search->filename);
+    V_LoadVRWeaponConfigPath(path);
+}
+
+static void V_LoadVRWeaponConfig(void)
+{
+    int i;
+    char path[MAX_OSPATH];
+    if (vr_weapon_config_loaded) return;
+    vr_weapon_config_loaded = true;
+    V_LoadVRWeaponPackConfigs(com_searchpaths);
+    /* Package manifests load first; loose manifests load last so they can override or extend them. */
+    if (host_parms && host_parms->exedir) {
+        q_snprintf(path, sizeof(path), "%s/vr_weapons.json", host_parms->exedir);
+        V_LoadVRWeaponConfigPath(path);
+    }
+    if (host_parms && host_parms->basedir && (!host_parms->exedir || q_strcasecmp(host_parms->basedir, host_parms->exedir))) {
+        q_snprintf(path, sizeof(path), "%s/vr_weapons.json", host_parms->basedir);
+        V_LoadVRWeaponConfigPath(path);
+    }
+    V_LoadVRWeaponLooseConfigs(com_searchpaths);
+    for (i = vr_weapon_config_count - 1; i >= 0; --i)
+        V_ApplyVRWeaponSettings(JSON_Find(vr_weapon_configs[i]->root, "default", JSON_OBJECT), &vr_weapon_scale, &vr_weapon_wheel_scale, vr_weapon_offset);
+}
+
+static const jsonentry_t *V_FindVRWeaponSettings(const qmodel_t *model)
+{
+    int i;
+    if (!model) return NULL;
+    V_LoadVRWeaponConfig();
+    for (i = vr_weapon_config_count - 1; i >= 0; --i) {
+        const jsonentry_t *entry = JSON_Find(vr_weapon_configs[i]->root, model->name, JSON_OBJECT);
+        if (entry) return entry;
+    }
+    return NULL;
+}
+
+static qmodel_t *V_FindConfiguredWeaponReplacement(qmodel_t *model)
+{
+    int i;
+    if (!model) return NULL;
+    V_LoadVRWeaponConfig();
+    for (i = vr_weapon_config_count - 1; i >= 0; --i) {
+        const jsonentry_t *entry;
+        const char *game, *replace, *source;
+        jsonentry_t *child;
+
+        for (child = vr_weapon_configs[i]->root->firstchild; child; child = child->next) {
+            if (!child->string || !child->firstchild || child->firstchild->type != JSON_OBJECT) continue;
+            entry = child->firstchild;
+            game = JSON_FindString(entry, "game");
+            if (!game) game = JSON_FindString(entry, "fgame");
+            replace = JSON_FindString(entry, "replace");
+            if (!game || !replace || q_strcasecmp(model->name, replace) || !V_GameNameMatches(game)) continue;
+            source = child->string;
+            if (COM_FileExists(source, NULL)) return Mod_ForName(source, false);
+        }
+    }
+    return NULL;
+}
+
+static void V_GetVRWeaponSettings(const qmodel_t *model, float *scale, float *wheel_scale, vec3_t offset)
+{
+    *scale = vr_weapon_scale; *wheel_scale = vr_weapon_wheel_scale; VectorCopy(vr_weapon_offset, offset);
+    V_LoadVRWeaponConfig();
+    *scale = vr_weapon_scale; *wheel_scale = vr_weapon_wheel_scale; VectorCopy(vr_weapon_offset, offset);
+    if (model) { int i; for (i = vr_weapon_config_count - 1; i >= 0; --i) V_ApplyVRWeaponSettings(JSON_Find(vr_weapon_configs[i]->root, model->name, JSON_OBJECT), scale, wheel_scale, offset); }
+}
+
+qboolean VR_IsConfiguredWeaponModel(const qmodel_t *model) { return V_FindVRWeaponSettings(model) != NULL; }
+float VR_WeaponModelScale(const qmodel_t *model) { float scale, wheel_scale; vec3_t offset; V_GetVRWeaponSettings(model, &scale, &wheel_scale, offset); return scale; }
+float VR_WeaponWheelScale(const qmodel_t *model) { float scale, wheel_scale; vec3_t offset; V_GetVRWeaponSettings(model, &scale, &wheel_scale, offset); return wheel_scale; }
+void VR_WeaponOffset(const qmodel_t *model, vec3_t offset) { float scale, wheel_scale; if (!model || (q_strncasecmp(model->name, "progs/vr/", 9) && !VR_IsConfiguredWeaponModel(model))) { offset[0] = offset[1] = offset[2] = 0.f; return; } V_GetVRWeaponSettings(model, &scale, &wheel_scale, offset); }
+qmodel_t *VR_GetWeaponModel(qmodel_t *model)
+{
+	char replacement[MAX_QPATH];
+	const char *basename;
+	qmodel_t *configured;
+	if (!model || !vr_weapon_replace.value) return model;
+	if (!vr_mode.value) return model;
+	configured = V_FindConfiguredWeaponReplacement(model);
+	if (configured) return configured;
+	if (q_strncasecmp(model->name, "progs/v_", 8)) return model;
+	basename = COM_SkipPath(model->name);
+	if (hipnotic) { q_snprintf(replacement, sizeof(replacement), "progs/vr/hipnotic/%s", basename); if (COM_FileExists(replacement, NULL)) return Mod_ForName(replacement, false); }
+	if (mg3) { q_snprintf(replacement, sizeof(replacement), "progs/vr/mg3/%s", basename); if (COM_FileExists(replacement, NULL)) return Mod_ForName(replacement, false); }
+	q_snprintf(replacement, sizeof(replacement), "progs/vr/%s", basename);
+	if (COM_FileExists(replacement, NULL)) {
+		return Mod_ForName(replacement, false);
+	}
+	return model;
+}
 
 /*
 
@@ -863,10 +1037,10 @@ void V_CalcRefdef (void)
 	else
 		view->lerpflags &= ~LERP_FINISH;
 
-	view->model = cl.model_precache[cl.stats[STAT_WEAPON]];
+	view->model = VR_GetWeaponModel(cl.model_precache[cl.stats[STAT_WEAPON]]);
 	view->frame = cl.stats[STAT_WEAPONFRAME];
 	view->colormap = vid.colormap;
-	view->scale = ENTSCALE_DEFAULT;
+	view->scale = ENTSCALE_ENCODE(VR_GetWeaponModel(cl.model_precache[cl.stats[STAT_WEAPON]]) != cl.model_precache[cl.stats[STAT_WEAPON]] ? VR_WeaponModelScale(view->model) : 1.f);
 
 //johnfitz -- v_gunkick
 	if (v_gunkick.value == 1) //original quake kick
@@ -940,6 +1114,9 @@ void V_RenderXRMultiview (const iw_xr_frame_snapshot_t *snapshot)
 
 	if (con_forcedup || !snapshot || snapshot->view_count < 2)
 		return;
+#if defined(ANDROID_GLES3)
+	if (!vr_mode.value) Cvar_SetValueQuick (&vr_mode, 1.f);
+#endif
 	if (cl.intermission)
 		V_CalcIntermissionRefdef ();
 	else if (!cl.paused)
@@ -982,6 +1159,9 @@ void V_RenderXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye)
 {
 	if (con_forcedup)
 		return;
+#if defined(ANDROID_GLES3)
+	if (!vr_mode.value) Cvar_SetValueQuick (&vr_mode, 1.f);
+#endif
 
 	if (cl.intermission)
 		V_CalcIntermissionRefdef ();

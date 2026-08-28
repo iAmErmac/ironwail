@@ -1,0 +1,72 @@
+{
+	"default": {
+		"scale": 0.68,
+		"wheel_scale": 0.9,
+		"offset": [ 0, 0, -10 ]
+	},
+	"progs/vr/v_axe.mdl": {
+		"scale": 0.68,
+		"wheel_scale": 0.9,
+		"offset": [ 1, 0, -11 ]
+	},
+	"progs/vr/v_shot.mdl": {
+		"scale": 0.68,
+		"wheel_scale": 0.8,
+		"offset": [ 0, 0, -9.5 ]
+	},
+	"progs/vr/v_shot2.mdl": {
+		"scale": 0.68,
+		"wheel_scale": 0.9,
+		"offset": [ 1, 0, -10 ]
+	},
+	"progs/vr/v_nail.mdl": {
+		"scale": 0.70,
+		"wheel_scale": 0.9,
+		"offset": [ 4, 0, -8.5 ]
+	},
+	"progs/vr/v_nail2.mdl": {
+		"scale": 0.60,
+		"wheel_scale": 0.9,
+		"offset": [ 2, 0, -10 ]
+	},
+	"progs/vr/v_rock.mdl": {
+		"scale": 0.68,
+		"wheel_scale": 0.9,
+		"offset": [ 1, 0, -11 ]
+	},
+	"progs/vr/v_light.mdl": {
+		"scale": 0.68,
+		"wheel_scale": 0.9,
+		"offset": [ 3, 0, -11.5 ]
+	},
+	"progs/vr/hipnotic/v_hammer.mdl": {
+		"scale": 0.68,
+		"wheel_scale": 1.2,
+		"offset": [ 1, 0, -11 ]
+	},
+	"progs/vr/hipnotic/v_laserg.mdl": {
+		"scale": 0.4,
+		"wheel_scale": 1.2,
+		"offset": [ 0, 0, -10 ]
+	},
+	"progs/vr/mg3/v_bloodshot.mdl": {
+		"scale": 0.68,
+		"wheel_scale": 0.8,
+		"offset": [ 0, 0, -9.5 ]
+	},
+	"progs/vr/mg3/v_bloodshot2.mdl": {
+		"scale": 0.68,
+		"wheel_scale": 0.8,
+		"offset": [ 0, 0, -9.5 ]
+	},
+	"progs/vr/mg3/v_hammer.mdl": {
+		"scale": 0.68,
+		"wheel_scale": 1.2,
+		"offset": [ 1, 0, -11 ]
+	},
+	"progs/vr/mg3/v_laserg.mdl": {
+		"scale": 0.65,
+		"wheel_scale": 1.7,
+		"offset": [ 0, 0, -10 ]
+	}
+}

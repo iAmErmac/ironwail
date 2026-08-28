@@ -151,6 +151,21 @@ if (EXISTS "${IRONWAIL_VR_PAK_BUILDER}")
 else()
     message(WARNING "Ironwail VR pak builder was not found; VR asset pak will not be generated.")
 endif()
+set(IRONWAIL_VR_WEAPONS_PK3_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Misc/vr_weapons" CACHE PATH "Ironwail VR weapon PK3 source directory" )
+set(IRONWAIL_VR_WEAPONS_PK3_BUILDER "${IRONWAIL_VR_WEAPONS_PK3_SOURCE_DIR}/build_pk3.ps1")
+set(IRONWAIL_VR_WEAPONS_PK3_GENERATED "${CMAKE_CURRENT_BINARY_DIR}/vr_weapons.pk3")
+if (EXISTS "${IRONWAIL_VR_WEAPONS_PK3_BUILDER}")
+    add_custom_command(TARGET ironwail POST_BUILD
+        COMMAND powershell.exe -NoProfile -ExecutionPolicy Bypass -File "${IRONWAIL_VR_WEAPONS_PK3_BUILDER}"
+            -Source "${IRONWAIL_VR_WEAPONS_PK3_SOURCE_DIR}"
+            -Output "${IRONWAIL_VR_WEAPONS_PK3_GENERATED}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${IRONWAIL_VR_WEAPONS_PK3_GENERATED}"
+            "$<TARGET_FILE_DIR:ironwail>/vr_weapons.pk3"
+        VERBATIM)
+else()
+    message(STATUS "Ironwail VR weapon PK3 builder was not found; VR weapon replacements will not be packaged.")
+endif()
 if (IW_ENABLE_OPENXR AND IRONWAIL_OPENXR_LOADER_DLL)
     add_custom_command(TARGET ironwail POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different

@@ -43,6 +43,7 @@ int			r_visframecount;	// bumped when going to a new PVS
 int			r_framecount;		// used for dlight push checking
 
 extern cvar_t vr_weapon_pitch, vr_weapon_xoffset, vr_weapon_yoffset, vr_weapon_zoffset, vr_offhand_render_flip;
+extern void VR_WeaponOffset(const qmodel_t *model, vec3_t offset);
 
 mplane_t	frustum[4];
 float		r_matview[16];
@@ -1801,10 +1802,17 @@ void R_DrawViewModel (void)
 	if (draw_offhand)
 	{
 		vec3_t forward, right, up;
+		float offhand_y_sign;
 		if (R_GetXRHandAimPose (XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND), offhand.origin, forward, right, up))
 		{
+			offhand_y_sign = vr_offhand_render_flip.value != 0.f ? -1.f : 1.f;
+			vec3_t pack_offset;
+			VR_WeaponOffset(offhand.model, pack_offset);
+			VectorMA (offhand.origin, pack_offset[0], forward, offhand.origin);
+			VectorMA (offhand.origin, pack_offset[1] * offhand_y_sign, right, offhand.origin);
+			VectorMA (offhand.origin, pack_offset[2], up, offhand.origin);
 			VectorMA (offhand.origin, vr_weapon_xoffset.value, forward, offhand.origin);
-			VectorMA (offhand.origin, vr_weapon_yoffset.value, right, offhand.origin);
+			VectorMA (offhand.origin, vr_weapon_yoffset.value * offhand_y_sign, right, offhand.origin);
 			VectorMA (offhand.origin, vr_weapon_zoffset.value, up, offhand.origin);
 			r_xr_offhand_viewmodel = &offhand;
 			R_DrawAliasModels (&r_xr_offhand_viewmodel, 1);
@@ -2989,6 +2997,7 @@ static void R_XRApplyWeaponPose(const iw_xr_frame_snapshot_t *snapshot)
 		VectorScale(model_up, c, r_xr_viewmodel_up);
 		VectorMA(r_xr_viewmodel_up, -s, model_forward, r_xr_viewmodel_up);
 		VectorCopy(model_right, r_xr_viewmodel_right);
+		{ vec3_t pack_offset; VR_WeaponOffset(cl.viewent.model, pack_offset); VectorMA(cl.viewent.origin, pack_offset[0], r_xr_viewmodel_forward, cl.viewent.origin); VectorMA(cl.viewent.origin, pack_offset[1], r_xr_viewmodel_right, cl.viewent.origin); VectorMA(cl.viewent.origin, pack_offset[2], r_xr_viewmodel_up, cl.viewent.origin); }
 		VectorMA(cl.viewent.origin, vr_weapon_xoffset.value, r_xr_viewmodel_forward, cl.viewent.origin);
 		VectorMA(cl.viewent.origin, vr_weapon_yoffset.value, r_xr_viewmodel_right, cl.viewent.origin);
 		VectorMA(cl.viewent.origin, vr_weapon_zoffset.value, r_xr_viewmodel_up, cl.viewent.origin);

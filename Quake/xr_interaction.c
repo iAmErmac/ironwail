@@ -481,13 +481,18 @@ static int xr_item_bit(const char *name)
     return atoi(name);
 }
 
+extern qmodel_t *VR_GetWeaponModel(qmodel_t *model);
+extern qboolean VR_IsConfiguredWeaponModel(const qmodel_t *model);
+extern float VR_WeaponWheelScale(const qmodel_t *model);
+extern float VR_WeaponModelScale(const qmodel_t *model);
+
 static qmodel_t *xr_weaponwheel_find_model(const char *name)
 {
     int i;
     if (!name || !*name) return NULL;
     for (i = 1; i < MAX_MODELS && cl.model_precache[i]; ++i)
-        if (!strcmp(cl.model_precache[i]->name, name)) return cl.model_precache[i];
-    return Mod_ForName(name, false);
+        if (!strcmp(cl.model_precache[i]->name, name)) return VR_GetWeaponModel(cl.model_precache[i]);
+    return VR_GetWeaponModel(Mod_ForName(name, false));
 }
 
 static void xr_weaponwheel_set_builtin_slots(void)
@@ -511,6 +516,121 @@ static void xr_weaponwheel_set_builtin_slots(void)
     xr_weapon_count = 8;
 }
 
+static void xr_weaponwheel_apply_extension_entry(const jsonentry_t *entry)
+{
+    const char *name, *item_name, *model, *replaces_name, *local_field;
+    const double *item_number, *impulse, *local_value;
+    int item, slot;
+
+    if (!entry || entry->type != JSON_OBJECT) return;
+    name = JSON_FindString(entry, "name");
+    item_name = JSON_FindString(entry, "item");
+    item_number = JSON_FindNumber(entry, "item");
+    impulse = JSON_FindNumber(entry, "impulse");
+    if (!name || !impulse) return;
+    item = item_name ? xr_item_bit(item_name) : (item_number ? (int)*item_number : 0);
+    if (!item) return;
+
+    for (slot = 0; slot < xr_weapon_count; ++slot)
+        if (!q_strcasecmp(xr_weapons[slot].name, name)) break;
+    if (slot == xr_weapon_count) {
+        if (xr_weapon_count >= (int)Q_COUNTOF(xr_weapons)) return;
+        ++xr_weapon_count;
+    }
+    xr_weapons[slot].item = item;
+    xr_weapons[slot].impulse = (int)*impulse;
+    replaces_name = JSON_FindString(entry, "replaces");
+    xr_weapons[slot].replaces_item = replaces_name ? xr_item_bit(replaces_name) : 0;
+    local_value = JSON_FindNumber(entry, "local_value");
+    xr_weapons[slot].local_field_value = local_value ? (int)*local_value : 0;
+    q_strlcpy(xr_weapon_names[slot], name, sizeof(xr_weapon_names[slot]));
+    xr_weapons[slot].name = xr_weapon_names[slot];
+    xr_weapon_models[slot][0] = 0;
+    model = JSON_FindString(entry, "model");
+    if (model && *model) q_strlcpy(xr_weapon_models[slot], model, sizeof(xr_weapon_models[slot]));
+    xr_weapon_local_fields[slot][0] = 0;
+    local_field = JSON_FindString(entry, "local_field");
+    if (local_field && *local_field) q_strlcpy(xr_weapon_local_fields[slot], local_field, sizeof(xr_weapon_local_fields[slot]));
+    xr_weapons[slot].model = NULL;
+}
+
+static void xr_weaponwheel_apply_extension_manifest(const char *data)
+{
+    json_t *json;
+    const jsonentry_t *section, *entry;
+
+    if (!data) return;
+    json = JSON_Parse(data);
+    if (!json) return;
+    section = JSON_Find(json->root, COM_SkipPath(com_gamedir), JSON_ARRAY);
+    if (!section) section = JSON_Find(json->root, "default", JSON_ARRAY);
+    if (section)
+        for (entry = section->firstchild; entry; entry = entry->next)
+            xr_weaponwheel_apply_extension_entry(entry);
+    JSON_Free(json);
+}
+
+static void xr_weaponwheel_apply_extension_path(const char *path)
+{
+    byte *data;
+    if (!path) return;
+    data = COM_LoadMallocFile_TextMode_OSPath(path, NULL);
+    if (!data) return;
+    xr_weaponwheel_apply_extension_manifest((const char *)data);
+    free(data);
+}
+
+static void xr_weaponwheel_apply_extension_pack(searchpath_t *search)
+{
+    int i;
+    if (!search) return;
+    xr_weaponwheel_apply_extension_pack(search->next);
+    if (!search->pack || search->pack->type != PACK_TYPE_PK3) return;
+    for (i = 0; i < search->pack->numfiles; ++i) {
+        FILE *file;
+        byte *data;
+        int len;
+        if (strcmp(search->pack->files[i].name, "vr_wheel.json")) continue;
+        len = search->pack->files[i].filelen;
+        file = FS_Pk3OpenFile(search->pack, &search->pack->files[i]);
+        if (!file || len < 0) { if (file) fclose(file); return; }
+        data = malloc((size_t)len + 1);
+        if (!data) { fclose(file); return; }
+        if (fread(data, 1, len, file) != (size_t)len) { fclose(file); free(data); return; }
+        fclose(file);
+        data[len] = 0;
+        xr_weaponwheel_apply_extension_manifest((const char *)data);
+        free(data);
+        return;
+    }
+}
+
+static void xr_weaponwheel_apply_extension_loose(searchpath_t *search)
+{
+    char path[MAX_OSPATH];
+    if (!search) return;
+    xr_weaponwheel_apply_extension_loose(search->next);
+    if (search->pack || (host_parms && host_parms->exedir && !q_strcasecmp(search->filename, host_parms->exedir)) || (host_parms && host_parms->basedir && !q_strcasecmp(search->filename, host_parms->basedir))) return;
+    q_snprintf(path, sizeof(path), "%s/vr_wheel.json", search->filename);
+    xr_weaponwheel_apply_extension_path(path);
+}
+
+static void xr_weaponwheel_load_extensions(void)
+{
+    char path[MAX_OSPATH];
+    /* Package extensions load before loose extensions so loose files have the final say. */
+    xr_weaponwheel_apply_extension_pack(com_searchpaths);
+    if (host_parms && host_parms->exedir) {
+        q_snprintf(path, sizeof(path), "%s/vr_wheel.json", host_parms->exedir);
+        xr_weaponwheel_apply_extension_path(path);
+    }
+    if (host_parms && host_parms->basedir && (!host_parms->exedir || q_strcasecmp(host_parms->basedir, host_parms->exedir))) {
+        q_snprintf(path, sizeof(path), "%s/vr_wheel.json", host_parms->basedir);
+        xr_weaponwheel_apply_extension_path(path);
+    }
+    xr_weaponwheel_apply_extension_loose(com_searchpaths);
+}
+
 static void xr_weaponwheel_resolve_models(void)
 {
     int i;
@@ -527,42 +647,45 @@ static void xr_weaponwheel_reload_f(void)
 
     xr_weaponwheel_set_builtin_slots();
     file = COM_LoadMallocFile("weaponwheel.json", NULL);
-    if (!file) return;
-    json = JSON_Parse((const char *)file);
-    if (!json) { free(file); return; }
-    section = JSON_Find(json->root, COM_SkipPath(com_gamedir), JSON_ARRAY);
-    if (!section) section = JSON_Find(json->root, "default", JSON_ARRAY);
-    if (section) {
-        for (entry = section->firstchild; entry && count < (int)Q_COUNTOF(xr_weapons); entry = entry->next) {
-            const char *name = JSON_FindString(entry, "name");
-            const char *item_name = JSON_FindString(entry, "item");
-            const double *item_number = JSON_FindNumber(entry, "item");
-            const double *impulse = JSON_FindNumber(entry, "impulse");
-            const char *model = JSON_FindString(entry, "model");
-            const char *replaces_name = JSON_FindString(entry, "replaces");
-            const char *local_field = JSON_FindString(entry, "local_field");
-            const double *local_value = JSON_FindNumber(entry, "local_value");
-            int item = item_name ? xr_item_bit(item_name) : (item_number ? (int)*item_number : 0);
-            if (entry->type != JSON_OBJECT || !name || !impulse || !item) continue;
-            xr_weapons[count].item = item;
-            xr_weapons[count].impulse = (int)*impulse;
-            xr_weapons[count].replaces_item = replaces_name ? xr_item_bit(replaces_name) : 0;
-            xr_weapons[count].local_field_value = local_value ? (int)*local_value : 0;
-            q_strlcpy(xr_weapon_names[count], name, sizeof(xr_weapon_names[count]));
-            xr_weapons[count].name = xr_weapon_names[count];
-            xr_weapons[count].model = NULL;
-            xr_weapon_models[count][0] = 0;
-            xr_weapon_local_fields[count][0] = 0;
-            if (model && *model)
-                q_strlcpy(xr_weapon_models[count], model, sizeof(xr_weapon_models[count]));
-            if (local_field && *local_field)
-                q_strlcpy(xr_weapon_local_fields[count], local_field, sizeof(xr_weapon_local_fields[count]));
-            ++count;
+    if (file) {
+        json = JSON_Parse((const char *)file);
+        if (json) {
+            section = JSON_Find(json->root, COM_SkipPath(com_gamedir), JSON_ARRAY);
+            if (!section) section = JSON_Find(json->root, "default", JSON_ARRAY);
+            if (section) {
+                for (entry = section->firstchild; entry && count < (int)Q_COUNTOF(xr_weapons); entry = entry->next) {
+                    const char *name = JSON_FindString(entry, "name");
+                    const char *item_name = JSON_FindString(entry, "item");
+                    const double *item_number = JSON_FindNumber(entry, "item");
+                    const double *impulse = JSON_FindNumber(entry, "impulse");
+                    const char *model = JSON_FindString(entry, "model");
+                    const char *replaces_name = JSON_FindString(entry, "replaces");
+                    const char *local_field = JSON_FindString(entry, "local_field");
+                    const double *local_value = JSON_FindNumber(entry, "local_value");
+                    int item = item_name ? xr_item_bit(item_name) : (item_number ? (int)*item_number : 0);
+                    if (entry->type != JSON_OBJECT || !name || !impulse || !item) continue;
+                    xr_weapons[count].item = item;
+                    xr_weapons[count].impulse = (int)*impulse;
+                    xr_weapons[count].replaces_item = replaces_name ? xr_item_bit(replaces_name) : 0;
+                    xr_weapons[count].local_field_value = local_value ? (int)*local_value : 0;
+                    q_strlcpy(xr_weapon_names[count], name, sizeof(xr_weapon_names[count]));
+                    xr_weapons[count].name = xr_weapon_names[count];
+                    xr_weapons[count].model = NULL;
+                    xr_weapon_models[count][0] = 0;
+                    xr_weapon_local_fields[count][0] = 0;
+                    if (model && *model)
+                        q_strlcpy(xr_weapon_models[count], model, sizeof(xr_weapon_models[count]));
+                    if (local_field && *local_field)
+                        q_strlcpy(xr_weapon_local_fields[count], local_field, sizeof(xr_weapon_local_fields[count]));
+                    ++count;
+                }
+            }
+            JSON_Free(json);
         }
+        free(file);
+        if (count > 0) xr_weapon_count = count;
     }
-    if (count > 0) xr_weapon_count = count;
-    JSON_Free(json);
-    free(file);
+    xr_weaponwheel_load_extensions();
 }
 static void xr_vignette_init(void)
 {
@@ -839,6 +962,7 @@ static qboolean xr_get_weapon_viewmodel(entity_t *out, int item, qboolean animat
         if (xr_weapons[i].item != item || !xr_weapons[i].model) continue;
         *out = cl.viewent;
         out->model = xr_weapons[i].model;
+        if (!q_strncasecmp(out->model->name, "progs/vr/", 9) || VR_IsConfiguredWeaponModel(out->model)) out->scale = ENTSCALE_ENCODE(VR_WeaponModelScale(out->model));
         if (!animate) {
             out->frame = 0;
             out->lerpflags = 0;
@@ -885,6 +1009,7 @@ static void xr_weaponwheel_place_model(entity_t *ent, const vec3_t target, const
     centre[1] = (ent->model->mins[1] + ent->model->maxs[1]) * 0.5f;
     centre[2] = (ent->model->mins[2] + ent->model->maxs[2]) * 0.5f;
     R_EntityMatrix(matrix, zero, (vec_t *)angles, ent->scale);
+    if (ent->wheel_scale > 0.f) { int i; for (i = 0; i < 12; ++i) if (i % 4 != 3) matrix[i] *= ent->wheel_scale; }
     offset[0] = matrix[0] * centre[0] + matrix[4] * centre[1] + matrix[8] * centre[2];
     offset[1] = matrix[1] * centre[0] + matrix[5] * centre[1] + matrix[9] * centre[2];
     offset[2] = matrix[2] * centre[0] + matrix[6] * centre[1] + matrix[10] * centre[2];
@@ -950,7 +1075,8 @@ void XR_Interaction_AddWorldEntities(void)
         VectorCopy(slot, ent->origin);
         biggest = q_max(ent->model->maxs[0] - ent->model->mins[0], ent->model->maxs[1] - ent->model->mins[1]);
         biggest = q_max(biggest, ent->model->maxs[2] - ent->model->mins[2]);
-        ent->scale = ENTSCALE_ENCODE(biggest > 0.001f ? q_max(0.0625f, targetsize * (1.f + 0.6f * wheel_grow[i]) / biggest) : 1.f);
+        ent->scale = ENTSCALE_DEFAULT;
+        ent->wheel_scale = biggest > 0.001f ? targetsize * VR_WeaponWheelScale(ent->model) * (1.f + 0.6f * wheel_grow[i]) / biggest : 1.f;
         xr_weaponwheel_place_model(ent, slot, angles);
         ent->wheel_brightness = 0.55f + 0.95f * wheel_grow[i];
         ent->alpha = ENTALPHA_DEFAULT;
@@ -964,7 +1090,8 @@ void XR_Interaction_AddWorldEntities(void)
         VectorCopy(hub, ent->origin);
         biggest = q_max(ent->model->maxs[0] - ent->model->mins[0], ent->model->maxs[1] - ent->model->mins[1]);
         biggest = q_max(biggest, ent->model->maxs[2] - ent->model->mins[2]);
-        ent->scale = ENTSCALE_ENCODE(biggest > 0.001f ? q_max(0.0625f, targetsize * 0.7f / biggest) : 1.f);
+        ent->scale = ENTSCALE_DEFAULT;
+        ent->wheel_scale = biggest > 0.001f ? targetsize * VR_WeaponWheelScale(ent->model) * 0.7f / biggest : 1.f;
         xr_weaponwheel_place_model(ent, hub, angles);
         ent->wheel_brightness = 0.45f;
         ent->alpha = ENTALPHA_DEFAULT;

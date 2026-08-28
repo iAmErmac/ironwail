@@ -2539,6 +2539,54 @@ static void COM_AddEnginePak (void)
 	}	com_modified = modified;
 }
 
+static void COM_AddVRWeaponsPk3 (void)
+{
+	char path[MAX_OSPATH];
+	pack_t *pack = NULL;
+	if (host_parms->exedir) { q_snprintf(path, sizeof(path), "%s/vr_weapons.pk3", host_parms->exedir); pack = FS_Pk3LoadArchive(path); }
+	if (!pack) { q_snprintf(path, sizeof(path), "%s/vr_weapons.pk3", host_parms->basedir); pack = FS_Pk3LoadArchive(path); }
+	if (pack) { searchpath_t *search = Z_Malloc(sizeof(*search)); search->path_id = com_searchpaths ? com_searchpaths->path_id : 1u; search->pack = pack; search->next = com_searchpaths; com_searchpaths = search; }
+}
+
+static qboolean COM_AddExplicitVRWeaponsPk3(const char *name)
+{
+	char path[MAX_OSPATH];
+	pack_t *pack = NULL;
+	searchpath_t *search;
+
+	if (!name || !*name) return false;
+	if (strstr(name, "..") || strchr(name, '/') || strchr(name, '\\') || strchr(name, ':')) {
+		Con_Warning("-file only accepts a PK3 filename from the work directory: %s\n", name);
+		return false;
+	}
+	if (host_parms->exedir) {
+		q_snprintf(path, sizeof(path), "%s/%s", host_parms->exedir, name);
+		pack = FS_Pk3LoadArchive(path);
+	}
+	if (!pack && host_parms->basedir && (!host_parms->exedir || q_strcasecmp(host_parms->basedir, host_parms->exedir))) {
+		q_snprintf(path, sizeof(path), "%s/%s", host_parms->basedir, name);
+		pack = FS_Pk3LoadArchive(path);
+	}
+	if (!pack) {
+		Con_Warning("-file PK3 not found in the work directory: %s\n", name);
+		return false;
+	}
+	search = Z_Malloc(sizeof(*search));
+	search->path_id = com_searchpaths ? com_searchpaths->path_id : 1u;
+	search->pack = pack;
+	search->next = com_searchpaths;
+	com_searchpaths = search;
+	return true;
+}
+
+static void COM_AddExplicitVRWeaponsPk3Files(void)
+{
+	int i;
+	for (i = 1; i < com_argc - 1; ++i) {
+		if (!q_strcasecmp(com_argv[i], "-file"))
+			COM_AddExplicitVRWeaponsPk3(com_argv[++i]);
+	}
+}
 static int COM_Pk3NameCompare(const void *a, const void *b)
 {
 	const char *left = a;
@@ -2659,6 +2707,10 @@ void COM_AddGameDirectory (const char *dir)
 		}
 
 		COM_AddPk3Files(com_gamedir, path_id);
+
+		/* The optional VR package must also work when the base directory has no pak0.pak. */
+		if (j == 0 && path_id == 1u)
+			COM_AddVRWeaponsPk3 ();
 	}
 }
 
@@ -3543,6 +3595,9 @@ void COM_InitFilesystem (void) //johnfitz -- modified based on topaz's tutorial
 		if (p != NULL)
 			COM_AddGameDirectory (p);
 	}
+
+	/* Explicit work-directory archives sit above vr_weapons.pk3 and normal mod archives. */
+	COM_AddExplicitVRWeaponsPk3Files();
 
 	COM_CheckRegistered ();
 }

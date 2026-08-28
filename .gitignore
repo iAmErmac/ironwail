@@ -14,4 +14,4 @@ qconsole.log
 
 # docs
 AGENTS.md
-docs/*.md
+docs/*

@@ -127,6 +127,7 @@ cvar_t vr_hud_yoffset = {"vr_hud_yoffset", "0", CVAR_ARCHIVE};
 cvar_t vr_hud_render_yoffset = {"vr_hud_render_yoffset", "-0.1", CVAR_ARCHIVE};
 cvar_t vr_dominant_hand = {"vr_dominant_hand", "0", CVAR_ARCHIVE};
 cvar_t vr_stabilize_mode = {"vr_stabilize_mode", "1", CVAR_ARCHIVE};
+cvar_t vr_weapon_replace = {"vr_weapon_replace", "1", CVAR_ARCHIVE};
 cvar_t vr_weapon_pitch = {"vr_weapon_pitch", "-45", CVAR_ARCHIVE};
 cvar_t vr_weapon_xoffset = {"vr_weapon_xoffset", "0", CVAR_ARCHIVE};
 cvar_t vr_weapon_yoffset = {"vr_weapon_yoffset", "0", CVAR_ARCHIVE};
@@ -2188,6 +2189,7 @@ void	VID_Init (void)
     Cvar_RegisterVariable (&vr_hud_render_yoffset);
     Cvar_RegisterVariable (&vr_dominant_hand);
     Cvar_RegisterVariable (&vr_stabilize_mode);
+    Cvar_RegisterVariable (&vr_weapon_replace);
     Cvar_RegisterVariable (&vr_weapon_pitch);
     Cvar_RegisterVariable (&vr_weapon_xoffset);
     Cvar_RegisterVariable (&vr_weapon_yoffset);
