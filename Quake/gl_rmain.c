@@ -128,8 +128,6 @@ static vec3_t r_xr_hand_aim_origin[IW_XR_HAND_COUNT], r_xr_hand_aim_forward[IW_X
 typedef struct { qboolean valid; vec3_t start, end, forward; } xr_laser_t;
 static xr_laser_t r_xr_laser[IW_XR_HAND_COUNT];
 static qboolean r_xr_pointer_valid, r_xr_teleport_marker_valid;
-static vec3_t r_xr_offhand_aim_reference;
-static qboolean r_xr_offhand_aim_reference_valid;
 static vec3_t r_xr_pointer_start, r_xr_pointer_end, r_xr_teleport_marker_origin;
 static uint32_t r_xr_teleport_marker_color;
 qboolean R_GetXRViewmodelMatrix (entity_t *e, float matrix[16], const vec3_t origin, unsigned char scale)
@@ -206,11 +204,6 @@ qboolean R_GetXRHandPose (iw_xr_hand_t hand, vec3_t origin, vec3_t forward, vec3
     if (up) VectorCopy(*hand_up, up);
     return true;
 }
-qboolean R_GetXRHandAim (iw_xr_hand_t hand, vec3_t origin, vec3_t forward)
-{
-    return R_GetXRHandPose(hand, origin, forward, NULL, NULL);
-}
-
 qboolean R_GetXRHandTrackingPose (iw_xr_hand_t hand, vec3_t origin, vec3_t forward, vec3_t right, vec3_t up)
 {
     if (hand < 0 || hand >= IW_XR_HAND_COUNT || !r_xr_hand_tracking_valid[hand]) return false;
@@ -226,14 +219,6 @@ qboolean R_GetXRHandAimPose (iw_xr_hand_t hand, vec3_t origin, vec3_t forward, v
     return R_GetXRHandPose(hand, origin, forward, right, up);
 }
 
-qboolean R_GetXROffhandAimReference (vec3_t target)
-{
-	if (!r_xr_offhand_aim_reference_valid)
-		return false;
-	if (target)
-		VectorCopy (r_xr_offhand_aim_reference, target);
-	return true;
-}
 qboolean R_GetXRMainHandWeaponPose (vec3_t origin, vec3_t forward, vec3_t right, vec3_t up)
 {
     if (XR_Interaction_UseOffhandAim())
@@ -311,17 +296,6 @@ static void R_XRPrepareLasers (void)
         return;
     for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand) r_xr_laser[hand].valid = false;
 
-        r_xr_offhand_aim_reference_valid = false;
-        if (!XR_Interaction_WheelActive () && XR_Interaction_OffhandWeaponItem ())
-        {
-            vec3_t start, forward, target;
-            if (R_GetXRHandAimPose (offhand, start, forward, NULL, NULL))
-            {
-                VectorMA (start, 8192.f, forward, target);
-                TraceLine (start, target, r_xr_offhand_aim_reference);
-                r_xr_offhand_aim_reference_valid = true;
-            }
-        }
         if (XR_Interaction_WheelActive () || (!vr_laser_sight.value && !vr_laser_beam.value)) return;
     /* Each laser uses its owning hand's logical weapon, never STAT_ACTIVEWEAPON globally. */
     for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand)
@@ -370,18 +344,123 @@ static qboolean R_XRIsProjectileModel (const entity_t *e)
 		!strcmp (name, "progs/spike.mdl") || !strcmp (name, "progs/s_spike.mdl");
 }
 
+qboolean R_GetXRWeaponVisualOrigin (iw_xr_hand_t hand, const qmodel_t *model, vec3_t origin)
+{
+	vec3_t hand_origin, forward, right, up, pack_offset;
+	float lateral_sign;
+	if (!origin || hand < 0 || hand >= IW_XR_HAND_COUNT)
+		return false;
+	if (hand == XR_Input_PhysicalHandForRole (XR_HAND_MAINHAND))
+	{
+		if (!r_xr_controller_aim_valid)
+			return false;
+		VectorCopy (r_xr_controller_origin, hand_origin);
+		VectorCopy (r_xr_viewmodel_forward, forward);
+		VectorCopy (r_xr_viewmodel_right, right);
+		VectorCopy (r_xr_viewmodel_up, up);
+	}
+	else
+	{
+		if (!R_GetXRHandAimPose (hand, hand_origin, forward, right, up))
+			return false;
+		lateral_sign = vr_offhand_render_flip.value != 0.f ? -1.f : 1.f;
+	}
+	if (hand == XR_Input_PhysicalHandForRole (XR_HAND_MAINHAND))
+		lateral_sign = 1.f;
+	VR_WeaponOffset (model, pack_offset);
+	VectorCopy (hand_origin, origin);
+	VectorMA (origin, pack_offset[0], forward, origin);
+	VectorMA (origin, pack_offset[1] * lateral_sign, right, origin);
+	VectorMA (origin, pack_offset[2], up, origin);
+	VectorMA (origin, vr_weapon_xoffset.value, forward, origin);
+	VectorMA (origin, vr_weapon_yoffset.value * lateral_sign, right, origin);
+	VectorMA (origin, vr_weapon_zoffset.value, up, origin);
+	return true;
+}
+
+typedef struct
+{
+	const entity_t *entity;
+	const qmodel_t *model;
+	vec3_t origin;
+	double expire;
+	qboolean valid;
+} xr_projectile_visual_cache_t;
+
+static xr_projectile_visual_cache_t r_xr_projectile_visual_cache[MAX_EDICTS];
+
+void R_ClearXRProjectileVisualCache (void)
+{
+	memset (r_xr_projectile_visual_cache, 0, sizeof (r_xr_projectile_visual_cache));
+}
+
+void R_InvalidateXRProjectileVisualCache (const entity_t *e)
+{
+	int slot;
+	if (!e || !cl_entities || cl_max_edicts <= 0)
+		return;
+	slot = (int)(e - cl_entities);
+	if (slot >= 0 && slot < cl_max_edicts && slot < MAX_EDICTS)
+		memset (&r_xr_projectile_visual_cache[slot], 0, sizeof (r_xr_projectile_visual_cache[slot]));
+}
+
+static qboolean R_XRGetVisualFireModel (iw_xr_hand_t hand, const qmodel_t **model)
+{
+	entity_t viewmodel;
+	if (!model)
+		return false;
+	if (hand == XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND))
+	{
+		if (!XR_Interaction_GetOffhandViewmodel (&viewmodel))
+			return false;
+		*model = viewmodel.model;
+	}
+	else if (XR_Interaction_GetMainhandViewmodel (&viewmodel))
+		*model = viewmodel.model;
+	else
+		*model = cl.viewent.model;
+	return *model != NULL;
+}
+
+static qboolean R_XRGetProjectileVisualOrigin (vec3_t origin)
+{
+	iw_xr_hand_t hand;
+	const qmodel_t *model;
+	if (!XR_Interaction_GetVisualFireHand (&hand) || !R_XRGetVisualFireModel (hand, &model))
+		return false;
+	return R_GetXRWeaponVisualOrigin (hand, model, origin);
+}
+
 void R_ApplyXRProjectileVisualOffset (const entity_t *e, vec3_t origin)
 {
-	vec3_t delta, offset;
+	vec3_t delta, offset, visual_origin;
 	float distance, blend;
-	if (!r_xr_eye_pass || !r_xr_controller_aim_valid || (sv.active && cl.maxclients == 1) || !R_XRIsProjectileModel (e))
+	int slot;
+	xr_projectile_visual_cache_t *cache;
+	if (!r_xr_eye_pass || !R_XRIsProjectileModel (e) || !origin || !cl_entities || cl_max_edicts <= 0)
 		return;
+	slot = (int)(e - cl_entities);
+	if (slot < 0 || slot >= cl_max_edicts || slot >= MAX_EDICTS)
+		return;
+	cache = &r_xr_projectile_visual_cache[slot];
 	VectorSubtract (origin, cl_entities[cl.viewentity].origin, delta);
 	distance = VectorLength (delta);
 	if (distance >= 128.f)
 		return;
+	if (cache->entity != e || cache->model != e->model || e->forcelink || (e->lerpflags & LERP_RESETMOVE) || cl.time >= cache->expire)
+		memset (cache, 0, sizeof (*cache));
+	if (!cache->valid)
+	{
+		if (!R_XRGetProjectileVisualOrigin (visual_origin))
+			return;
+		cache->entity = e;
+		cache->model = e->model;
+		VectorCopy (visual_origin, cache->origin);
+		cache->expire = cl.time + 0.25;
+		cache->valid = true;
+	}
 	blend = CLAMP (0.f, (128.f - distance) / 80.f, 1.f);
-	VectorSubtract (r_xr_controller_origin, origin, offset);
+	VectorSubtract (cache->origin, origin, offset);
 	VectorMA (origin, blend, offset, origin);
 }
 
@@ -1795,25 +1874,15 @@ void R_DrawViewModel (void)
 	GL_DepthRange (ZRANGE_VIEWMODEL);
 	if (draw_mainhand)
     {
+        if (r_xr_eye_pass) R_GetXRWeaponVisualOrigin (XR_Input_PhysicalHandForRole (XR_HAND_MAINHAND), mainhand->model, mainhand->origin);
         r_xr_mainhand_viewmodel = mainhand;
         R_DrawAliasModels (&mainhand, 1);
         r_xr_mainhand_viewmodel = NULL;
     }
 	if (draw_offhand)
 	{
-		vec3_t forward, right, up;
-		float offhand_y_sign;
-		if (R_GetXRHandAimPose (XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND), offhand.origin, forward, right, up))
+		if (R_GetXRWeaponVisualOrigin (XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND), offhand.model, offhand.origin))
 		{
-			offhand_y_sign = vr_offhand_render_flip.value != 0.f ? -1.f : 1.f;
-			vec3_t pack_offset;
-			VR_WeaponOffset(offhand.model, pack_offset);
-			VectorMA (offhand.origin, pack_offset[0], forward, offhand.origin);
-			VectorMA (offhand.origin, pack_offset[1] * offhand_y_sign, right, offhand.origin);
-			VectorMA (offhand.origin, pack_offset[2], up, offhand.origin);
-			VectorMA (offhand.origin, vr_weapon_xoffset.value, forward, offhand.origin);
-			VectorMA (offhand.origin, vr_weapon_yoffset.value * offhand_y_sign, right, offhand.origin);
-			VectorMA (offhand.origin, vr_weapon_zoffset.value, up, offhand.origin);
 			r_xr_offhand_viewmodel = &offhand;
 			R_DrawAliasModels (&r_xr_offhand_viewmodel, 1);
 			r_xr_offhand_viewmodel = NULL;
@@ -2997,10 +3066,7 @@ static void R_XRApplyWeaponPose(const iw_xr_frame_snapshot_t *snapshot)
 		VectorScale(model_up, c, r_xr_viewmodel_up);
 		VectorMA(r_xr_viewmodel_up, -s, model_forward, r_xr_viewmodel_up);
 		VectorCopy(model_right, r_xr_viewmodel_right);
-		{ vec3_t pack_offset; VR_WeaponOffset(cl.viewent.model, pack_offset); VectorMA(cl.viewent.origin, pack_offset[0], r_xr_viewmodel_forward, cl.viewent.origin); VectorMA(cl.viewent.origin, pack_offset[1], r_xr_viewmodel_right, cl.viewent.origin); VectorMA(cl.viewent.origin, pack_offset[2], r_xr_viewmodel_up, cl.viewent.origin); }
-		VectorMA(cl.viewent.origin, vr_weapon_xoffset.value, r_xr_viewmodel_forward, cl.viewent.origin);
-		VectorMA(cl.viewent.origin, vr_weapon_yoffset.value, r_xr_viewmodel_right, cl.viewent.origin);
-		VectorMA(cl.viewent.origin, vr_weapon_zoffset.value, r_xr_viewmodel_up, cl.viewent.origin);
+		R_GetXRWeaponVisualOrigin (XR_Input_PhysicalHandForRole (XR_HAND_MAINHAND), cl.viewent.model, cl.viewent.origin);
 	}
 	r_xr_viewmodel_orientation_valid = true;
 	R_XRWeaponAngles(forward, right, up, cl.viewent.angles);

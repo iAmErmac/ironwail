@@ -170,7 +170,7 @@ Writes new values for v_forward, v_up, and v_right based on angles
 makevectors(vector)
 ==============
 */
-/* The disposable offhand entity is local-only, but its QuakeC builtins must use the tracked firing pose. */
+/* Controller poses can replace aim direction only for local single-player firing. */
 static qboolean PF_UseXRControllerAim (void)
 {
 	if (!sv.active || cls.demoplayback || cl.maxclients != 1 || !sv_player)
@@ -183,6 +183,28 @@ static void PF_makevectors (void)
 	AngleVectors (G_VECTOR(OFS_PARM0), pr_global_struct->v_forward, pr_global_struct->v_right, pr_global_struct->v_up);
 	if (PF_UseXRControllerAim ())
 		R_GetXRMainHandWeaponPose (NULL, pr_global_struct->v_forward, pr_global_struct->v_right, pr_global_struct->v_up);
+}
+
+static void PF_FixXRLocalGrenadePitch (edict_t *e)
+{
+	edict_t *owner, *self;
+	vec3_t forward, up;
+	const char *classname;
+
+	if (!PF_UseXRControllerAim () || !e || !e->v.classname)
+		return;
+	classname = PR_GetString (e->v.classname);
+	if (strcmp (classname, "grenade"))
+		return;
+	self = PROG_TO_EDICT (pr_global_struct->self);
+	owner = e->v.owner ? PROG_TO_EDICT (e->v.owner) : NULL;
+	if (owner != self)
+		return;
+	if (fabsf (e->v.velocity[2] - 200.f) > 0.01f)
+		return;
+	if (!R_GetXRMainHandWeaponPose (NULL, forward, NULL, up))
+		return;
+	e->v.velocity[2] = forward[2] * 600.f + up[2] * 200.f;
 }
 
 /*
@@ -199,12 +221,6 @@ teleported.
 setorigin (entity, origin)
 =================
 */
-static qboolean PF_IsXRLocalProjectile (edict_t *e)
-{
-	if (!sv.active || cls.demoplayback || cl.maxclients != 1 || !sv_player || e == sv_player)
-		return false;
-	return XR_Interaction_UseOffhandAim () || e->v.owner == EDICT_TO_PROG (sv_player) || PROG_TO_EDICT (pr_global_struct->self) == sv_player;
-}
 static void PF_setorigin (void)
 {
 	edict_t	*e;
@@ -212,8 +228,8 @@ static void PF_setorigin (void)
 
 	e = G_EDICT(OFS_PARM0);
 	org = G_VECTOR(OFS_PARM1);
-	if (!PF_IsXRLocalProjectile (e) || !R_GetXRMainHandWeaponPose (e->v.origin, NULL, NULL, NULL))
-		VectorCopy (org, e->v.origin);
+	VectorCopy (org, e->v.origin);
+	PF_FixXRLocalGrenadePitch (e);
 	SV_LinkEdict (e, false);
 }
 
@@ -746,37 +762,6 @@ static void PF_traceline (void)
 	nomonsters = G_FLOAT(OFS_PARM2);
 	ent = G_EDICT(OFS_PARM3);
 
-	if (PF_UseXRControllerAim ())
-	{
-		vec3_t controller_origin, trace_delta;
-		if (R_GetXRMainHandWeaponPose (controller_origin, NULL, NULL, NULL))
-		{
-			VectorSubtract (v2, v1, trace_delta);
-			VectorCopy (controller_origin, v1);
-			VectorAdd (controller_origin, trace_delta, v2);
-		}
-	}
-
-	/* Preserve each QuakeC trace's range and spread while aiming the local offhand trace at its tracked-hand reference. */
-	if (XR_Interaction_UseOffhandAim ())
-	{
-		vec3_t reference, raw_forward, shot_delta, corrected_forward, perpendicular;
-		float forward_distance;
-		if (R_GetXROffhandAimReference (reference) &&
-			R_GetXRMainHandWeaponPose (NULL, raw_forward, NULL, NULL))
-		{
-			VectorSubtract (v2, v1, shot_delta);
-			VectorSubtract (reference, v1, corrected_forward);
-			if (VectorNormalize (raw_forward) > 0.f && VectorNormalize (corrected_forward) > 0.f)
-			{
-				forward_distance = DotProduct (shot_delta, raw_forward);
-				VectorMA (shot_delta, -forward_distance, raw_forward, perpendicular);
-				VectorScale (corrected_forward, forward_distance, shot_delta);
-				VectorAdd (shot_delta, perpendicular, shot_delta);
-				VectorAdd (v1, shot_delta, v2);
-			}
-		}
-	}
 
 	/* FIXME FIXME FIXME: Why do we hit this with certain progs.dat ?? */
 	if (developer.value) {
@@ -791,8 +776,8 @@ static void PF_traceline (void)
 		v1[0] = v1[1] = v1[2] = 0;
 	if (IS_NAN(v2[0]) || IS_NAN(v2[1]) || IS_NAN(v2[2]))
 		v2[0] = v2[1] = v2[2] = 0;
-	/* Ignore the canonical player only for the local offhand trace, preventing lightning from self-hitting. */
-	trace = SV_Move (v1, vec3_origin, vec3_origin, v2, nomonsters, XR_Interaction_UseOffhandAim () && sv_player ? sv_player : ent);
+	/* Keep the trace contract unchanged; local controller aim is supplied through makevectors. */
+	trace = SV_Move (v1, vec3_origin, vec3_origin, v2, nomonsters, ent);
 
 	pr_global_struct->trace_allsolid = trace.allsolid;
 	pr_global_struct->trace_startsolid = trace.startsolid;
@@ -1466,11 +1451,8 @@ static void PF_aim (void)
 	speed = G_FLOAT(OFS_PARM1);
 	(void) speed; /* variable set but not used */
 
-	if (!PF_UseXRControllerAim () || !R_GetXRMainHandWeaponPose (start, NULL, NULL, NULL))
-	{
-		VectorCopy (ent->v.origin, start);
-		start[2] += 20;
-	}
+	VectorCopy (ent->v.origin, start);
+	start[2] += 20;
 
 // try sending a trace straight
 	VectorCopy (pr_global_struct->v_forward, dir);

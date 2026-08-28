@@ -327,6 +327,29 @@ entity_t *CL_NewTempEntity (void)
 CL_UpdateTEnts
 =================
 */
+static qboolean CL_GetXRBeamOrigin (const beam_t *beam, vec3_t origin)
+{
+    iw_xr_hand_t hand;
+    entity_t viewmodel;
+    const qmodel_t *model = NULL;
+    if (!beam || !origin)
+        return false;
+    if (beam->offhand)
+        hand = XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND);
+    else if (!XR_Interaction_GetVisualFireHand (&hand))
+        hand = XR_Input_PhysicalHandForRole (XR_HAND_MAINHAND);
+    if (hand == XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND))
+    {
+        if (XR_Interaction_GetOffhandViewmodel (&viewmodel))
+            model = viewmodel.model;
+    }
+    else if (XR_Interaction_GetMainhandViewmodel (&viewmodel))
+        model = viewmodel.model;
+    else
+        model = cl.viewent.model;
+    return R_GetXRWeaponVisualOrigin (hand, model, origin);
+}
+
 void CL_UpdateTEnts (void)
 {
 	int			i, j; //johnfitz -- use j instead of using i twice, so we don't corrupt memory
@@ -350,9 +373,7 @@ void CL_UpdateTEnts (void)
 	// if coming from the player, update the start position
 		if (b->entity == cl.viewentity)
 		{
-			if (b->offhand)
-				R_GetXRHandAimPose (XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND), b->start, NULL, NULL, NULL);
-			else if (!R_GetXRMainHandWeaponPose (b->start, NULL, NULL, NULL))
+			if (!CL_GetXRBeamOrigin (b, b->start))
 				VectorCopy (cl_entities[cl.viewentity].origin, b->start);
 		}
 

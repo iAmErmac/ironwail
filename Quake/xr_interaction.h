@@ -26,6 +26,8 @@ float XR_Interaction_LocalOffhandAttackFinished(void);
 void XR_Interaction_SetLocalOffhandBeamEntity(int entity, double time);
 qboolean XR_Interaction_IsLocalOffhandBeamEntity(int entity);
 qboolean XR_Interaction_AllowOffhandContinuousAutoSound(void);
+qboolean XR_Interaction_GetVisualFireHand(iw_xr_hand_t *hand);
+qboolean XR_Interaction_GetNetworkGrenadePitch(float *pitch);
 void XR_Interaction_ResetOffhandContinuousAudio(void);
 int XR_Interaction_MainhandWeaponItem(void);
 int XR_Interaction_OffhandWeaponItem(void);

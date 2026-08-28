@@ -114,6 +114,7 @@ void CL_ClearState (void)
 	memset (cl_lightstyle, 0, sizeof(cl_lightstyle));
 	memset (cl_temp_entities, 0, sizeof(cl_temp_entities));
 	memset (cl_beams, 0, sizeof(cl_beams));
+	R_ClearXRProjectileVisualCache ();
 
 	//johnfitz -- cl_entities is now dynamically allocated
 	cl_max_edicts = CLAMP (MIN_EDICTS,(int)max_edicts.value,MAX_EDICTS);
@@ -551,6 +552,7 @@ void CL_RelinkEntities (void)
 	{
 		if (!ent->model)
 		{	// empty slot
+			R_InvalidateXRProjectileVisualCache (ent);
 			
 			// ericw -- efrags are only used for static entities in GLQuake
 			// ent can't be static, so this is a no-op.
@@ -567,6 +569,8 @@ void CL_RelinkEntities (void)
 			continue;
 		}
 
+		if (ent->forcelink || (ent->lerpflags & LERP_RESETMOVE))
+			R_InvalidateXRProjectileVisualCache (ent);
 		if (ent->forcelink)
 		{	// the entity was not updated in the last message
 			// so move to the final spot

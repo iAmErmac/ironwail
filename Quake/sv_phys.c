@@ -989,6 +989,7 @@ static void SV_XRLocalOffhandAttack (edict_t *ent)
 	}
 	offhand = ED_Alloc ();
 	memcpy (&offhand->v, &ent->v, qcvm->edict_size - offsetof (edict_t, v));
+	VectorCopy (ent->v.origin, offhand->v.origin);
 	weapon = XR_Interaction_OffhandWeaponItem ();
 	if (weapon == IT_LIGHTNING || weapon == HIT_LASER_CANNON)
 		XR_Interaction_SetLocalOffhandBeamEntity (NUM_FOR_EDICT (offhand), cl.time);
@@ -1015,7 +1016,6 @@ static void SV_XRLocalOffhandAttack (edict_t *ent)
 	VectorCopy (pr_global_struct->v_up, up);
 	pr_global_struct->self = EDICT_TO_PROG (offhand);
 	XR_Interaction_BeginLocalOffhandAttack ();
-	R_GetXRMainHandWeaponPose (offhand->v.origin, NULL, NULL, NULL);
 	PR_ExecuteProgram (attack);
 	XR_Interaction_BeginLocalOffhandAnimation (cl.time, offhand->v.weaponframe);
 	/* Some QuakeC melee weapons advance through scheduled weapon frames before striking. */
@@ -1026,7 +1026,6 @@ static void SV_XRLocalOffhandAttack (edict_t *ent)
 			func_t melee_think = offhand->v.think;
 			pr_global_struct->time = offhand->v.nextthink;
 			offhand->v.nextthink = 0.f;
-			R_GetXRMainHandWeaponPose (offhand->v.origin, NULL, NULL, NULL);
 			PR_ExecuteProgram (melee_think);
 		}
 		pr_global_struct->time = qcvm->time;

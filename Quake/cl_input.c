@@ -58,6 +58,18 @@ kbutton_t	in_mlook, in_klook;
 kbutton_t	in_left, in_right, in_forward, in_back;
 kbutton_t	in_lookup, in_lookdown, in_moveleft, in_moveright;
 kbutton_t	in_strafe, in_speed, in_use, in_jump, in_attack;
+
+static void CL_XRPrepareNetworkViewAngles (vec3_t angles)
+{
+    float pitch;
+
+    if (cl.maxclients <= 1 ||
+        (!(in_attack.state & 3) && !XR_Interaction_OffhandAttackActive ()))
+        return;
+    if (XR_Interaction_GetNetworkGrenadePitch (&pitch))
+        angles[PITCH] = pitch;
+}
+
 kbutton_t	in_up, in_down;
 
 int			in_impulse;
@@ -391,6 +403,7 @@ void CL_SendMove (const usercmd_t *cmd)
 	int		bits;
 	sizebuf_t	buf;
 	byte	data[128];
+	vec3_t	wire_angles;
 
 	buf.maxsize = 128;
 	buf.cursize = 0;
@@ -399,6 +412,9 @@ void CL_SendMove (const usercmd_t *cmd)
 	if (cmd) 
 	{
 		cl.cmd = *cmd;
+		VectorCopy (cl.viewangles, wire_angles);
+		/* Keep the headset view local; only the grenade firing command gets controller pitch. */
+		CL_XRPrepareNetworkViewAngles (wire_angles);
 
 	//
 	// send the movement message
@@ -410,9 +426,9 @@ void CL_SendMove (const usercmd_t *cmd)
 		for (i=0 ; i<3 ; i++)
 			//johnfitz -- 16-bit angles for PROTOCOL_FITZQUAKE
 			if (cl.protocol == PROTOCOL_NETQUAKE)
-				MSG_WriteAngle (&buf, cl.viewangles[i], cl.protocolflags);
+				MSG_WriteAngle (&buf, wire_angles[i], cl.protocolflags);
 			else
-				MSG_WriteAngle16 (&buf, cl.viewangles[i], cl.protocolflags);
+				MSG_WriteAngle16 (&buf, wire_angles[i], cl.protocolflags);
 			//johnfitz
 
 		MSG_WriteShort (&buf, cmd->forwardmove);
