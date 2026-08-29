@@ -68,9 +68,6 @@ void CL_ParseBeam (qmodel_t *m)
 
 	ent = MSG_ReadShort ();
 	offhand = XR_Interaction_IsLocalOffhandBeamEntity (ent);
-	if (!offhand && ent == cl.viewentity && XR_Interaction_OffhandAttackActive () &&
-		(XR_Interaction_OffhandWeaponItem () == IT_LIGHTNING || XR_Interaction_OffhandWeaponItem () == HIT_LASER_CANNON))
-		offhand = true;
 	if (!offhand && ent == cl.viewentity && cl.maxclients > 1)
 	{
 		iw_xr_hand_t visual_hand;
@@ -344,10 +341,10 @@ static qboolean CL_GetXRBeamOrigin (const beam_t *beam, vec3_t origin)
     const qmodel_t *model = NULL;
     if (!beam || !origin)
         return false;
-    if (beam->offhand)
-        hand = XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND);
-    else if (!XR_Interaction_GetVisualFireHand (&hand))
-        hand = XR_Input_PhysicalHandForRole (XR_HAND_MAINHAND);
+	if (beam->offhand)
+		hand = XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND);
+	else
+		hand = XR_Input_PhysicalHandForRole (XR_HAND_MAINHAND);
     if (hand == XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND))
     {
         if (XR_Interaction_GetOffhandViewmodel (&viewmodel))

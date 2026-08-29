@@ -221,6 +221,29 @@ teleported.
 setorigin (entity, origin)
 =================
 */
+static void PF_RecordXRLocalProjectileSpawn (edict_t *e)
+{
+    edict_t *self;
+    iw_xr_hand_t hand;
+    int weapon;
+    if (!e || e == sv_player || !sv.active || cls.demoplayback || cl.maxclients != 1 || !XR_Input_OwnsInput ())
+        return;
+    self = PROG_TO_EDICT (pr_global_struct->self);
+    if (self == sv_player && self->v.button0)
+    {
+        hand = XR_Input_PhysicalHandForRole (XR_HAND_MAINHAND);
+        weapon = XR_Interaction_MainhandWeaponItem ();
+    }
+    else if (self != sv_player && XR_Interaction_UseOffhandAim ())
+    {
+        hand = XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND);
+        weapon = XR_Interaction_OffhandWeaponItem ();
+    }
+    else
+        return;
+    XR_Interaction_RecordLocalProjectileSpawn (NUM_FOR_EDICT (e), hand, weapon);
+}
+
 static void PF_setorigin (void)
 {
 	edict_t	*e;
@@ -229,6 +252,7 @@ static void PF_setorigin (void)
 	e = G_EDICT(OFS_PARM0);
 	org = G_VECTOR(OFS_PARM1);
 	VectorCopy (org, e->v.origin);
+	PF_RecordXRLocalProjectileSpawn (e);
 	PF_FixXRLocalGrenadePitch (e);
 	SV_LinkEdict (e, false);
 }
@@ -715,7 +739,7 @@ static void PF_sound (void)
     /* Local offhand weapon code runs on a disposable entity; keep its audio on one stable channel. */
     if (XR_Interaction_UseOffhandAim () && entity == PROG_TO_EDICT (pr_global_struct->self) && sv_player)
     {
-        if ((XR_Interaction_OffhandWeaponItem () == IT_NAILGUN || XR_Interaction_OffhandWeaponItem () == IT_SUPER_NAILGUN || XR_Interaction_OffhandWeaponItem () == IT_LIGHTNING || XR_Interaction_OffhandWeaponItem () == HIT_LASER_CANNON) &&
+        if ((XR_Interaction_OffhandWeaponItem () == IT_NAILGUN || XR_Interaction_OffhandWeaponItem () == IT_SUPER_NAILGUN || XR_Interaction_OffhandWeaponItem () == IT_LIGHTNING || XR_Interaction_OffhandWeaponItem () == HIT_LASER_CANNON || (rogue && (XR_Interaction_OffhandWeaponItem () == RIT_LAVA_NAILGUN || XR_Interaction_OffhandWeaponItem () == RIT_LAVA_SUPER_NAILGUN))) &&
             channel == 0 && !XR_Interaction_AllowOffhandContinuousAutoSound ()) return;
         entity = sv_player;
         /* Preserve QuakeC sound roles: auto sounds and weapon sounds need independent offhand channels. */

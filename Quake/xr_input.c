@@ -28,7 +28,7 @@ cvar_t vr_teleport_beam_alpha = {"vr_teleport_beam_alpha", "0.6", CVAR_ARCHIVE};
 cvar_t vr_teleport_auto_jump = {"vr_teleport_auto_jump", "0", CVAR_ARCHIVE};
 
 static qboolean xr_key_state[15];
-static qboolean xr_owns_input, xr_main_trigger_previous;
+static qboolean xr_owns_input;
 static qboolean xr_ui_release_suppressed, xr_modal_confirm_held;
 static qboolean xr_turn_held;
 static float xr_smooth_turn_rate;
@@ -452,8 +452,6 @@ void XR_Input_Update(void)
         xr_ui_release_suppressed = false;
     xr_modal_confirm_held = false;
     XR_Input_UpdateTeleport(&actions, XR_Input_MovementHand());
-    if ((actions.hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) && !xr_main_trigger_previous && !XR_Interaction_OffhandAttackActive ()) VID_XR_Haptic(dominant, 0.30f, 0.025f);
-    xr_main_trigger_previous = (actions.hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) != 0;
     if (xr_ui_release_suppressed || XR_Interaction_ConsumesGameplay()) {
         XR_Input_Key(0, K_RTRIGGER, false);
         XR_Input_Key(1, K_LTRIGGER, false);
@@ -469,7 +467,7 @@ void XR_Input_Update(void)
         return;
     }
     XR_Input_Key(0, K_RTRIGGER, (actions.hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) != 0);
-    XR_Input_Key(1, K_LTRIGGER, (actions.hand[offhand].buttons & IW_XR_BUTTON_TRIGGER) != 0);
+    XR_Input_Key(1, K_LTRIGGER, (actions.hand[offhand].buttons & IW_XR_BUTTON_TRIGGER) != 0 && XR_Interaction_AllowOffhandFireInput());
 
 
     {

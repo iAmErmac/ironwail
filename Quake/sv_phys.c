@@ -949,11 +949,46 @@ SV_Physics_Client
 Player character actions
 ================
 */
-static float SV_XROffhandCurrentAmmo (const edict_t *ent, int weapon)
+static float SV_XRGetEdictFieldFloat (edict_t *ent, const char *name, float fallback)
+{
+    eval_t *field = GetEdictFieldValueByName (ent, name);
+    return field ? field->_float : fallback;
+}
+
+static qboolean SV_XRCopyEdictField (edict_t *dst, edict_t *src, const char *name)
+{
+    eval_t *dst_field = GetEdictFieldValueByName (dst, name);
+    eval_t *src_field = GetEdictFieldValueByName (src, name);
+    if (!dst_field || !src_field)
+        return false;
+    dst_field->_float = src_field->_float;
+    return true;
+}
+
+static float SV_XROffhandCurrentAmmo (edict_t *ent, int weapon)
 {
     /* Mission-pack energy weapons are distinct inventory bits but consume the base cell pool. */
-    if (weapon == HIT_MJOLNIR || weapon == HIT_LASER_CANNON)
-        return ent->v.ammo_cells;
+    if (weapon == HIT_LASER_CANNON) return ent->v.ammo_cells;
+    if (hipnotic) {
+        if (weapon == HIT_MJOLNIR) return ent->v.ammo_cells;
+        if (weapon == HIT_PROXIMITY_GUN) return ent->v.ammo_rockets;
+    }
+    if (rogue) {
+        if (weapon == RIT_LAVA_NAILGUN || weapon == RIT_LAVA_SUPER_NAILGUN)
+            return SV_XRGetEdictFieldFloat (ent, "ammo_lava_nails", ent->v.ammo_nails);
+        if (weapon == RIT_MULTI_GRENADE || weapon == RIT_MULTI_ROCKET)
+            return SV_XRGetEdictFieldFloat (ent, "ammo_multi_rockets", ent->v.ammo_rockets);
+        if (weapon == RIT_PLASMA_GUN)
+            return SV_XRGetEdictFieldFloat (ent, "ammo_plasma", ent->v.ammo_cells);
+        if (weapon == IT_SHOTGUN || weapon == IT_SUPER_SHOTGUN)
+            return SV_XRGetEdictFieldFloat (ent, "ammo_shells1", ent->v.ammo_shells);
+        if (weapon == IT_NAILGUN || weapon == IT_SUPER_NAILGUN)
+            return SV_XRGetEdictFieldFloat (ent, "ammo_nails1", ent->v.ammo_nails);
+        if (weapon == IT_GRENADE_LAUNCHER || weapon == IT_ROCKET_LAUNCHER)
+            return SV_XRGetEdictFieldFloat (ent, "ammo_rockets1", ent->v.ammo_rockets);
+        if (weapon == IT_LIGHTNING)
+            return SV_XRGetEdictFieldFloat (ent, "ammo_cells1", ent->v.ammo_cells);
+    }
 
     switch (weapon)
     {
@@ -965,6 +1000,149 @@ static float SV_XROffhandCurrentAmmo (const edict_t *ent, int weapon)
     }
 }
 
+static int SV_XRAmmoPool (int weapon)
+{
+    if (weapon == IT_SHOTGUN || weapon == IT_SUPER_SHOTGUN)
+        return 1;
+    if (weapon == IT_NAILGUN || weapon == IT_SUPER_NAILGUN)
+        return 2;
+    if (weapon == IT_GRENADE_LAUNCHER || weapon == IT_ROCKET_LAUNCHER)
+        return 3;
+    if (weapon == IT_LIGHTNING || weapon == HIT_LASER_CANNON || weapon == HIT_MJOLNIR)
+        return 4;
+    if (hipnotic && weapon == HIT_PROXIMITY_GUN)
+        return 3;
+    if (rogue)
+    {
+        if (weapon == RIT_LAVA_NAILGUN || weapon == RIT_LAVA_SUPER_NAILGUN)
+            return 5;
+        if (weapon == RIT_MULTI_GRENADE || weapon == RIT_MULTI_ROCKET)
+            return 6;
+        if (weapon == RIT_PLASMA_GUN)
+            return 7;
+    }
+    return 0;
+}
+
+static qboolean SV_XRWeaponsShareAmmo (int main_weapon, int offhand_weapon)
+{
+    int main_pool = SV_XRAmmoPool (main_weapon);
+    return main_pool != 0 && main_pool == SV_XRAmmoPool (offhand_weapon);
+}
+
+static void SV_XRApplyOffhandAmmo (edict_t *ent, edict_t *offhand, int weapon)
+{
+    if (rogue) {
+        if (weapon == RIT_LAVA_NAILGUN || weapon == RIT_LAVA_SUPER_NAILGUN) {
+            if (!SV_XRCopyEdictField (ent, offhand, "ammo_lava_nails")) ent->v.ammo_nails = offhand->v.ammo_nails;
+            return;
+        }
+        if (weapon == RIT_MULTI_GRENADE || weapon == RIT_MULTI_ROCKET) {
+            if (!SV_XRCopyEdictField (ent, offhand, "ammo_multi_rockets")) ent->v.ammo_rockets = offhand->v.ammo_rockets;
+            return;
+        }
+        if (weapon == RIT_PLASMA_GUN) {
+            if (!SV_XRCopyEdictField (ent, offhand, "ammo_plasma")) ent->v.ammo_cells = offhand->v.ammo_cells;
+            return;
+        }
+        if (weapon == IT_SHOTGUN || weapon == IT_SUPER_SHOTGUN) {
+            if (!SV_XRCopyEdictField (ent, offhand, "ammo_shells1")) ent->v.ammo_shells = offhand->v.ammo_shells;
+            return;
+        }
+        if (weapon == IT_NAILGUN || weapon == IT_SUPER_NAILGUN) {
+            if (!SV_XRCopyEdictField (ent, offhand, "ammo_nails1")) ent->v.ammo_nails = offhand->v.ammo_nails;
+            return;
+        }
+        if (weapon == IT_GRENADE_LAUNCHER || weapon == IT_ROCKET_LAUNCHER) {
+            if (!SV_XRCopyEdictField (ent, offhand, "ammo_rockets1")) ent->v.ammo_rockets = offhand->v.ammo_rockets;
+            return;
+        }
+        if (weapon == IT_LIGHTNING) {
+            if (!SV_XRCopyEdictField (ent, offhand, "ammo_cells1")) ent->v.ammo_cells = offhand->v.ammo_cells;
+            return;
+        }
+    }
+
+    if (weapon == HIT_LASER_CANNON) {
+        ent->v.ammo_cells = offhand->v.ammo_cells;
+        return;
+    }
+    if (hipnotic) {
+        if (weapon == HIT_MJOLNIR) {
+            ent->v.ammo_cells = offhand->v.ammo_cells;
+            return;
+        }
+        if (weapon == HIT_PROXIMITY_GUN) {
+            ent->v.ammo_rockets = offhand->v.ammo_rockets;
+            return;
+        }
+    }
+
+    switch (weapon) {
+    case IT_SHOTGUN:
+    case IT_SUPER_SHOTGUN:
+        ent->v.ammo_shells = offhand->v.ammo_shells;
+        break;
+    case IT_NAILGUN:
+    case IT_SUPER_NAILGUN:
+        ent->v.ammo_nails = offhand->v.ammo_nails;
+        break;
+    case IT_GRENADE_LAUNCHER:
+    case IT_ROCKET_LAUNCHER:
+        ent->v.ammo_rockets = offhand->v.ammo_rockets;
+        break;
+    case IT_LIGHTNING:
+        ent->v.ammo_cells = offhand->v.ammo_cells;
+        break;
+    default:
+        break;
+    }
+}
+
+void SV_XRUpdateLocalStats (edict_t *ent)
+{
+    int statsi[MAX_CL_STATS];
+    float statsf[MAX_CL_STATS];
+    const char *statss[MAX_CL_STATS];
+    int i, display_weapon;
+    float shells, nails, rockets, cells;
+
+    if (!ent || !sv.active || svs.maxclients != 1 || ent != sv_player || !XR_Input_OwnsInput () || !svs.clients[0].active)
+        return;
+    SV_CalcStats (&svs.clients[0], statsi, statsf, statss);
+    for (i = 0; i < MAX_CL_STATS; ++i)
+    {
+        cl.stats[i] = statsi[i] ? statsi[i] : (int)statsf[i];
+        cl.statsf[i] = statsi[i] ? (float)statsi[i] : statsf[i];
+    }
+
+    if (!rogue)
+        return;
+
+    /* Rogue's HUD uses the normal four pool slots for its powered-weapon page. */
+    shells = SV_XRGetEdictFieldFloat (ent, "ammo_shells1", ent->v.ammo_shells);
+    nails = SV_XRGetEdictFieldFloat (ent, "ammo_nails1", ent->v.ammo_nails);
+    rockets = SV_XRGetEdictFieldFloat (ent, "ammo_rockets1", ent->v.ammo_rockets);
+    cells = SV_XRGetEdictFieldFloat (ent, "ammo_cells1", ent->v.ammo_cells);
+    display_weapon = ent->v.weapon;
+    if (XR_Interaction_OffhandAttackActive ())
+        display_weapon = XR_Interaction_OffhandWeaponItem ();
+    if (display_weapon == RIT_LAVA_NAILGUN || display_weapon == RIT_LAVA_SUPER_NAILGUN)
+        nails = SV_XRGetEdictFieldFloat (ent, "ammo_lava_nails", nails);
+    else if (display_weapon == RIT_MULTI_GRENADE || display_weapon == RIT_MULTI_ROCKET)
+        rockets = SV_XRGetEdictFieldFloat (ent, "ammo_multi_rockets", rockets);
+    else if (display_weapon == RIT_PLASMA_GUN)
+        cells = SV_XRGetEdictFieldFloat (ent, "ammo_plasma", cells);
+    cl.stats[STAT_SHELLS] = (int)shells;
+    cl.stats[STAT_NAILS] = (int)nails;
+    cl.stats[STAT_ROCKETS] = (int)rockets;
+    cl.stats[STAT_CELLS] = (int)cells;
+    cl.statsf[STAT_SHELLS] = shells;
+    cl.statsf[STAT_NAILS] = nails;
+    cl.statsf[STAT_ROCKETS] = rockets;
+    cl.statsf[STAT_CELLS] = cells;
+}
+
 /* Run the game's normal QuakeC attack on a short-lived player copy, then copy only gameplay results back. This gives single-player offhand fire independent aim and animation without replacing the canonical player entity. */
 static void SV_XRLocalOffhandAttack (edict_t *ent)
 {
@@ -973,6 +1151,8 @@ static void SV_XRLocalOffhandAttack (edict_t *ent)
 	func_t attack;
 	eval_t *attack_finished_field, *thunderbolt_width_field;
 	vec3_t forward, right, up;
+	float ammo_before, ammo_after, currentammo_before, attack_finished_before;
+	qboolean fired, ammo_empty;
 	int i, weapon;
 
 	if (!XR_Interaction_LocalOffhandAttackReady (qcvm->time) || ent->v.health <= 0)
@@ -996,10 +1176,13 @@ static void SV_XRLocalOffhandAttack (edict_t *ent)
 	offhand->v.weapon = weapon;
 	offhand->v.weaponframe = XR_Interaction_LocalOffhandWeaponFrame ();
 	offhand->v.currentammo = SV_XROffhandCurrentAmmo (ent, weapon);
+	ammo_before = offhand->v.currentammo;
+	currentammo_before = offhand->v.currentammo;
+	attack_finished_before = XR_Interaction_LocalOffhandAttackFinished ();
 	VectorSet (offhand->v.view_ofs, 0.f, 0.f, 0.f);
 	offhand->v.button0 = 1.f;
 	attack_finished_field = GetEdictFieldValueByName (offhand, "attack_finished");
-    thunderbolt_width_field = GetEdictFieldValueByName (offhand, "t_width");
+	thunderbolt_width_field = GetEdictFieldValueByName (offhand, "t_width");
 	if (!attack_finished_field)
 	{
 		if (!reported_missing_cooldown)
@@ -1017,9 +1200,8 @@ static void SV_XRLocalOffhandAttack (edict_t *ent)
 	pr_global_struct->self = EDICT_TO_PROG (offhand);
 	XR_Interaction_BeginLocalOffhandAttack ();
 	PR_ExecuteProgram (attack);
-	XR_Interaction_BeginLocalOffhandAnimation (cl.time, offhand->v.weaponframe);
 	/* Some QuakeC melee weapons advance through scheduled weapon frames before striking. */
-	if (weapon == IT_AXE || weapon == HIT_MJOLNIR)
+	if (weapon == IT_AXE || weapon == HIT_MJOLNIR || (rogue && weapon == RIT_AXE))
 	{
 		for (i = 0; i < 8 && offhand->v.think && offhand->v.nextthink > qcvm->time; ++i)
 		{
@@ -1032,18 +1214,27 @@ static void SV_XRLocalOffhandAttack (edict_t *ent)
 	}
 	XR_Interaction_EndLocalOffhandAttack ();
 
-	XR_Interaction_SetLocalOffhandCooldown (qcvm->time, attack_finished_field->_float);
-	XR_Interaction_SetLocalOffhandWeaponState (offhand->v.weaponframe, attack_finished_field->_float);
-	ent->v.ammo_shells = offhand->v.ammo_shells;
-	ent->v.ammo_nails = offhand->v.ammo_nails;
-	ent->v.ammo_rockets = offhand->v.ammo_rockets;
-	ent->v.ammo_cells = offhand->v.ammo_cells;
+	ammo_after = SV_XROffhandCurrentAmmo (offhand, weapon);
+	fired = ammo_after < ammo_before - 0.001f ||
+		offhand->v.currentammo < currentammo_before - 0.001f ||
+		attack_finished_field->_float > attack_finished_before + 0.001f;
+	ammo_empty = fired && ammo_before > 0.f && ammo_after <= 0.f;
+	SV_XRApplyOffhandAmmo (ent, offhand, weapon);
+	if (fired && SV_XRWeaponsShareAmmo ((int)ent->v.weapon, weapon))
+		ent->v.currentammo = SV_XROffhandCurrentAmmo (ent, (int)ent->v.weapon);
+	if (fired)
+	{
+		XR_Interaction_SetLocalOffhandCooldown (qcvm->time, attack_finished_field->_float);
+		XR_Interaction_BeginLocalOffhandAnimation (cl.time, offhand->v.weaponframe);
+		XR_Interaction_SetLocalOffhandWeaponState (offhand->v.weaponframe, attack_finished_field->_float);
+	}
+	XR_Interaction_LocalOffhandAttackResult (fired, ammo_empty);
 	/* Preserve optional QuakeC weapon state across disposable offhand attack entities. */
-    if (thunderbolt_width_field)
-    {
-        eval_t *player_width_field = GetEdictFieldValueByName (ent, "t_width");
-        if (player_width_field) player_width_field->_float = thunderbolt_width_field->_float;
-    }
+	if (thunderbolt_width_field)
+	{
+		eval_t *player_width_field = GetEdictFieldValueByName (ent, "t_width");
+		if (player_width_field) player_width_field->_float = thunderbolt_width_field->_float;
+	}
 	for (i = 0; i < qcvm->num_edicts; ++i)
 	{
 		edict_t *spawned = EDICT_NUM (i);
@@ -1059,28 +1250,40 @@ static void SV_XRLocalOffhandAttack (edict_t *ent)
 
 static void SV_XRUpdateOffhandContinuousSound (edict_t *ent)
 {
-    static qboolean was_firing;
-    static double stop_time;
-    int weapon = XR_Interaction_OffhandWeaponItem ();
-    qboolean firing = svs.maxclients == 1 && XR_Interaction_OffhandAttackActive () &&
-        (weapon == IT_NAILGUN || weapon == IT_SUPER_NAILGUN || weapon == IT_LIGHTNING || weapon == HIT_LASER_CANNON);
-    if (firing) stop_time = 0.0;
-    else if (was_firing) stop_time = realtime + 1.0;
-    if (stop_time && realtime >= stop_time)
-    {
-        S_StopSound (NUM_FOR_EDICT (ent), 6);
-        S_StopSound (NUM_FOR_EDICT (ent), 7);
-        stop_time = 0.0;
-    }
-    was_firing = firing;
+	static qboolean was_firing;
+	static double stop_time;
+	int weapon = XR_Interaction_OffhandWeaponItem ();
+	qboolean firing = svs.maxclients == 1 && XR_Interaction_OffhandAttackActive () &&
+		(weapon == IT_NAILGUN || weapon == IT_SUPER_NAILGUN || weapon == IT_LIGHTNING ||
+		 weapon == HIT_LASER_CANNON || (rogue && (weapon == RIT_LAVA_NAILGUN || weapon == RIT_LAVA_SUPER_NAILGUN)));
+	if (firing) stop_time = 0.0;
+	else if (was_firing) stop_time = realtime + 1.0;
+	if (stop_time && realtime >= stop_time)
+	{
+		S_StopSound (NUM_FOR_EDICT (ent), 6);
+		S_StopSound (NUM_FOR_EDICT (ent), 7);
+		stop_time = 0.0;
+	}
+	was_firing = firing;
 }
 
 void SV_Physics_Client (edict_t *ent, int num)
 {
 	qboolean wasunderwater, forceunderwater;
+	eval_t *attack_finished_field;
+	float attack_finished_before;
+	qboolean local_offhand_fired;
 
 	if ( ! svs.clients[num-1].active )
 		return;		// unconnected slot
+	attack_finished_field = NULL;
+	attack_finished_before = 0.f;
+	if (ent == sv_player && XR_Input_OwnsInput ())
+	{
+		attack_finished_field = GetEdictFieldValueByName (ent, "attack_finished");
+		if (attack_finished_field)
+			attack_finished_before = attack_finished_field->_float;
+	}
 
 //
 // call standard client pre-think
@@ -1089,8 +1292,9 @@ void SV_Physics_Client (edict_t *ent, int num)
 	pr_global_struct->self = EDICT_TO_PROG(ent);
 	PR_ExecuteProgram (pr_global_struct->PlayerPreThink);
 
-    // Single-player offhand fire reuses the loaded game's attack routine, then restores main-hand state.
+	// Single-player offhand fire reuses the loaded game's attack routine, then restores main-hand state.
     SV_XRLocalOffhandAttack (ent);
+	local_offhand_fired = XR_Interaction_ConsumeLocalOffhandFireEvent ();
     SV_XRUpdateOffhandContinuousSound (ent);
 
 	if (XR_Input_OwnsInput () && svs.maxclients == 1 && ent->v.waterlevel == 2 &&
@@ -1154,6 +1358,15 @@ void SV_Physics_Client (edict_t *ent, int num)
 	pr_global_struct->time = qcvm->time;
 	pr_global_struct->self = EDICT_TO_PROG(ent);
 	PR_ExecuteProgram (pr_global_struct->PlayerPostThink);
+	SV_XRUpdateLocalStats (ent);
+	if (attack_finished_field &&
+		!(local_offhand_fired && !XR_Interaction_MainhandFireInputActive ()))
+	{
+		iw_xr_hand_t hand = XR_Input_PhysicalHandForRole (XR_HAND_MAINHAND);
+		if (cl.maxclients > 1 && XR_Interaction_OffhandAttackActive ())
+			hand = XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND);
+		XR_Interaction_NotifyWeaponFire (hand, attack_finished_before, attack_finished_field->_float, qcvm->time);
+	}
 
 	forceunderwater = !wasunderwater && ent->v.waterlevel >= 3;
 	if (forceunderwater != ent->forcewater)

@@ -45,6 +45,7 @@
     { "name": "Nailgun",          "item": "IT_NAILGUN",          "impulse": 4,   "model": "progs/v_nail.mdl" },
     { "name": "Super Nailgun",    "item": "IT_SUPER_NAILGUN",    "impulse": 5,   "model": "progs/v_nail2.mdl" },
     { "name": "Grenade Launcher", "item": "IT_GRENADE_LAUNCHER", "impulse": 6,   "model": "progs/v_rock.mdl" },
+    { "name": "Proximity Gun",     "item": "HIT_PROXIMITY_GUN",    "impulse": 6,   "model": "progs/v_prox.mdl" },
     { "name": "Rocket Launcher",  "item": "IT_ROCKET_LAUNCHER",  "impulse": 7,   "model": "progs/v_rock2.mdl" },
     { "name": "Thunderbolt",      "item": "IT_LIGHTNING",        "impulse": 8,   "model": "progs/v_light.mdl" },
     { "name": "Laser Cannon",     "item": "HIT_LASER_CANNON",    "impulse": 225, "model": "progs/v_laserg.mdl" }
@@ -54,11 +55,16 @@
     { "name": "Axe",              "item": "RIT_AXE",             "impulse": 1, "model": "progs/v_axe.mdl" },
     { "name": "Shotgun",          "item": "IT_SHOTGUN",          "impulse": 2, "model": "progs/v_shot.mdl" },
     { "name": "Super Shotgun",    "item": "IT_SUPER_SHOTGUN",    "impulse": 3, "model": "progs/v_shot2.mdl" },
-    { "name": "Nailgun",          "item": "IT_NAILGUN",          "impulse": 4, "model": "progs/v_nail.mdl" },
-    { "name": "Super Nailgun",    "item": "IT_SUPER_NAILGUN",    "impulse": 5, "model": "progs/v_nail2.mdl" },
-    { "name": "Grenade Launcher", "item": "IT_GRENADE_LAUNCHER", "impulse": 6, "model": "progs/v_rock.mdl" },
-    { "name": "Rocket Launcher",  "item": "IT_ROCKET_LAUNCHER",  "impulse": 7, "model": "progs/v_rock2.mdl" },
-    { "name": "Thunderbolt",      "item": "IT_LIGHTNING",        "impulse": 8, "model": "progs/v_light.mdl" }
+    { "name": "Nailgun",             "item": "IT_NAILGUN",             "impulse": 4, "model": "progs/v_nail.mdl" },
+    { "name": "Lava Nailgun",       "item": "RIT_LAVA_NAILGUN",       "impulse": 4, "model": "progs/v_lava.mdl" },
+    { "name": "Super Nailgun",      "item": "IT_SUPER_NAILGUN",       "impulse": 5, "model": "progs/v_nail2.mdl" },
+    { "name": "Lava Super Nailgun", "item": "RIT_LAVA_SUPER_NAILGUN", "impulse": 5, "model": "progs/v_lava2.mdl" },
+    { "name": "Grenade Launcher",   "item": "IT_GRENADE_LAUNCHER",    "impulse": 6, "model": "progs/v_rock.mdl" },
+    { "name": "Multi-Grenade Launcher", "item": "RIT_MULTI_GRENADE",   "impulse": 6, "model": "progs/v_multi.mdl" },
+    { "name": "Rocket Launcher",    "item": "IT_ROCKET_LAUNCHER",     "impulse": 7, "model": "progs/v_rock2.mdl" },
+    { "name": "Multi-Rocket Launcher", "item": "RIT_MULTI_ROCKET",     "impulse": 7, "model": "progs/v_multi2.mdl" },
+    { "name": "Thunderbolt",        "item": "IT_LIGHTNING",            "impulse": 8, "model": "progs/v_light.mdl" },
+    { "name": "Plasma Gun",         "item": "RIT_PLASMA_GUN",          "impulse": 8, "model": "progs/v_plasma.mdl" }
   ],
 
   "dopa": [

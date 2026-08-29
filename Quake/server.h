@@ -266,6 +266,9 @@ extern	client_t	*host_client;
 
 extern	edict_t		*sv_player;
 
+void SV_CalcStats(client_t *client, int *statsi, float *statsf, const char **statss);
+void SV_XRUpdateLocalStats (edict_t *ent);
+
 //===========================================================
 
 void SV_Init (void);

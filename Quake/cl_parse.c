@@ -27,6 +27,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 extern void VID_XR_Haptic (int hand, float amplitude, float duration_seconds);
 
+static int cl_network_ammo[4];
+static qboolean cl_network_ammo_valid;
+
 static void CL_XRPickupHaptic (void)
 {
 	VID_XR_Haptic (0, 0.8f, 0.08f);
@@ -719,6 +722,8 @@ void CL_ParseClientdata (void)
 {
 	int		i, j;
 	int		bits; //johnfitz
+	if (cls.signon != SIGNONS)
+		cl_network_ammo_valid = false;
 
 	bits = (unsigned short)MSG_ReadShort (); //johnfitz -- read bits here isntead of in CL_ParseServerMessage()
 
@@ -833,14 +838,16 @@ void CL_ParseClientdata (void)
 	for (i = 0; i < 4; i++)
 	{
 		j = MSG_ReadByte ();
-		if (cl.stats[STAT_SHELLS+i] != j)
+		if (cl.stats[STAT_SHELLS+i] != j || !cl_network_ammo_valid || cl_network_ammo[i] != j)
 		{
-			if (j > cl.stats[STAT_SHELLS+i] && cls.signon == SIGNONS)
+			if (cl_network_ammo_valid && j > cl_network_ammo[i] && cls.signon == SIGNONS)
 					CL_XRPickupHaptic ();
-		cl.stats[STAT_SHELLS+i] = j;
+			cl_network_ammo[i] = j;
 			Sbar_Changed ();
 		}
+		cl.stats[STAT_SHELLS+i] = j;
 	}
+	cl_network_ammo_valid = true;
 
 	i = MSG_ReadByte ();
 

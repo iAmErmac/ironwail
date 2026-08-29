@@ -203,10 +203,13 @@ static void R_DrawSpriteModel_Real (entity_t *e, qboolean showtris)
 	float			*s_up, *s_right;
 	float			angle, sr, cr;
 	spritevert_t	*verts;
+	vec3_t		origin;
 	float			scale = ENTSCALE_DECODE(e->scale);
 
 	frame = R_GetSpriteFrame (e);
 	psprite = (msprite_t *) e->model->cache.data;
+	VectorCopy (e->origin, origin);
+	R_ApplyXRProjectileVisualOffset (e, origin);
 
 	switch(psprite->type)
 	{
@@ -220,7 +223,7 @@ static void R_DrawSpriteModel_Real (entity_t *e, qboolean showtris)
 		s_right = v_right;
 		break;
 	case SPR_FACING_UPRIGHT: //faces camera origin, up is towards the heavens
-		VectorSubtract(e->origin, r_origin, v_forward);
+		VectorSubtract(origin, r_origin, v_forward);
 		v_forward[2] = 0;
 		VectorNormalizeFast(v_forward);
 		v_right[0] = v_forward[1];
@@ -271,7 +274,7 @@ static void R_DrawSpriteModel_Real (entity_t *e, qboolean showtris)
 	verts = batchverts + numbatchquads * 4;
 	++numbatchquads;
 
-	VectorMA (e->origin, frame->down * scale, s_up, verts[0].pos);
+	VectorMA (origin, frame->down * scale, s_up, verts[0].pos);
 	VectorMA (verts[0].pos, frame->left * scale, s_right, verts[0].pos);
 	verts[0].uv[0] = 0.f;
 	verts[0].uv[1] = frame->tmax;

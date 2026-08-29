@@ -61,6 +61,19 @@ static iw_xr_hand_t visual_fire_hand;
 static double visual_fire_deadline;
 static qboolean visual_fire_active[IW_XR_HAND_COUNT], visual_fire_second[IW_XR_HAND_COUNT];
 static int visual_fire_weapon[IW_XR_HAND_COUNT];
+typedef struct
+{
+    qboolean valid;
+    iw_xr_hand_t hand;
+    int weapon;
+    qboolean second_offset;
+    double expire;
+} xr_local_projectile_spawn_t;
+static xr_local_projectile_spawn_t xr_local_projectile_spawns[MAX_EDICTS];
+static qboolean offhand_fire_input_suppressed;
+static qboolean main_fire_input_active;
+static qboolean local_offhand_fired_this_frame;
+static double fire_haptic_next_time[IW_XR_HAND_COUNT];
 static struct { int entity; double deadline; } offhand_beam;
 
 static qboolean offhand_continuous_auto_sound_played;
@@ -98,14 +111,7 @@ static void xr_update_visual_fire_state(iw_xr_hand_t hand, qboolean active, int 
 
 qboolean XR_Interaction_GetVisualFireHand (iw_xr_hand_t *hand)
 {
-    iw_xr_hand_t offhand;
     if (!hand) return false;
-    offhand = XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND);
-    if (offhand_attack_active && visual_fire_active[offhand])
-    {
-        *hand = offhand;
-        return true;
-    }
     *hand = visual_fire_deadline > realtime ? visual_fire_hand : XR_Input_PhysicalHandForRole (XR_HAND_MAINHAND);
     return true;
 }
@@ -113,10 +119,66 @@ qboolean XR_Interaction_GetVisualFireHand (iw_xr_hand_t *hand)
 qboolean XR_Interaction_UseSecondVisualProjectileOffset(iw_xr_hand_t hand)
 {
     qboolean second;
-    if (hand < 0 || hand >= IW_XR_HAND_COUNT || !visual_fire_active[hand]) return false;
+    if (hand < 0 || hand >= IW_XR_HAND_COUNT) return false;
     second = visual_fire_second[hand];
     visual_fire_second[hand] = !visual_fire_second[hand];
     return second;
+}
+
+void XR_Interaction_RecordLocalProjectileSpawn(int entity, iw_xr_hand_t hand, int weapon)
+{
+    xr_local_projectile_spawn_t *spawn;
+    if (cl.maxclients != 1 || entity <= 0 || entity >= MAX_EDICTS || hand < 0 || hand >= IW_XR_HAND_COUNT)
+        return;
+    spawn = &xr_local_projectile_spawns[entity];
+    memset(spawn, 0, sizeof(*spawn));
+    spawn->valid = true;
+    spawn->hand = hand;
+    spawn->weapon = weapon;
+    if (!visual_fire_active[hand])
+        visual_fire_second[hand] = false;
+    spawn->second_offset = visual_fire_second[hand];
+    visual_fire_second[hand] = !visual_fire_second[hand];
+    spawn->expire = realtime + 0.5;
+}
+
+qboolean XR_Interaction_ConsumeLocalProjectileSpawn(int entity, iw_xr_hand_t *hand, int *weapon, qboolean *second_offset)
+{
+    xr_local_projectile_spawn_t *spawn;
+    if (entity <= 0 || entity >= MAX_EDICTS || !hand || !weapon || !second_offset)
+        return false;
+    spawn = &xr_local_projectile_spawns[entity];
+    if (!spawn->valid || realtime >= spawn->expire)
+    {
+        memset(spawn, 0, sizeof(*spawn));
+        return false;
+    }
+    *hand = spawn->hand;
+    *weapon = spawn->weapon;
+    *second_offset = spawn->second_offset;
+    memset(spawn, 0, sizeof(*spawn));
+    return true;
+}
+
+void XR_Interaction_ClearLocalProjectileSpawns(void)
+{
+    memset(xr_local_projectile_spawns, 0, sizeof(xr_local_projectile_spawns));
+}
+
+qboolean XR_Interaction_AllowOffhandFireInput(void)
+{
+    return !offhand_fire_input_suppressed;
+}
+
+void XR_Interaction_NotifyWeaponFire(iw_xr_hand_t hand, float previous_attack_finished, float attack_finished, double time)
+{
+    float cadence;
+    if (hand < 0 || hand >= IW_XR_HAND_COUNT || attack_finished <= time + 0.001 ||
+        fabsf(attack_finished - previous_attack_finished) <= 0.001f || realtime < fire_haptic_next_time[hand])
+        return;
+    VID_XR_Haptic(hand, 0.35f, 0.025f);
+    cadence = (float)(attack_finished - time);
+    fire_haptic_next_time[hand] = realtime + CLAMP(0.025f, cadence, 0.5f);
 }
 static entity_t offhand_fire_main_viewmodel;
 static qboolean offhand_fire_main_viewmodel_valid;
@@ -136,7 +198,11 @@ static double wheel_spin_time;
 static void xr_weaponwheel_reload_f(void);
 static void xr_weaponwheel_resolve_models(void);
 static iw_xr_hand_t xr_mainhand(void) { return XR_Input_PhysicalHandForRole(XR_HAND_MAINHAND); }
-static qboolean xr_offhand_continuous_weapon (void) { return offhand_weapon_item == IT_NAILGUN || offhand_weapon_item == IT_SUPER_NAILGUN || offhand_weapon_item == IT_LIGHTNING || offhand_weapon_item == HIT_LASER_CANNON; }
+static qboolean xr_offhand_continuous_weapon (void) {
+    return offhand_weapon_item == IT_NAILGUN || offhand_weapon_item == IT_SUPER_NAILGUN ||
+        offhand_weapon_item == IT_LIGHTNING || offhand_weapon_item == HIT_LASER_CANNON ||
+        (rogue && (offhand_weapon_item == RIT_LAVA_NAILGUN || offhand_weapon_item == RIT_LAVA_SUPER_NAILGUN));
+}
 static void xr_weaponwheel_bind_down(void) { wheel_bind_active = true; }
 static void xr_weaponwheel_bind_up(void) { wheel_bind_active = false; }
 static void xr_offhand_weaponwheel_bind_down(void) { offhand_wheel_bind_active = true; }
@@ -197,11 +263,22 @@ static void xr_wheel_cursor_from_pose(void)
 
 static qboolean xr_offhand_weapon_has_ammo (int item)
 {
+    if (item == HIT_LASER_CANNON) return cl.stats[STAT_CELLS] > 0;
+    if (hipnotic) {
+        if (item == HIT_PROXIMITY_GUN) return cl.stats[STAT_ROCKETS] > 0;
+        if (item == HIT_MJOLNIR) return cl.stats[STAT_CELLS] > 0;
+    }
+    if (rogue) {
+        if (item == RIT_LAVA_NAILGUN || item == RIT_LAVA_SUPER_NAILGUN) return cl.stats[STAT_NAILS] > 0;
+        if (item == RIT_MULTI_GRENADE || item == RIT_MULTI_ROCKET) return cl.stats[STAT_ROCKETS] > 0;
+        if (item == RIT_PLASMA_GUN) return cl.stats[STAT_CELLS] > 0;
+        if (item == RIT_AXE) return true;
+    }
     switch (item) {
     case IT_SHOTGUN: case IT_SUPER_SHOTGUN: return cl.stats[STAT_SHELLS] > 0;
     case IT_NAILGUN: case IT_SUPER_NAILGUN: return cl.stats[STAT_NAILS] > 0;
     case IT_GRENADE_LAUNCHER: case IT_ROCKET_LAUNCHER: return cl.stats[STAT_ROCKETS] > 0;
-    case IT_LIGHTNING: case HIT_LASER_CANNON: return cl.stats[STAT_CELLS] > 0;
+    case IT_LIGHTNING: return cl.stats[STAT_CELLS] > 0;
     default: return true;
     }
 }
@@ -269,6 +346,22 @@ static void xr_select_weapon_item(int item)
 {
     int slot = xr_weapon_slot_index(item);
     if (slot >= 0) Cbuf_AddText(va("impulse %i\n", xr_weapons[slot].impulse));
+}
+
+static void xr_offhand_fire_cancel(void)
+{
+    int restore_item = offhand_fire.main_item;
+    if (!restore_item && offhand_transfer.active)
+        restore_item = offhand_transfer.expected_main;
+    if (restore_item)
+        xr_select_weapon_item(restore_item);
+    offhand_transfer.active = false;
+    offhand_attack_active = false;
+    offhand_fire.phase = 0;
+    offhand_fire.item = 0;
+    offhand_fire.main_item = 0;
+    offhand_fire.presentation_frame_valid = false;
+    offhand_fire_main_viewmodel_valid = false;
 }
 
 /* Multiplayer temporarily selects the offhand weapon for the canonical network command, while preserving the main-hand viewmodel locally. */
@@ -551,6 +644,23 @@ static qmodel_t *xr_weaponwheel_find_model(const char *name)
     return VR_GetWeaponModel(Mod_ForName(name, false));
 }
 
+static void xr_weaponwheel_add_builtin_slot(int item, int impulse, const char *name, const char *model)
+{
+    int slot = xr_weapon_count;
+    if (slot >= (int)Q_COUNTOF(xr_weapons)) return;
+    xr_weapons[slot].item = item;
+    xr_weapons[slot].impulse = impulse;
+    xr_weapons[slot].replaces_item = 0;
+    xr_weapons[slot].local_field_value = 0;
+    q_strlcpy(xr_weapon_names[slot], name, sizeof(xr_weapon_names[slot]));
+    xr_weapons[slot].name = xr_weapon_names[slot];
+    xr_weapons[slot].model = NULL;
+    q_strlcpy(xr_weapon_models[slot], model, sizeof(xr_weapon_models[slot]));
+    xr_weapon_local_fields[slot][0] = 0;
+    xr_weapon_local_field_values[slot] = 0;
+    ++xr_weapon_count;
+}
+
 static void xr_weaponwheel_set_builtin_slots(void)
 {
     static const int items[8] = {IT_AXE, IT_SHOTGUN, IT_SUPER_SHOTGUN, IT_NAILGUN,
@@ -570,6 +680,22 @@ static void xr_weaponwheel_set_builtin_slots(void)
         q_strlcpy(xr_weapon_models[i], xr_builtin_model_paths[i], sizeof(xr_weapon_models[i]));
     }
     xr_weapon_count = 8;
+
+    if (hipnotic)
+    {
+        xr_weaponwheel_add_builtin_slot(HIT_MJOLNIR, 226, "Mjolnir", "progs/v_hammer.mdl");
+        xr_weaponwheel_add_builtin_slot(HIT_PROXIMITY_GUN, 6, "Proximity Gun", "progs/v_prox.mdl");
+        xr_weaponwheel_add_builtin_slot(HIT_LASER_CANNON, 225, "Laser Cannon", "progs/v_laserg.mdl");
+    }
+    else if (rogue)
+    {
+        xr_weapons[0].item = RIT_AXE;
+        xr_weaponwheel_add_builtin_slot(RIT_LAVA_NAILGUN, 4, "Lava Nailgun", "progs/v_lava.mdl");
+        xr_weaponwheel_add_builtin_slot(RIT_LAVA_SUPER_NAILGUN, 5, "Lava Super Nailgun", "progs/v_lava2.mdl");
+        xr_weaponwheel_add_builtin_slot(RIT_MULTI_GRENADE, 6, "Multi-Grenade Launcher", "progs/v_multi.mdl");
+        xr_weaponwheel_add_builtin_slot(RIT_MULTI_ROCKET, 7, "Multi-Rocket Launcher", "progs/v_multi2.mdl");
+        xr_weaponwheel_add_builtin_slot(RIT_PLASMA_GUN, 8, "Plasma Gun", "progs/v_plasma.mdl");
+    }
 }
 
 static void xr_weaponwheel_apply_extension_entry(const jsonentry_t *entry)
@@ -800,7 +926,7 @@ void XR_Interaction_Init(void)
 
 void XR_Interaction_Shutdown(void)
 {
-    xr_wheel_close(); xr_keyboard_close(); xr_virtual_pointer_clear(); wheel_bind_active = offhand_wheel_bind_active = false; offhand_weapon_item = 0; offhand_transfer.active = false; offhand_fire.phase = 0; offhand_local_fire.executing = false; offhand_local_fire.frame = offhand_local_fire.attack_finished = 0.f; offhand_fire_main_viewmodel_valid = false; visual_fire_deadline = 0.0; memset(visual_fire_active, 0, sizeof(visual_fire_active)); memset(visual_fire_second, 0, sizeof(visual_fire_second)); memset(visual_fire_weapon, 0, sizeof(visual_fire_weapon)); keyboard_trigger_suppressed = false; virtual_mouse_trigger_suppressed = false; two_hand_wheel_suppressed = false; vignette_value = 0.f; vignette_yaw_valid = false;
+    xr_wheel_close(); xr_keyboard_close(); xr_virtual_pointer_clear(); wheel_bind_active = offhand_wheel_bind_active = false; offhand_weapon_item = 0; offhand_transfer.active = false; offhand_fire.phase = 0; offhand_local_fire.executing = false; offhand_local_fire.frame = offhand_local_fire.attack_finished = 0.f; offhand_fire_main_viewmodel_valid = false; offhand_fire_input_suppressed = false; main_fire_input_active = false; local_offhand_fired_this_frame = false; visual_fire_deadline = 0.0; memset(visual_fire_active, 0, sizeof(visual_fire_active)); memset(visual_fire_second, 0, sizeof(visual_fire_second)); memset(visual_fire_weapon, 0, sizeof(visual_fire_weapon)); memset(xr_local_projectile_spawns, 0, sizeof(xr_local_projectile_spawns)); memset(fire_haptic_next_time, 0, sizeof(fire_haptic_next_time)); keyboard_trigger_suppressed = false; virtual_mouse_trigger_suppressed = false; two_hand_wheel_suppressed = false; vignette_value = 0.f; vignette_yaw_valid = false;
 }
 
 void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
@@ -808,19 +934,15 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
     int dominant, offhand, mouse_hand; float move, yaw_delta; qboolean grip, main_grip, offhand_grip, wheel_hold, trigger, mouse_trigger, mouse_confirm, mouse_grip, menu_combo, both_grips;
     if (!actions || !actions->active) { XR_Interaction_Shutdown(); return; }
     xr_weaponwheel_update_local_fields();
-    xr_offhand_transfer_update();
-    xr_offhand_fire_update();
-    if (!offhand_attack_active && xr_offhand_continuous_weapon ())
-    {
-        offhand_local_fire.animation_active = false;
-        XR_Interaction_ResetOffhandContinuousAudio ();
-    }
-    if (offhand_weapon_item && (!xr_wheel_item_available(offhand_weapon_item) || !xr_offhand_weapon_has_ammo (offhand_weapon_item) ||
+    /* Keep a held weapon selected when its ammo reaches zero, like the main hand. */
+    if (offhand_weapon_item && (!xr_wheel_item_available(offhand_weapon_item) ||
         (!offhand_transfer.active && cl.stats[STAT_ACTIVEWEAPON] == offhand_weapon_item))) {
         offhand_weapon_item = 0;
         xr_offhand_reset_local_fire();
     }
-    if (offhand_local_fire.frame && cl.time >= offhand_local_fire.next_attack_time) offhand_local_fire.frame = 0.f;
+    if (offhand_local_fire.frame && cl.time >= offhand_local_fire.next_attack_time &&
+        !xr_offhand_continuous_weapon ())
+        offhand_local_fire.frame = 0.f;
     if (key_dest != key_game) wheel_bind_active = offhand_wheel_bind_active = false;
     if (wheel_active && !xr_can_wheel()) xr_wheel_close();
     dominant = XR_Input_PhysicalHandForRole(XR_HAND_MAINHAND); offhand = XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND); mouse_hand = XR_Input_MouseHand();
@@ -832,8 +954,21 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
     else if (!main_grip && !offhand_grip) two_hand_wheel_suppressed = false;
     trigger = (actions->hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) != 0;
     mouse_trigger = (actions->hand[mouse_hand].buttons & IW_XR_BUTTON_TRIGGER) != 0;
+    main_fire_input_active = trigger;
+    local_offhand_fired_this_frame = false;
+    offhand_fire_input_suppressed = cl.maxclients > 1 && trigger;
+    if (offhand_fire_input_suppressed)
+        xr_offhand_fire_cancel();
+    xr_offhand_transfer_update();
+    xr_offhand_fire_update();
+    if (!offhand_attack_active && xr_offhand_continuous_weapon ())
     {
-        qboolean main_fire = trigger && !offhand_attack_active;
+        offhand_local_fire.animation_active = false;
+        offhand_local_fire.frame = 0.f;
+        XR_Interaction_ResetOffhandContinuousAudio ();
+    }
+    {
+        qboolean main_fire = trigger;
         qboolean offhand_fire_active = offhand_attack_active && offhand_weapon_item && (cl.maxclients == 1 || offhand_fire.phase == 2);
         xr_update_visual_fire_state((iw_xr_hand_t)dominant, main_fire, XR_Interaction_MainhandWeaponItem());
         xr_update_visual_fire_state((iw_xr_hand_t)offhand, offhand_fire_active, offhand_weapon_item);
@@ -935,21 +1070,52 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
 qboolean XR_Interaction_ConsumesGameplay(void) { return wheel_active || keyboard_active || keyboard_trigger_suppressed || virtual_mouse_trigger || virtual_mouse_trigger_suppressed; }
 qboolean XR_Interaction_WheelActive(void) { return wheel_active; }
 qboolean XR_Interaction_OffhandAttackActive(void) { return offhand_attack_active && offhand_weapon_item && !wheel_active; }
+qboolean XR_Interaction_MainhandFireInputActive(void) { return main_fire_input_active; }
+qboolean XR_Interaction_ConsumeLocalOffhandFireEvent(void)
+{
+    qboolean fired = local_offhand_fired_this_frame;
+    local_offhand_fired_this_frame = false;
+    return fired;
+}
 qboolean XR_Interaction_LocalOffhandAttackRequested(void) { return cl.maxclients == 1 && XR_Interaction_OffhandAttackActive(); }
 qboolean XR_Interaction_LocalOffhandAttackReady(double time) { return XR_Interaction_LocalOffhandAttackRequested () && time >= offhand_local_fire.next_attack_time; }
 void XR_Interaction_SetLocalOffhandCooldown(double time, float attack_finished)
 {
     float delay;
+    if (offhand_weapon_item == HIT_LASER_CANNON) {
+        delay = 0.1f;
+        goto cooldown_ready;
+    }
+    if (hipnotic) {
+        switch (offhand_weapon_item) {
+        case HIT_MJOLNIR: delay = 0.5f; break;
+        case HIT_PROXIMITY_GUN: delay = 0.6f; break;
+        default: delay = -1.f; break;
+        }
+        if (delay >= 0.f) goto cooldown_ready;
+    }
+    if (rogue) {
+        switch (offhand_weapon_item) {
+        case RIT_AXE: delay = 0.5f; break;
+        case RIT_LAVA_NAILGUN: case RIT_LAVA_SUPER_NAILGUN: delay = 0.1f; break;
+        case RIT_MULTI_GRENADE: delay = 0.6f; break;
+        case RIT_MULTI_ROCKET: delay = 0.8f; break;
+        case RIT_PLASMA_GUN: delay = 0.2f; break;
+        default: delay = -1.f; break;
+        }
+        if (delay >= 0.f) goto cooldown_ready;
+    }
     switch (offhand_weapon_item) {
     case IT_AXE: delay = 0.5f; break;
     case IT_SHOTGUN: delay = 0.5f; break;
     case IT_SUPER_SHOTGUN: delay = 0.7f; break;
-    case IT_NAILGUN: case IT_SUPER_NAILGUN: case IT_LIGHTNING: delay = 0.1f; break;
-    case HIT_LASER_CANNON: delay = 0.1f; break;
+    case IT_NAILGUN: case IT_SUPER_NAILGUN: case IT_LIGHTNING:
+        delay = 0.1f; break;
     case IT_GRENADE_LAUNCHER: delay = 0.6f; break;
     case IT_ROCKET_LAUNCHER: delay = 0.8f; break;
     default: delay = 0.2f; break;
     }
+cooldown_ready:
     if (xr_offhand_continuous_weapon ())
         offhand_local_fire.next_attack_time = time + delay;
     else
@@ -971,9 +1137,20 @@ void XR_Interaction_BeginLocalOffhandAnimation(double time, float frame)
     offhand_local_fire.animation_end_time = time;
 }
 
+void XR_Interaction_LocalOffhandAttackResult(qboolean fired, qboolean ammo_empty)
+{
+    if (fired)
+        local_offhand_fired_this_frame = true;
+    if (fired && !ammo_empty)
+        return;
+    offhand_attack_active = false;
+    offhand_weapon_item = 0;
+    xr_offhand_reset_local_fire ();
+    xr_update_visual_fire_state (XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND), false, 0);
+}
+
 void XR_Interaction_SetLocalOffhandWeaponState(float frame, float attack_finished) {
-    if (attack_finished > offhand_local_fire.attack_finished + 0.001f)
-        VID_XR_Haptic(XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND), 0.35f, 0.025f);
+    XR_Interaction_NotifyWeaponFire(XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND), offhand_local_fire.attack_finished, attack_finished, cl.time);
     offhand_local_fire.frame = frame;
     offhand_local_fire.attack_finished = attack_finished;
     if (frame > 0.f)
@@ -989,6 +1166,8 @@ static float xr_local_offhand_presentation_frame(int numframes)
     float interval = 0.1f;
     double animation_finished_time;
     int first, frame;
+    if (xr_offhand_continuous_weapon ())
+        return offhand_local_fire.animation_active ? offhand_local_fire.frame : 0.f;
     if (!offhand_local_fire.animation_active || numframes <= 1)
         return offhand_local_fire.frame;
     first = CLAMP(0, (int)offhand_local_fire.animation_start_frame, numframes - 1);
@@ -1066,6 +1245,13 @@ qboolean XR_Interaction_GetMainhandViewmodel(entity_t *out)
     if (!out || wheel_active || !offhand_fire_main_viewmodel_valid) return false;
     *out = offhand_fire_main_viewmodel;
     return true;
+}
+
+qboolean XR_Interaction_GetFireViewmodel(int weapon, entity_t *out)
+{
+    if (!out || !weapon)
+        return false;
+    return xr_get_weapon_viewmodel(out, weapon, false);
 }
 
 static int xr_alias_frame_count (qmodel_t *model)

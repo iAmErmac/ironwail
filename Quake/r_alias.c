@@ -375,6 +375,8 @@ anim = (int)(cl.time * 10) & 3;
         state = GLS_CULL_BACK | GLS_ATTRIBS (5);
     else
         state = GLS_CULL_BACK | GLS_ATTRIBS (1);
+    if (ibuf.ent->wheel_scale > 0.f)
+        state = (state & ~GLS_MASK_CULL) | GLS_CULL_NONE;
 #endif
 
 	if (R_XRViewmodelMirrored (ibuf.ent))
@@ -604,6 +606,10 @@ static qboolean R_Alias_CanAddToBatch (const entity_t *e)
 
 	// players have custom colors
 	if (!gl_nocolors.value && CL_IsPlayerEnt (ibuf.ent))
+		return false;
+
+	// Wheel previews need a separate culling state from normal entities.
+	if ((ibuf.ent->wheel_scale > 0.f) != (e->wheel_scale > 0.f))
 		return false;
 
 	return true;

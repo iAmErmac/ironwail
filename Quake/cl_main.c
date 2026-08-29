@@ -24,6 +24,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "bgmusic.h"
 #include "android_lifecycle.h"
+#include "xr_interaction.h"
 
 // we need to declare some mouse variables here, because the menu system
 // references them even when on a unix system.
@@ -115,6 +116,7 @@ void CL_ClearState (void)
 	memset (cl_temp_entities, 0, sizeof(cl_temp_entities));
 	memset (cl_beams, 0, sizeof(cl_beams));
 	R_ClearXRProjectileVisualCache ();
+	XR_Interaction_ClearLocalProjectileSpawns ();
 
 	//johnfitz -- cl_entities is now dynamically allocated
 	cl_max_edicts = CLAMP (MIN_EDICTS,(int)max_edicts.value,MAX_EDICTS);
@@ -752,6 +754,13 @@ int CL_ReadFromServer (void)
 
 	CL_RelinkEntities ();
 	CL_UpdateTEnts ();
+	if (sv.active && sv_player)
+	{
+		qcvm_t *oldvm;
+		PR_PushQCVM (&sv.qcvm, &oldvm);
+		SV_XRUpdateLocalStats (sv_player);
+		PR_PopQCVM (oldvm);
+	}
 
 //johnfitz -- devstats
 

@@ -318,7 +318,7 @@ static qboolean R_XRLaserHiddenForMelee (int weapon)
     return vr_laser_hide_melee.value != 0.f && (weapon == IT_AXE || weapon == RIT_AXE || weapon == HIT_MJOLNIR);
 }
 
-static qboolean R_XRGetVisualFireModel (iw_xr_hand_t hand, const qmodel_t **model);
+static qboolean R_XRGetVisualFireModel (iw_xr_hand_t hand, int weapon, const qmodel_t **model);
 
 static void R_XRPrepareLasers (void)
 {
@@ -381,6 +381,9 @@ static qboolean R_XRIsProjectileModel (const entity_t *e)
 	return !strcmp (name, "progs/missile.mdl") || !strcmp (name, "progs/grenade.mdl") ||
 		!strcmp (name, "progs/spike.mdl") || !strcmp (name, "progs/s_spike.mdl") ||
 		!strcmp (name, "progs/laser.mdl") || !strcmp (name, "progs/lasrspik.mdl") ||
+		!strcmp (name, "progs/proxbomb.mdl") || !strcmp (name, "progs/spikmine.mdl") ||
+		!strcmp (name, "progs/lspike.mdl") || !strcmp (name, "progs/plasma.mdl") ||
+		!strcmp (name, "progs/hook.mdl") ||
 		(e->model->flags & (EF_ROCKET | EF_GRENADE | EF_TRACER | EF_TRACER2 | EF_TRACER3)) ||
 		VR_IsConfiguredProjectileModel(e->model);
 }
@@ -434,6 +437,7 @@ typedef struct
 	vec3_t origin;
 	double expire;
 	iw_xr_hand_t hand;
+	int weapon;
 	qboolean second_offset;
 	qboolean valid;
 } xr_projectile_visual_cache_t;
@@ -455,11 +459,16 @@ void R_InvalidateXRProjectileVisualCache (const entity_t *e)
 		memset (&r_xr_projectile_visual_cache[slot], 0, sizeof (r_xr_projectile_visual_cache[slot]));
 }
 
-static qboolean R_XRGetVisualFireModel (iw_xr_hand_t hand, const qmodel_t **model)
+static qboolean R_XRGetVisualFireModel (iw_xr_hand_t hand, int weapon, const qmodel_t **model)
 {
 	entity_t viewmodel;
 	if (!model)
 		return false;
+	if (weapon && XR_Interaction_GetFireViewmodel (weapon, &viewmodel))
+	{
+		*model = viewmodel.model;
+		return *model != NULL;
+	}
 	if (hand == XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND))
 	{
 		if (!XR_Interaction_GetOffhandViewmodel (&viewmodel))
@@ -473,10 +482,10 @@ static qboolean R_XRGetVisualFireModel (iw_xr_hand_t hand, const qmodel_t **mode
 	return *model != NULL;
 }
 
-static qboolean R_XRGetProjectileVisualOrigin (iw_xr_hand_t hand, qboolean second_offset, vec3_t origin)
+static qboolean R_XRGetProjectileVisualOrigin (iw_xr_hand_t hand, int weapon, qboolean second_offset, vec3_t origin)
 {
 	const qmodel_t *model;
-	if (!R_XRGetVisualFireModel (hand, &model))
+	if (!R_XRGetVisualFireModel (hand, weapon, &model))
 		return false;
 	return second_offset ? R_GetXRWeaponVisualFire2Origin (hand, model, origin) : R_GetXRWeaponVisualFireOrigin (hand, model, origin);
 }
@@ -487,7 +496,9 @@ void R_ApplyXRProjectileVisualOffset (const entity_t *e, vec3_t origin)
 	float distance, blend;
 	int slot;
 	iw_xr_hand_t hand;
+	int weapon;
 	qboolean new_projectile;
+	qboolean second_offset;
 	xr_projectile_visual_cache_t *cache;
 	/* This cache only moves the rendered copy; authoritative entity origins stay unchanged. */
 	if (!r_xr_eye_pass || !R_XRIsProjectileModel (e) || !origin || !cl_entities || cl_max_edicts <= 0)
@@ -504,16 +515,23 @@ void R_ApplyXRProjectileVisualOffset (const entity_t *e, vec3_t origin)
 	if (new_projectile)
 	{
 		memset (cache, 0, sizeof (*cache));
-		if (!XR_Interaction_GetVisualFireHand (&hand))
-			return;
+		if (!XR_Interaction_ConsumeLocalProjectileSpawn (slot, &hand, &weapon, &second_offset))
+		{
+			hand = XR_Input_PhysicalHandForRole (XR_HAND_MAINHAND);
+			if (cl.maxclients > 1)
+				XR_Interaction_GetVisualFireHand (&hand);
+			weapon = hand == XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND) ? XR_Interaction_OffhandWeaponItem () : XR_Interaction_MainhandWeaponItem ();
+			second_offset = XR_Interaction_UseSecondVisualProjectileOffset (hand);
+		}
 		cache->entity = e;
 		cache->model = e->model;
 		cache->hand = hand;
-		cache->second_offset = XR_Interaction_UseSecondVisualProjectileOffset (hand);
+		cache->weapon = weapon;
+		cache->second_offset = second_offset;
 	}
 	if (!cache->valid || cl.time >= cache->expire)
 	{
-		if (!R_XRGetProjectileVisualOrigin (cache->hand, cache->second_offset, visual_origin))
+		if (!R_XRGetProjectileVisualOrigin (cache->hand, cache->weapon, cache->second_offset, visual_origin))
 			return;
 		VectorCopy (visual_origin, cache->origin);
 		cache->expire = cl.time + 0.25;

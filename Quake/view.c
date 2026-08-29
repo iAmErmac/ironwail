@@ -212,6 +212,7 @@ qmodel_t *VR_GetWeaponModel(qmodel_t *model)
 	if (q_strncasecmp(model->name, "progs/v_", 8)) return model;
 	basename = COM_SkipPath(model->name);
 	if (hipnotic) { q_snprintf(replacement, sizeof(replacement), "progs/vr/hipnotic/%s", basename); if (COM_FileExists(replacement, NULL)) return Mod_ForName(replacement, false); }
+	if (rogue) { q_snprintf(replacement, sizeof(replacement), "progs/vr/rogue/%s", basename); if (COM_FileExists(replacement, NULL)) return Mod_ForName(replacement, false); }
 	if (mg3) { q_snprintf(replacement, sizeof(replacement), "progs/vr/mg3/%s", basename); if (COM_FileExists(replacement, NULL)) return Mod_ForName(replacement, false); }
 	q_snprintf(replacement, sizeof(replacement), "progs/vr/%s", basename);
 	if (COM_FileExists(replacement, NULL)) {
