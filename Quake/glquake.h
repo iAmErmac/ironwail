@@ -820,6 +820,7 @@ qboolean R_GetXRHandTrackingPose (iw_xr_hand_t hand, vec3_t origin, vec3_t forwa
 qboolean R_GetXRHandAimPose (iw_xr_hand_t hand, vec3_t origin, vec3_t forward, vec3_t right, vec3_t up);
 qboolean R_GetXRMainHandWeaponPose (vec3_t origin, vec3_t forward, vec3_t right, vec3_t up);
 qboolean R_GetXRWeaponVisualOrigin (iw_xr_hand_t hand, const qmodel_t *model, vec3_t origin);
+qboolean R_GetXRWeaponVisualFireOrigin (iw_xr_hand_t hand, const qmodel_t *model, vec3_t origin);
 void R_ClearXRProjectileVisualCache (void);
 void R_InvalidateXRProjectileVisualCache (const entity_t *e);
 void R_SetXRTeleportMarker (const vec3_t origin, qboolean active, uint32_t color);

@@ -750,6 +750,14 @@ if the tryents flag is set.
 traceline (vector1, vector2, tryents)
 =================
 */
+static edict_t *PF_XRTraceIgnoreEntity (edict_t *ent)
+{
+	/* The local offhand attack uses a disposable QuakeC entity, but its traces must still ignore the canonical player. */
+	if (sv.active && cl.maxclients == 1 && XR_Interaction_UseOffhandAim () && sv_player)
+		return sv_player;
+	return ent;
+}
+
 static void PF_traceline (void)
 {
 	float	*v1, *v2;
@@ -776,8 +784,7 @@ static void PF_traceline (void)
 		v1[0] = v1[1] = v1[2] = 0;
 	if (IS_NAN(v2[0]) || IS_NAN(v2[1]) || IS_NAN(v2[2]))
 		v2[0] = v2[1] = v2[2] = 0;
-	/* Keep the trace contract unchanged; local controller aim is supplied through makevectors. */
-	trace = SV_Move (v1, vec3_origin, vec3_origin, v2, nomonsters, ent);
+	trace = SV_Move (v1, vec3_origin, vec3_origin, v2, nomonsters, PF_XRTraceIgnoreEntity (ent));
 
 	pr_global_struct->trace_allsolid = trace.allsolid;
 	pr_global_struct->trace_startsolid = trace.startsolid;
@@ -1457,7 +1464,7 @@ static void PF_aim (void)
 // try sending a trace straight
 	VectorCopy (pr_global_struct->v_forward, dir);
 	VectorMA (start, 2048, dir, end);
-	tr = SV_Move (start, vec3_origin, vec3_origin, end, false, ent);
+	tr = SV_Move (start, vec3_origin, vec3_origin, end, false, PF_XRTraceIgnoreEntity (ent));
 	if (tr.ent && tr.ent->v.takedamage == DAMAGE_AIM
 		&& (!teamplay.value || ent->v.team <= 0 || ent->v.team != tr.ent->v.team) )
 	{
@@ -1486,7 +1493,7 @@ static void PF_aim (void)
 		dist = DotProduct (dir, pr_global_struct->v_forward);
 		if (dist < bestdist)
 			continue;	// to far to turn
-		tr = SV_Move (start, vec3_origin, vec3_origin, end, false, ent);
+		tr = SV_Move (start, vec3_origin, vec3_origin, end, false, PF_XRTraceIgnoreEntity (ent));
 		if (tr.ent == check)
 		{	// can shoot at this one
 			bestdist = dist;

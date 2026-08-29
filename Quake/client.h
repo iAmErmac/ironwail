@@ -365,6 +365,7 @@ qboolean CL_IsPlayerEnt (const entity_t *ent);
 
 void CL_ParseTEnt (void);
 void CL_UpdateTEnts (void);
+void CL_UpdateTEntsXR (void);
 
 void CL_FreeState(void);
 void CL_ClearState (void);

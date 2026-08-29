@@ -55,10 +55,12 @@ static int wheel_selection = -1, keyboard_mode, wheel_hand, keyboard_row, keyboa
 /* Each hand owns a presentation weapon; Quake retains one authoritative weapon selection. */
 static int offhand_weapon_item;
 static struct { qboolean active; int item, expected_main, haptic_hand; double deadline; } offhand_transfer;
-static struct { int phase, item, main_item; double deadline; } offhand_fire;
+static struct { int phase, item, main_item; float presentation_frame; qboolean presentation_frame_valid; double deadline; } offhand_fire;
 static struct { qboolean executing, animation_active; float frame, attack_finished, animation_start_frame; double next_attack_time, animation_start_time, animation_end_time; } offhand_local_fire;
 static iw_xr_hand_t visual_fire_hand;
 static double visual_fire_deadline;
+static qboolean visual_fire_active[IW_XR_HAND_COUNT], visual_fire_second[IW_XR_HAND_COUNT];
+static int visual_fire_weapon[IW_XR_HAND_COUNT];
 static struct { int entity; double deadline; } offhand_beam;
 
 static qboolean offhand_continuous_auto_sound_played;
@@ -78,11 +80,43 @@ static void xr_mark_visual_fire (iw_xr_hand_t hand)
     visual_fire_deadline = realtime + 0.25;
 }
 
+static void xr_update_visual_fire_state(iw_xr_hand_t hand, qboolean active, int weapon)
+{
+    if (hand < 0 || hand >= IW_XR_HAND_COUNT) return;
+    if (!active)
+    {
+        visual_fire_active[hand] = false;
+        visual_fire_second[hand] = false;
+        visual_fire_weapon[hand] = 0;
+        return;
+    }
+    if (!visual_fire_active[hand] || visual_fire_weapon[hand] != weapon)
+        visual_fire_second[hand] = false;
+    visual_fire_active[hand] = true;
+    visual_fire_weapon[hand] = weapon;
+}
+
 qboolean XR_Interaction_GetVisualFireHand (iw_xr_hand_t *hand)
 {
+    iw_xr_hand_t offhand;
     if (!hand) return false;
+    offhand = XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND);
+    if (offhand_attack_active && visual_fire_active[offhand])
+    {
+        *hand = offhand;
+        return true;
+    }
     *hand = visual_fire_deadline > realtime ? visual_fire_hand : XR_Input_PhysicalHandForRole (XR_HAND_MAINHAND);
     return true;
+}
+
+qboolean XR_Interaction_UseSecondVisualProjectileOffset(iw_xr_hand_t hand)
+{
+    qboolean second;
+    if (hand < 0 || hand >= IW_XR_HAND_COUNT || !visual_fire_active[hand]) return false;
+    second = visual_fire_second[hand];
+    visual_fire_second[hand] = !visual_fire_second[hand];
+    return second;
 }
 static entity_t offhand_fire_main_viewmodel;
 static qboolean offhand_fire_main_viewmodel_valid;
@@ -248,6 +282,7 @@ static void xr_offhand_fire_update(void)
     if (offhand_fire.phase == 0)
     {
         if (!offhand_attack_active || !offhand_weapon_item || wheel_active) return;
+        offhand_fire.presentation_frame_valid = false;
         offhand_fire.item = offhand_weapon_item;
         offhand_fire.main_item = cl.stats[STAT_ACTIVEWEAPON];
         offhand_fire_main_viewmodel = cl.viewent;
@@ -272,6 +307,8 @@ static void xr_offhand_fire_update(void)
     }
     if (offhand_fire.phase == 2 && !offhand_attack_active)
     {
+        offhand_fire.presentation_frame = cl.viewent.frame;
+        offhand_fire.presentation_frame_valid = true;
         offhand_fire.phase = 3;
         offhand_fire.deadline = realtime + 1.0;
         if (offhand_fire.main_item && offhand_fire.main_item != offhand_fire.item)
@@ -280,7 +317,11 @@ static void xr_offhand_fire_update(void)
     else if (offhand_fire.phase == 3 &&
         (cl.stats[STAT_ACTIVEWEAPON] == offhand_fire.main_item || realtime >= offhand_fire.deadline))
         offhand_fire.phase = 0;
-    if (offhand_fire.phase == 0) offhand_fire_main_viewmodel_valid = false;
+    if (offhand_fire.phase == 0)
+    {
+        offhand_fire_main_viewmodel_valid = false;
+        offhand_fire.presentation_frame_valid = false;
+    }
 }
 static int xr_wheel_fallback_slot(int excluded_item)
 {
@@ -759,7 +800,7 @@ void XR_Interaction_Init(void)
 
 void XR_Interaction_Shutdown(void)
 {
-    xr_wheel_close(); xr_keyboard_close(); xr_virtual_pointer_clear(); wheel_bind_active = offhand_wheel_bind_active = false; offhand_weapon_item = 0; offhand_transfer.active = false; offhand_fire.phase = 0; offhand_local_fire.executing = false; offhand_local_fire.frame = offhand_local_fire.attack_finished = 0.f; offhand_fire_main_viewmodel_valid = false; visual_fire_deadline = 0.0; keyboard_trigger_suppressed = false; virtual_mouse_trigger_suppressed = false; two_hand_wheel_suppressed = false; vignette_value = 0.f; vignette_yaw_valid = false;
+    xr_wheel_close(); xr_keyboard_close(); xr_virtual_pointer_clear(); wheel_bind_active = offhand_wheel_bind_active = false; offhand_weapon_item = 0; offhand_transfer.active = false; offhand_fire.phase = 0; offhand_local_fire.executing = false; offhand_local_fire.frame = offhand_local_fire.attack_finished = 0.f; offhand_fire_main_viewmodel_valid = false; visual_fire_deadline = 0.0; memset(visual_fire_active, 0, sizeof(visual_fire_active)); memset(visual_fire_second, 0, sizeof(visual_fire_second)); memset(visual_fire_weapon, 0, sizeof(visual_fire_weapon)); keyboard_trigger_suppressed = false; virtual_mouse_trigger_suppressed = false; two_hand_wheel_suppressed = false; vignette_value = 0.f; vignette_yaw_valid = false;
 }
 
 void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
@@ -791,6 +832,12 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
     else if (!main_grip && !offhand_grip) two_hand_wheel_suppressed = false;
     trigger = (actions->hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) != 0;
     mouse_trigger = (actions->hand[mouse_hand].buttons & IW_XR_BUTTON_TRIGGER) != 0;
+    {
+        qboolean main_fire = trigger && !offhand_attack_active;
+        qboolean offhand_fire_active = offhand_attack_active && offhand_weapon_item && (cl.maxclients == 1 || offhand_fire.phase == 2);
+        xr_update_visual_fire_state((iw_xr_hand_t)dominant, main_fire, XR_Interaction_MainhandWeaponItem());
+        xr_update_visual_fire_state((iw_xr_hand_t)offhand, offhand_fire_active, offhand_weapon_item);
+    }
     if (cl.maxclients > 1 && offhand_fire.phase == 2 && offhand_attack_active)
         xr_mark_visual_fire (XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND));
     else if (trigger && !offhand_attack_active)
@@ -910,6 +957,7 @@ void XR_Interaction_SetLocalOffhandCooldown(double time, float attack_finished)
 }
 void XR_Interaction_BeginLocalOffhandAttack(void) {
     offhand_local_fire.executing = true;
+    xr_update_visual_fire_state(XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND), true, offhand_weapon_item);
     xr_mark_visual_fire (XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND));
 }
 void XR_Interaction_EndLocalOffhandAttack(void) { offhand_local_fire.executing = false; }
@@ -939,6 +987,7 @@ float XR_Interaction_LocalOffhandWeaponFrame(void) { return offhand_local_fire.f
 static float xr_local_offhand_presentation_frame(int numframes)
 {
     float interval = 0.1f;
+    double animation_finished_time;
     int first, frame;
     if (!offhand_local_fire.animation_active || numframes <= 1)
         return offhand_local_fire.frame;
@@ -948,6 +997,9 @@ static float xr_local_offhand_presentation_frame(int numframes)
     frame = first + (int)((cl.time - offhand_local_fire.animation_start_time) / interval);
     if (frame >= numframes)
     {
+        animation_finished_time = offhand_local_fire.animation_start_time + (numframes - first) * interval;
+        if (cl.time < offhand_local_fire.animation_end_time || cl.time < animation_finished_time)
+            return (float)(numframes - 1);
         offhand_local_fire.animation_active = false;
         return 0.f;
     }
@@ -1031,7 +1083,14 @@ qboolean XR_Interaction_GetOffhandViewmodel(entity_t *out)
         /* Local fire preserves its own frame timeline because cl.viewent remains the main-hand presentation. */
         out->frame = (int)xr_local_offhand_presentation_frame (xr_alias_frame_count (out->model));
     }
-    else if (offhand_fire.phase == 2 && cl.stats[STAT_ACTIVEWEAPON] == offhand_weapon_item) out->frame = cl.viewent.frame;
+    else if (offhand_fire.phase == 2 && cl.stats[STAT_ACTIVEWEAPON] == offhand_weapon_item)
+    {
+        out->frame = cl.viewent.frame;
+        offhand_fire.presentation_frame = cl.viewent.frame;
+        offhand_fire.presentation_frame_valid = true;
+    }
+    else if (offhand_fire.phase == 3 && offhand_fire.presentation_frame_valid)
+        out->frame = (int)offhand_fire.presentation_frame;
     out->lerpflags = LERP_RESETMOVE | LERP_RESETANIM;
     return true;
 }

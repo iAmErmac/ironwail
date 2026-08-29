@@ -28,11 +28,12 @@ extern void VID_XR_Haptic (int hand, float amplitude, float duration_seconds);
 #include "xr_input.h"
 #include "json.h"
 extern cvar_t vr_mode, vr_weapon_replace;
+extern cvar_t vr_weapon_fire_xoffset, vr_weapon_fire_yoffset, vr_weapon_fire_zoffset;
 static qboolean vr_weapon_config_loaded;
 static json_t *vr_weapon_configs[64];
 static int vr_weapon_config_count;
 static float vr_weapon_scale = 1.f, vr_weapon_wheel_scale = 1.f;
-static vec3_t vr_weapon_offset;
+static vec3_t vr_weapon_offset, vr_weapon_fire_offset, vr_weapon_fire2_offset;
 
 static qboolean V_GameNameMatches(const char *name)
 {
@@ -53,15 +54,25 @@ static qboolean V_GameNameMatches(const char *name)
     return false;
 }
 
-static void V_ApplyVRWeaponSettings(const jsonentry_t *entry, float *scale, float *wheel_scale, vec3_t offset)
+static void V_ApplyVRWeaponSettings(const jsonentry_t *entry, float *scale, float *wheel_scale, vec3_t offset, vec3_t fire_offset, vec3_t fire2_offset)
 {
-    const double *number; const jsonentry_t *value;
+    const double *number; const jsonentry_t *value, *fire_value, *fire2_value;
     if (!entry) return;
     if ((number = JSON_FindNumber(entry, "scale"))) *scale = CLAMP(0.0625f, (float)*number, 15.9375f);
     if ((number = JSON_FindNumber(entry, "wheel_scale"))) *wheel_scale = CLAMP(0.0625f, (float)*number, 15.9375f);
     value = JSON_Find(entry, "offset", JSON_ARRAY);
     if (value && value->firstchild && value->firstchild->next && value->firstchild->next->next && value->firstchild->type == JSON_NUMBER && value->firstchild->next->type == JSON_NUMBER && value->firstchild->next->next->type == JSON_NUMBER) {
         offset[0] = (float)value->firstchild->number; offset[1] = (float)value->firstchild->next->number; offset[2] = (float)value->firstchild->next->next->number;
+    }
+    fire_value = JSON_Find(entry, "fire_offset", JSON_ARRAY);
+    fire2_value = JSON_Find(entry, "fire2_offset", JSON_ARRAY);
+    if (fire_value && fire_value->firstchild && fire_value->firstchild->next && fire_value->firstchild->next->next && fire_value->firstchild->type == JSON_NUMBER && fire_value->firstchild->next->type == JSON_NUMBER && fire_value->firstchild->next->next->type == JSON_NUMBER) {
+        fire_offset[0] = (float)fire_value->firstchild->number; fire_offset[1] = (float)fire_value->firstchild->next->number; fire_offset[2] = (float)fire_value->firstchild->next->next->number;
+        if (!(fire2_value && fire2_value->firstchild && fire2_value->firstchild->next && fire2_value->firstchild->next->next && fire2_value->firstchild->type == JSON_NUMBER && fire2_value->firstchild->next->type == JSON_NUMBER && fire2_value->firstchild->next->next->type == JSON_NUMBER))
+            VectorCopy(fire_offset, fire2_offset);
+    }
+    if (fire2_value && fire2_value->firstchild && fire2_value->firstchild->next && fire2_value->firstchild->next->next && fire2_value->firstchild->type == JSON_NUMBER && fire2_value->firstchild->next->type == JSON_NUMBER && fire2_value->firstchild->next->next->type == JSON_NUMBER) {
+        fire2_offset[0] = (float)fire2_value->firstchild->number; fire2_offset[1] = (float)fire2_value->firstchild->next->number; fire2_offset[2] = (float)fire2_value->firstchild->next->next->number;
     }
 }
 
@@ -130,7 +141,7 @@ static void V_LoadVRWeaponConfig(void)
     }
     V_LoadVRWeaponLooseConfigs(com_searchpaths);
     for (i = vr_weapon_config_count - 1; i >= 0; --i)
-        V_ApplyVRWeaponSettings(JSON_Find(vr_weapon_configs[i]->root, "default", JSON_OBJECT), &vr_weapon_scale, &vr_weapon_wheel_scale, vr_weapon_offset);
+        V_ApplyVRWeaponSettings(JSON_Find(vr_weapon_configs[i]->root, "default", JSON_OBJECT), &vr_weapon_scale, &vr_weapon_wheel_scale, vr_weapon_offset, vr_weapon_fire_offset, vr_weapon_fire2_offset);
 }
 
 static const jsonentry_t *V_FindVRWeaponSettings(const qmodel_t *model)
@@ -169,18 +180,26 @@ static qmodel_t *V_FindConfiguredWeaponReplacement(qmodel_t *model)
     return NULL;
 }
 
-static void V_GetVRWeaponSettings(const qmodel_t *model, float *scale, float *wheel_scale, vec3_t offset)
+static void V_GetVRWeaponSettings(const qmodel_t *model, float *scale, float *wheel_scale, vec3_t offset, vec3_t fire_offset, vec3_t fire2_offset)
 {
-    *scale = vr_weapon_scale; *wheel_scale = vr_weapon_wheel_scale; VectorCopy(vr_weapon_offset, offset);
+    *scale = vr_weapon_scale; *wheel_scale = vr_weapon_wheel_scale; VectorCopy(vr_weapon_offset, offset); VectorCopy(vr_weapon_fire_offset, fire_offset); VectorCopy(vr_weapon_fire2_offset, fire2_offset);
     V_LoadVRWeaponConfig();
-    *scale = vr_weapon_scale; *wheel_scale = vr_weapon_wheel_scale; VectorCopy(vr_weapon_offset, offset);
-    if (model) { int i; for (i = vr_weapon_config_count - 1; i >= 0; --i) V_ApplyVRWeaponSettings(JSON_Find(vr_weapon_configs[i]->root, model->name, JSON_OBJECT), scale, wheel_scale, offset); }
+    *scale = vr_weapon_scale; *wheel_scale = vr_weapon_wheel_scale; VectorCopy(vr_weapon_offset, offset); VectorCopy(vr_weapon_fire_offset, fire_offset); VectorCopy(vr_weapon_fire2_offset, fire2_offset);
+    if (model) { int i; for (i = vr_weapon_config_count - 1; i >= 0; --i) V_ApplyVRWeaponSettings(JSON_Find(vr_weapon_configs[i]->root, model->name, JSON_OBJECT), scale, wheel_scale, offset, fire_offset, fire2_offset); }
 }
 
 qboolean VR_IsConfiguredWeaponModel(const qmodel_t *model) { return V_FindVRWeaponSettings(model) != NULL; }
-float VR_WeaponModelScale(const qmodel_t *model) { float scale, wheel_scale; vec3_t offset; V_GetVRWeaponSettings(model, &scale, &wheel_scale, offset); return scale; }
-float VR_WeaponWheelScale(const qmodel_t *model) { float scale, wheel_scale; vec3_t offset; V_GetVRWeaponSettings(model, &scale, &wheel_scale, offset); return wheel_scale; }
-void VR_WeaponOffset(const qmodel_t *model, vec3_t offset) { float scale, wheel_scale; if (!model || (q_strncasecmp(model->name, "progs/vr/", 9) && !VR_IsConfiguredWeaponModel(model))) { offset[0] = offset[1] = offset[2] = 0.f; return; } V_GetVRWeaponSettings(model, &scale, &wheel_scale, offset); }
+qboolean VR_IsConfiguredProjectileModel(const qmodel_t *model)
+{
+    const qboolean *projectile = JSON_FindBoolean(V_FindVRWeaponSettings(model), "projectile");
+    /* Addon projectile models without Quake effect flags opt in through the manifest. */
+    return projectile && *projectile;
+}
+float VR_WeaponModelScale(const qmodel_t *model) { float scale, wheel_scale; vec3_t offset, fire_offset, fire2_offset; V_GetVRWeaponSettings(model, &scale, &wheel_scale, offset, fire_offset, fire2_offset); return scale; }
+float VR_WeaponWheelScale(const qmodel_t *model) { float scale, wheel_scale; vec3_t offset, fire_offset, fire2_offset; V_GetVRWeaponSettings(model, &scale, &wheel_scale, offset, fire_offset, fire2_offset); return wheel_scale; }
+void VR_WeaponOffset(const qmodel_t *model, vec3_t offset) { float scale, wheel_scale; vec3_t fire_offset, fire2_offset; if (!model || (q_strncasecmp(model->name, "progs/vr/", 9) && !VR_IsConfiguredWeaponModel(model))) { offset[0] = offset[1] = offset[2] = 0.f; return; } V_GetVRWeaponSettings(model, &scale, &wheel_scale, offset, fire_offset, fire2_offset); }
+void VR_WeaponFireOffset(const qmodel_t *model, vec3_t offset) { float scale, wheel_scale; vec3_t fire_offset, fire2_offset; if (!model || (q_strncasecmp(model->name, "progs/vr/", 9) && !VR_IsConfiguredWeaponModel(model))) { VectorSet(offset, vr_weapon_fire_xoffset.value, vr_weapon_fire_yoffset.value, vr_weapon_fire_zoffset.value); return; } V_GetVRWeaponSettings(model, &scale, &wheel_scale, offset, fire_offset, fire2_offset); VectorCopy(fire_offset, offset); offset[0] += vr_weapon_fire_xoffset.value; offset[1] += vr_weapon_fire_yoffset.value; offset[2] += vr_weapon_fire_zoffset.value; }
+void VR_WeaponFire2Offset(const qmodel_t *model, vec3_t offset) { float scale, wheel_scale; vec3_t fire_offset, fire2_offset; if (!model || (q_strncasecmp(model->name, "progs/vr/", 9) && !VR_IsConfiguredWeaponModel(model))) { VectorSet(offset, vr_weapon_fire_xoffset.value, vr_weapon_fire_yoffset.value, vr_weapon_fire_zoffset.value); return; } V_GetVRWeaponSettings(model, &scale, &wheel_scale, offset, fire_offset, fire2_offset); VectorCopy(fire2_offset, offset); offset[0] += vr_weapon_fire_xoffset.value; offset[1] += vr_weapon_fire_yoffset.value; offset[2] += vr_weapon_fire_zoffset.value; }
 qmodel_t *VR_GetWeaponModel(qmodel_t *model)
 {
 	char replacement[MAX_QPATH];

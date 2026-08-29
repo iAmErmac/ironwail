@@ -97,7 +97,8 @@ extern cvar_t vr_hud_size;
 extern cvar_t vr_hud_distance;
 extern cvar_t vr_hud_yoffset;
 extern cvar_t vr_hud_render_yoffset;
-extern cvar_t vr_weapon_replace, vr_weapon_pitch, vr_weapon_xoffset, vr_weapon_yoffset, vr_weapon_zoffset;
+extern cvar_t vr_weapon_replace, vr_offhand_render_flip, vr_weapon_pitch, vr_weapon_xoffset, vr_weapon_yoffset, vr_weapon_zoffset;
+extern cvar_t vr_weapon_fire_xoffset, vr_weapon_fire_yoffset, vr_weapon_fire_zoffset;
 extern cvar_t vr_laser_sight, vr_laser_beam, vr_laser_color, vr_laser_beam_width, vr_laser_beam_alpha, vr_laser_alpha, vr_laser_sight_scale, vr_laser_hide_melee;
 extern cvar_t vr_turn_mode;
 extern cvar_t vr_turn_angle;
@@ -3184,10 +3185,14 @@ void M_Menu_Gamepad_f (void)
 	end_menu ()										\
 	begin_menu (VR_WEAPON_OPTIONS, m_vr_weapon, TITLE("VR Weapon"))	\
 		item (VR_WEAPON_OPT_REPLACE, "Use VR Models" )			\
+		item (VR_WEAPON_OPT_OFFHAND_FLIP, "Flip Offhand" )	\
 		item (VR_WEAPON_OPT_PITCH, "Pitch Adjust" )			\
 		item (VR_WEAPON_OPT_XOFFSET, "X Offset" )					\
 		item (VR_WEAPON_OPT_YOFFSET, "Y Offset" )					\
 		item (VR_WEAPON_OPT_ZOFFSET, "Z Offset" )					\
+		item (VR_WEAPON_OPT_FIRE_XOFFSET, "Fire X Offset" )			\
+		item (VR_WEAPON_OPT_FIRE_YOFFSET, "Fire Y Offset" )			\
+		item (VR_WEAPON_OPT_FIRE_ZOFFSET, "Fire Z Offset" )			\
 		item (SPACER, "" )					\
 		item (VR_WEAPON_OPT_RESET, "Reset Defaults" )					\
 	end_menu ()									\
@@ -3713,10 +3718,14 @@ static void M_VR_ResetLaser (void)
 static void M_VR_ResetWeapon (void)
 {
 	Cvar_SetValueQuick (&vr_weapon_replace, 1.f);
+	Cvar_SetValueQuick (&vr_offhand_render_flip, 1.f);
 	Cvar_SetValueQuick (&vr_weapon_pitch, -45.f);
 	Cvar_SetValueQuick (&vr_weapon_xoffset, 0.f);
 	Cvar_SetValueQuick (&vr_weapon_yoffset, 0.f);
 	Cvar_SetValueQuick (&vr_weapon_zoffset, 10.f);
+	Cvar_SetValueQuick (&vr_weapon_fire_xoffset, 0.f);
+	Cvar_SetValueQuick (&vr_weapon_fire_yoffset, 0.f);
+	Cvar_SetValueQuick (&vr_weapon_fire_zoffset, 0.f);
 }
 typedef enum
 {
@@ -3887,6 +3896,9 @@ void M_AdjustSliders (int dir)
 	case VR_WEAPON_OPT_REPLACE:
 		Cvar_SetValueQuick (&vr_weapon_replace, !vr_weapon_replace.value);
 		break;
+	case VR_WEAPON_OPT_OFFHAND_FLIP:
+		Cvar_SetValueQuick (&vr_offhand_render_flip, !vr_offhand_render_flip.value);
+		break;
 	case VR_WEAPON_OPT_PITCH:
 		Cvar_SetValueQuick (&vr_weapon_pitch, CLAMP (-90.f, vr_weapon_pitch.value + dir, 90.f));
 		break;
@@ -3898,6 +3910,15 @@ void M_AdjustSliders (int dir)
 		break;
 	case VR_WEAPON_OPT_ZOFFSET:
 		Cvar_SetValueQuick (&vr_weapon_zoffset, CLAMP (-100.f, vr_weapon_zoffset.value + dir, 100.f));
+		break;
+	case VR_WEAPON_OPT_FIRE_XOFFSET:
+		Cvar_SetValueQuick (&vr_weapon_fire_xoffset, CLAMP (-100.f, vr_weapon_fire_xoffset.value + dir, 100.f));
+		break;
+	case VR_WEAPON_OPT_FIRE_YOFFSET:
+		Cvar_SetValueQuick (&vr_weapon_fire_yoffset, CLAMP (-100.f, vr_weapon_fire_yoffset.value + dir, 100.f));
+		break;
+	case VR_WEAPON_OPT_FIRE_ZOFFSET:
+		Cvar_SetValueQuick (&vr_weapon_fire_zoffset, CLAMP (-100.f, vr_weapon_fire_zoffset.value + dir, 100.f));
 		break;
 	case VR_LASER_OPT_SIGHT:
 		Cvar_SetValueQuick (&vr_laser_sight, !vr_laser_sight.value);
@@ -4392,6 +4413,15 @@ qboolean M_SetSliderValue (int option, float f)
 	case VR_WEAPON_OPT_ZOFFSET:
 		Cvar_SetValueQuick (&vr_weapon_zoffset, -100.f + f * 200.f);
 		return true;
+	case VR_WEAPON_OPT_FIRE_XOFFSET:
+		Cvar_SetValueQuick (&vr_weapon_fire_xoffset, -100.f + f * 200.f);
+		return true;
+	case VR_WEAPON_OPT_FIRE_YOFFSET:
+		Cvar_SetValueQuick (&vr_weapon_fire_yoffset, -100.f + f * 200.f);
+		return true;
+	case VR_WEAPON_OPT_FIRE_ZOFFSET:
+		Cvar_SetValueQuick (&vr_weapon_fire_zoffset, -100.f + f * 200.f);
+		return true;
 	case VR_LASER_OPT_DOT_SCALE:
 		Cvar_SetValueQuick (&vr_laser_sight_scale, 0.1f + f * 9.9f);
 		return true;
@@ -4714,6 +4744,9 @@ static void M_Options_DrawItem (int y, int item)
 	case VR_WEAPON_OPT_REPLACE:
 		M_DrawCheckbox (x, y, vr_weapon_replace.value);
 		break;
+	case VR_WEAPON_OPT_OFFHAND_FLIP:
+		M_DrawCheckbox (x, y, vr_offhand_render_flip.value);
+		break;
 	case VR_WEAPON_OPT_PITCH:
 		M_DrawSlider (x, y, (vr_weapon_pitch.value + 90.f) / 180.f, va ("%.0f", vr_weapon_pitch.value));
 		break;
@@ -4725,6 +4758,15 @@ static void M_Options_DrawItem (int y, int item)
 		break;
 	case VR_WEAPON_OPT_ZOFFSET:
 		M_DrawSlider (x, y, (vr_weapon_zoffset.value + 100.f) / 200.f, va ("%.0f", vr_weapon_zoffset.value));
+		break;
+	case VR_WEAPON_OPT_FIRE_XOFFSET:
+		M_DrawSlider (x, y, (vr_weapon_fire_xoffset.value + 100.f) / 200.f, va ("%.0f", vr_weapon_fire_xoffset.value));
+		break;
+	case VR_WEAPON_OPT_FIRE_YOFFSET:
+		M_DrawSlider (x, y, (vr_weapon_fire_yoffset.value + 100.f) / 200.f, va ("%.0f", vr_weapon_fire_yoffset.value));
+		break;
+	case VR_WEAPON_OPT_FIRE_ZOFFSET:
+		M_DrawSlider (x, y, (vr_weapon_fire_zoffset.value + 100.f) / 200.f, va ("%.0f", vr_weapon_fire_zoffset.value));
 		break;
 	case VR_LASER_OPT_SIGHT:
 		M_DrawCheckbox (x, y, vr_laser_sight.value);
@@ -5382,6 +5424,9 @@ void M_Options_Key (int k)
 			break;
 		case VR_WEAPON_OPT_REPLACE:
 			Cvar_SetValueQuick (&vr_weapon_replace, !vr_weapon_replace.value);
+			break;
+		case VR_WEAPON_OPT_OFFHAND_FLIP:
+			Cvar_SetValueQuick (&vr_offhand_render_flip, !vr_offhand_render_flip.value);
 			break;
 		case VR_WEAPON_OPT_RESET:
 			M_VR_ResetWeapon ();
