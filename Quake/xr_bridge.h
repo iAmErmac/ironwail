@@ -59,6 +59,8 @@ typedef struct {
     float aim_orientation[4];
     float grip_position[3];
     float grip_orientation[4];
+    qboolean velocity_valid;
+    float linear_velocity[3];
     float trigger;
     float grip;
     float stick[2];

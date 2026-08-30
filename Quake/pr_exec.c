@@ -20,6 +20,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 */
 
 #include "quakedef.h"
+#include "xr_interaction.h"
 
 static const char *const pr_opnames[] =
 {
@@ -400,6 +401,8 @@ void PR_ExecuteProgram (func_t fnum)
 	int profile, startprofile;
 	edict_t		*ed;
 	int		exitdepth;
+	qboolean	xr_damage_override = false;
+	float		xr_damage_saved = 0.f;
 
 	if (!fnum || fnum >= qcvm->progs->numfunctions)
 	{
@@ -409,6 +412,15 @@ void PR_ExecuteProgram (func_t fnum)
 	}
 
 	f = &qcvm->functions[fnum];
+	{
+		xr_melee_attack_t context;
+		if (XR_Interaction_GetMeleeDamageContext(&context) && !strcmp(PR_GetString(f->s_name), "T_Damage"))
+		{
+			xr_damage_override = true;
+			xr_damage_saved = G_FLOAT(OFS_PARM3);
+			G_FLOAT(OFS_PARM3) = xr_damage_saved * CLAMP(0.f, context.damage_scale, 4.f);
+		}
+	}
 
 	qcvm->trace = false;
 
@@ -671,6 +683,7 @@ void PR_ExecuteProgram (func_t fnum)
 		st = &qcvm->statements[PR_LeaveFunction()];
 		if (qcvm->depth == exitdepth)
 		{ // Done
+			if (xr_damage_override) G_FLOAT(OFS_PARM3) = xr_damage_saved;
 			return;
 		}
 		break;

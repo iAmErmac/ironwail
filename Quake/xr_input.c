@@ -3,7 +3,6 @@
 #include "xr_bridge.h"
 #include "xr_input.h"
 #include "xr_interaction.h"
-#include "xr_interaction.h"
 
 extern qboolean VID_XR_GetActions(iw_xr_action_snapshot_t *actions);
 extern cvar_t vr_dominant_hand;
@@ -424,6 +423,8 @@ void XR_Input_Update(void)
     iw_xr_action_snapshot_t actions;
     iw_xr_hand_t dominant = XR_Input_PhysicalHandForRole(XR_HAND_MAINHAND);
     iw_xr_hand_t offhand = XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND);
+    xr_melee_attack_t main_melee;
+    qboolean main_motion_attack;
     float turn;
     qboolean was_ui, gameplay_controls_held;
     xr_owns_input = VID_XR_GetActions(&actions);
@@ -438,12 +439,15 @@ void XR_Input_Update(void)
             (actions.hand[dominant].buttons & IW_XR_BUTTON_PRIMARY) != 0;
         if (confirm && !xr_modal_confirm_held) Key_Event(K_ABUTTON, true);
         xr_modal_confirm_held = confirm;
+        XR_Interaction_ResetMeleeState();
         return;
     }
     XR_Input_Key(14, K_RGRIP, (actions.hand[dominant].grip > 0.5f || (actions.hand[dominant].buttons & IW_XR_BUTTON_GRIP)) != 0);
     XR_Input_Key(13, K_LGRIP, (!vr_stabilize_mode.value || (actions.hand[dominant].grip <= 0.5f && (actions.hand[dominant].buttons & IW_XR_BUTTON_GRIP) == 0)) && (actions.hand[offhand].grip > 0.5f || (actions.hand[offhand].buttons & IW_XR_BUTTON_GRIP)));
     was_ui = key_dest != key_game;
     XR_Interaction_Update(&actions);
+    main_motion_attack = XR_Interaction_GetMeleePulse(XR_HAND_MAINHAND, &main_melee) &&
+        (main_melee.mode == XR_MELEE_AXE || main_melee.mode == XR_MELEE_MJOLNIR);
     if (was_ui && key_dest == key_game)
         xr_ui_release_suppressed = true;
     gameplay_controls_held = ((actions.hand[IW_XR_HAND_LEFT].buttons | actions.hand[IW_XR_HAND_RIGHT].buttons) &
@@ -466,7 +470,7 @@ void XR_Input_Update(void)
         xr_roomscale_position_valid = false;
         return;
     }
-    XR_Input_Key(0, K_RTRIGGER, (actions.hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) != 0);
+    XR_Input_Key(0, K_RTRIGGER, (actions.hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) != 0 || main_motion_attack);
     XR_Input_Key(1, K_LTRIGGER, (actions.hand[offhand].buttons & IW_XR_BUTTON_TRIGGER) != 0 && XR_Interaction_AllowOffhandFireInput());
 
 

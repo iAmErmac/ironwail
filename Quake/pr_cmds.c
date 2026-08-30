@@ -26,6 +26,8 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "xr_interaction.h"
 #include "q_ctype.h"
 
+extern qboolean SV_XRMeleeTrace (const xr_melee_attack_t *attack, trace_t *result, int nomonsters, edict_t *ignore);
+
 #define	STRINGTEMP_BUFFERS		1024
 #define	STRINGTEMP_LENGTH		1024
 static	char	pr_string_temp[STRINGTEMP_BUFFERS][STRINGTEMP_LENGTH];
@@ -178,11 +180,40 @@ static qboolean PF_UseXRControllerAim (void)
 	return XR_Interaction_UseOffhandAim () || PROG_TO_EDICT (pr_global_struct->self) == sv_player;
 }
 
+static qboolean pf_xr_melee_trace_pending;
+
+static void PF_ApplyXRMeleePitch (void)
+{
+	xr_melee_attack_t attack;
+	if (XR_Interaction_GetMeleeDamageContext (&attack) && attack.valid)
+		XR_Interaction_ApplyMeleePitch (pr_global_struct->v_forward, pr_global_struct->v_up);
+}
+
 static void PF_makevectors (void)
 {
+	xr_melee_attack_t attack;
+	qboolean melee_context;
+	pf_xr_melee_trace_pending = false;
 	AngleVectors (G_VECTOR(OFS_PARM0), pr_global_struct->v_forward, pr_global_struct->v_right, pr_global_struct->v_up);
+	melee_context = XR_Interaction_GetMeleeDamageContext (&attack) && attack.valid;
 	if (PF_UseXRControllerAim ())
-		R_GetXRMainHandWeaponPose (NULL, pr_global_struct->v_forward, pr_global_struct->v_right, pr_global_struct->v_up);
+	{
+		if (melee_context &&
+			(R_GetXRHandTrackingPose (attack.hand, NULL, pr_global_struct->v_forward, pr_global_struct->v_right, pr_global_struct->v_up) ||
+			 R_GetXRHandAimPose (attack.hand, NULL, pr_global_struct->v_forward, pr_global_struct->v_right, pr_global_struct->v_up)))
+		{
+			XR_Interaction_ApplyMeleePitch (pr_global_struct->v_forward, pr_global_struct->v_up);
+			pf_xr_melee_trace_pending = true;
+		}
+		else if (R_GetXRMainHandWeaponPose (NULL, pr_global_struct->v_forward, pr_global_struct->v_right, pr_global_struct->v_up))
+		{
+			if (melee_context)
+			{
+				PF_ApplyXRMeleePitch ();
+				pf_xr_melee_trace_pending = true;
+			}
+		}
+	}
 }
 
 static void PF_FixXRLocalGrenadePitch (edict_t *e)
@@ -788,11 +819,19 @@ static void PF_traceline (void)
 	trace_t	trace;
 	int	nomonsters;
 	edict_t	*ent;
+	qboolean use_xr_melee_trace = false;
+	xr_melee_attack_t attack;
 
 	v1 = G_VECTOR(OFS_PARM0);
 	v2 = G_VECTOR(OFS_PARM1);
 	nomonsters = G_FLOAT(OFS_PARM2);
 	ent = G_EDICT(OFS_PARM3);
+	if (pf_xr_melee_trace_pending)
+	{
+		pf_xr_melee_trace_pending = false;
+		if (XR_Interaction_GetMeleeDamageContext (&attack) && attack.valid)
+			use_xr_melee_trace = true;
+	}
 
 
 	/* FIXME FIXME FIXME: Why do we hit this with certain progs.dat ?? */
@@ -808,7 +847,10 @@ static void PF_traceline (void)
 		v1[0] = v1[1] = v1[2] = 0;
 	if (IS_NAN(v2[0]) || IS_NAN(v2[1]) || IS_NAN(v2[2]))
 		v2[0] = v2[1] = v2[2] = 0;
-	trace = SV_Move (v1, vec3_origin, vec3_origin, v2, nomonsters, PF_XRTraceIgnoreEntity (ent));
+	if (use_xr_melee_trace)
+		SV_XRMeleeTrace (&attack, &trace, (int)nomonsters, PF_XRTraceIgnoreEntity (ent));
+	else
+		trace = SV_Move (v1, vec3_origin, vec3_origin, v2, nomonsters, PF_XRTraceIgnoreEntity (ent));
 
 	pr_global_struct->trace_allsolid = trace.allsolid;
 	pr_global_struct->trace_startsolid = trace.startsolid;

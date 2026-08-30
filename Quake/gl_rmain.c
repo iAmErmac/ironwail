@@ -315,7 +315,7 @@ static uint32_t R_XRLaserColor (float alpha)
 
 static qboolean R_XRLaserHiddenForMelee (int weapon)
 {
-    return vr_laser_hide_melee.value != 0.f && (weapon == IT_AXE || weapon == RIT_AXE || weapon == HIT_MJOLNIR);
+    return vr_laser_hide_melee.value != 0.f && XR_Interaction_GetWeaponMeleeMode (weapon) != XR_MELEE_NONE;
 }
 
 static qboolean R_XRGetVisualFireModel (iw_xr_hand_t hand, int weapon, const qmodel_t **model);

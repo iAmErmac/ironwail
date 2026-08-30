@@ -189,6 +189,19 @@ static void V_GetVRWeaponSettings(const qmodel_t *model, float *scale, float *wh
 }
 
 qboolean VR_IsConfiguredWeaponModel(const qmodel_t *model) { return V_FindVRWeaponSettings(model) != NULL; }
+const char *VR_WeaponMeleeModeName(const qmodel_t *model)
+{
+    const jsonentry_t *entry = V_FindVRWeaponSettings(model);
+    return entry ? JSON_FindString(entry, "melee") : NULL;
+}
+qboolean VR_WeaponMeleeDamageScale(const qmodel_t *model, float *scale)
+{
+    const jsonentry_t *entry = V_FindVRWeaponSettings(model);
+    const double *number = entry ? JSON_FindNumber(entry, "melee_damage_scale") : NULL;
+    if (!number || !scale) return false;
+    *scale = CLAMP(0.f, (float)*number, 4.f);
+    return true;
+}
 qboolean VR_IsConfiguredProjectileModel(const qmodel_t *model)
 {
     const qboolean *projectile = JSON_FindBoolean(V_FindVRWeaponSettings(model), "projectile");

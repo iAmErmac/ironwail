@@ -25,6 +25,14 @@ static cvar_t vr_weaponwheel_modelpitch = {"vr_weaponwheel_modelpitch", "20", CV
 static cvar_t vr_weaponwheel_modelyaw = {"vr_weaponwheel_modelyaw", "-145", CVAR_ARCHIVE};
 static cvar_t vr_weaponwheel_spin = {"vr_weaponwheel_spin", "45", CVAR_ARCHIVE};
 static cvar_t vr_weaponwheel_deflection = {"vr_weaponwheel_deflection", "22.5", CVAR_ARCHIVE};
+cvar_t vr_melee = {"vr_melee", "1", CVAR_ARCHIVE};
+cvar_t vr_melee_velocity = {"vr_melee_velocity", "2.5", CVAR_ARCHIVE};
+cvar_t vr_melee_cooldown = {"vr_melee_cooldown", "0.15", CVAR_ARCHIVE};
+cvar_t vr_melee_damage_scale = {"vr_melee_damage_scale", "1.0", CVAR_ARCHIVE};
+cvar_t vr_melee_pitch = {"vr_melee_pitch", "45", CVAR_ARCHIVE};
+cvar_t vr_melee_debug = {"vr_melee_debug", "0", CVAR_ARCHIVE};
+cvar_t vr_weapon_melee = {"vr_weapon_melee", "0", CVAR_ARCHIVE};
+cvar_t vr_weapon_melee_damage_scale = {"vr_weapon_melee_damage_scale", "0.3", CVAR_ARCHIVE};
 cvar_t vr_comfort_vignette = {"vr_comfort_vignette", "0", CVAR_ARCHIVE};
 cvar_t vr_comfort_vignette_strength = {"vr_comfort_vignette_strength", "0.6", CVAR_ARCHIVE};
 cvar_t vr_mouse = {"vr_mouse", "0", CVAR_ARCHIVE};
@@ -33,7 +41,7 @@ cvar_t vr_mouse_alpha = {"vr_mouse_alpha", "0.4", CVAR_ARCHIVE};
 cvar_t vr_aim_beam = {"vr_aim_beam", "1", CVAR_ARCHIVE};
 cvar_t vr_aim_beam_width = {"vr_aim_beam_width", "2.0", CVAR_ARCHIVE};
 
-typedef struct { int item; int impulse; int replaces_item; int local_field_value; const char *name; qmodel_t *model; } xr_weapon_slot_t;
+typedef struct { int item; int impulse; int replaces_item; int local_field_value; const char *name; qmodel_t *model; xr_melee_mode_t melee_mode; qboolean melee_explicit; float melee_damage_scale; qboolean melee_damage_explicit; } xr_weapon_slot_t;
 static xr_weapon_slot_t xr_weapons[16] = {
     {IT_AXE, 1, 0, 0, "Axe"}, {IT_SHOTGUN, 2, 0, 0, "Shotgun"},
     {IT_SUPER_SHOTGUN, 3, 0, 0, "Super Shotgun"}, {IT_NAILGUN, 4, 0, 0, "Nailgun"},
@@ -77,6 +85,21 @@ static double fire_haptic_next_time[IW_XR_HAND_COUNT];
 static struct { int entity; double deadline; } offhand_beam;
 
 static qboolean offhand_continuous_auto_sound_played;
+
+typedef struct {
+    float speed;
+    float haptic_scale;
+    qboolean armed;
+    qboolean initialized;
+    qboolean haptic_pending;
+    int weapon;
+    xr_melee_mode_t mode;
+    double last_swing_time;
+} xr_melee_hand_state_t;
+static xr_melee_hand_state_t xr_melee_hands[IW_XR_HAND_COUNT];
+static xr_melee_attack_t xr_melee_pulses[IW_XR_HAND_COUNT];
+static xr_melee_attack_t xr_melee_damage_context;
+static double xr_melee_velocity_warning_time;
 
 /* A disposable QuakeC attack must never leak timing state into the next offhand weapon. */
 static void xr_offhand_reset_local_fire(void)
@@ -172,11 +195,16 @@ qboolean XR_Interaction_AllowOffhandFireInput(void)
 
 void XR_Interaction_NotifyWeaponFire(iw_xr_hand_t hand, float previous_attack_finished, float attack_finished, double time)
 {
-    float cadence;
+    float cadence, amplitude = 0.35f;
     if (hand < 0 || hand >= IW_XR_HAND_COUNT || attack_finished <= time + 0.001 ||
         fabsf(attack_finished - previous_attack_finished) <= 0.001f || realtime < fire_haptic_next_time[hand])
         return;
-    VID_XR_Haptic(hand, 0.35f, 0.025f);
+    if (xr_melee_hands[hand].haptic_pending)
+    {
+        amplitude = CLAMP(0.f, 0.35f * xr_melee_hands[hand].haptic_scale, 1.f);
+        xr_melee_hands[hand].haptic_pending = false;
+    }
+    VID_XR_Haptic(hand, amplitude, 0.025f);
     cadence = (float)(attack_finished - time);
     fire_haptic_next_time[hand] = realtime + CLAMP(0.025f, cadence, 0.5f);
 }
@@ -197,7 +225,195 @@ static double wheel_spin_time;
 
 static void xr_weaponwheel_reload_f(void);
 static void xr_weaponwheel_resolve_models(void);
+static void xr_weapon_apply_melee_metadata(void);
 static iw_xr_hand_t xr_mainhand(void) { return XR_Input_PhysicalHandForRole(XR_HAND_MAINHAND); }
+
+static xr_melee_mode_t xr_builtin_melee_mode(int item)
+{
+    if (item == IT_AXE || item == RIT_AXE) return XR_MELEE_AXE;
+    if (item == HIT_MJOLNIR) return XR_MELEE_MJOLNIR;
+    return XR_MELEE_NONE;
+}
+
+static xr_melee_mode_t xr_parse_melee_mode(const char *name, qboolean *valid)
+{
+    if (valid) *valid = false;
+    if (!name) return XR_MELEE_NONE;
+    if (!q_strcasecmp(name, "axe")) { if (valid) *valid = true; return XR_MELEE_AXE; }
+    if (!q_strcasecmp(name, "mjolnir")) { if (valid) *valid = true; return XR_MELEE_MJOLNIR; }
+    if (!q_strcasecmp(name, "fist")) { if (valid) *valid = true; return XR_MELEE_FIST; }
+    if (!q_strcasecmp(name, "gunbutt")) { if (valid) *valid = true; return XR_MELEE_GUNBUTT; }
+    if (!q_strcasecmp(name, "none")) { if (valid) *valid = true; return XR_MELEE_NONE; }
+    return XR_MELEE_NONE;
+}
+
+static void xr_weapon_slot_set_builtin_melee(xr_weapon_slot_t *slot)
+{
+    if (!slot) return;
+    slot->melee_mode = xr_builtin_melee_mode(slot->item);
+    slot->melee_explicit = false;
+    slot->melee_damage_scale = 1.f;
+    slot->melee_damage_explicit = false;
+}
+
+static xr_weapon_slot_t *xr_weapon_slot_for_item(int item)
+{
+    int i;
+    for (i = 0; i < xr_weapon_count; ++i)
+        if (xr_weapons[i].item == item) return &xr_weapons[i];
+    return NULL;
+}
+
+static float xr_weapon_melee_scale_for_item(int item, xr_melee_mode_t mode)
+{
+    xr_weapon_slot_t *slot = xr_weapon_slot_for_item(item);
+    float scale = mode == XR_MELEE_GUNBUTT ? vr_weapon_melee_damage_scale.value : vr_melee_damage_scale.value;
+    if (slot && slot->melee_damage_explicit) scale *= slot->melee_damage_scale;
+    return CLAMP(0.f, scale, 4.f);
+}
+
+static void xr_melee_reset_hand(iw_xr_hand_t hand)
+{
+    if (hand < 0 || hand >= IW_XR_HAND_COUNT) return;
+    memset(&xr_melee_hands[hand], 0, sizeof(xr_melee_hands[hand]));
+    xr_melee_hands[hand].armed = true;
+    xr_melee_hands[hand].mode = XR_MELEE_NONE;
+    memset(&xr_melee_pulses[hand], 0, sizeof(xr_melee_pulses[hand]));
+}
+
+static void xr_melee_reset_all(void)
+{
+    xr_melee_reset_hand(IW_XR_HAND_LEFT);
+    xr_melee_reset_hand(IW_XR_HAND_RIGHT);
+}
+
+void XR_Interaction_ApplyMeleePitch(vec3_t forward, vec3_t up)
+{
+    float angle, c, s;
+    vec3_t old_forward, old_up;
+    if (!forward || !up || fabsf(vr_melee_pitch.value) < 0.001f)
+        return;
+    angle = DEG2RAD(vr_melee_pitch.value);
+    c = cosf(angle);
+    s = sinf(angle);
+    VectorCopy(forward, old_forward);
+    VectorCopy(up, old_up);
+    VectorScale(old_forward, c, forward);
+    VectorMA(forward, -s, old_up, forward);
+    VectorScale(old_up, c, up);
+    VectorMA(up, s, old_forward, up);
+}
+
+static qboolean xr_melee_mode_is_fallback(xr_melee_mode_t mode)
+{
+    return mode == XR_MELEE_FIST || mode == XR_MELEE_GUNBUTT;
+}
+
+static qboolean xr_melee_mainhand_network_safe(int item, xr_melee_mode_t mode)
+{
+    return (item == IT_AXE && mode == XR_MELEE_AXE) ||
+        (item == RIT_AXE && mode == XR_MELEE_AXE) ||
+        (item == HIT_MJOLNIR && mode == XR_MELEE_MJOLNIR);
+}
+
+static float xr_melee_forward_fraction(const iw_xr_hand_snapshot_t *hand, const float velocity[3])
+{
+    float x, y, z, w, length, forward[3];
+    if (!hand || !hand->aim_valid) return 0.f;
+    x = hand->aim_orientation[0]; y = hand->aim_orientation[1];
+    z = hand->aim_orientation[2]; w = hand->aim_orientation[3];
+    forward[0] = -2.f * (x * z + w * y);
+    forward[1] = -2.f * (y * z - w * x);
+    forward[2] = -1.f + 2.f * (x * x + y * y);
+    length = sqrtf(forward[0] * forward[0] + forward[1] * forward[1] + forward[2] * forward[2]);
+    if (length < 0.5f) return 0.f;
+    return DotProduct(velocity, forward) / length;
+}
+
+static void xr_melee_update(const iw_xr_action_snapshot_t *actions, int dominant, int offhand)
+{
+    int hand;
+    int weapons[IW_XR_HAND_COUNT];
+    qboolean triggers[IW_XR_HAND_COUNT];
+    float threshold = CLAMP(.1f, vr_melee_velocity.value, 6.f);
+    float release = threshold * .65f;
+    double now = realtime;
+    double cooldown = CLAMP(0.f, vr_melee_cooldown.value, 5.f);
+    float dt = (float)CLAMP(.001, host_frametime, .25);
+    float filter = 1.f - expf(-dt / .05f);
+
+    memset(xr_melee_pulses, 0, sizeof(xr_melee_pulses));
+    for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand)
+        xr_melee_hands[hand].haptic_pending = false;
+    weapons[dominant] = cl.stats[STAT_ACTIVEWEAPON];
+    weapons[offhand] = offhand_weapon_item;
+    triggers[dominant] = (actions->hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) != 0;
+    triggers[offhand] = (actions->hand[offhand].buttons & IW_XR_BUTTON_TRIGGER) != 0;
+
+    for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand)
+    {
+        xr_melee_hand_state_t *state = &xr_melee_hands[hand];
+        xr_melee_mode_t mode = XR_MELEE_NONE;
+        float speed, forward_fraction;
+        qboolean blocked;
+
+        if (hand == offhand && !weapons[hand]) mode = XR_MELEE_FIST;
+        else mode = XR_Interaction_GetWeaponMeleeMode(weapons[hand]);
+        if (state->initialized && (state->weapon != weapons[hand] || state->mode != mode))
+            xr_melee_reset_hand((iw_xr_hand_t)hand);
+        state = &xr_melee_hands[hand];
+        state->weapon = weapons[hand];
+        state->mode = mode;
+        state->initialized = true;
+
+        blocked = !vr_melee.value || key_dest != key_game || sv.paused || cl.stats[STAT_HEALTH] <= 0 ||
+            wheel_active || keyboard_active || virtual_mouse_trigger || XR_Input_IsTeleportAiming() ||
+            (hand == offhand && cl.maxclients > 1) || (xr_melee_mode_is_fallback(mode) && cl.maxclients > 1) ||
+            (hand == dominant && cl.maxclients > 1 && mode != XR_MELEE_NONE &&
+                !xr_melee_mainhand_network_safe(weapons[hand], mode));
+        if (blocked || mode == XR_MELEE_NONE || !actions->hand[hand].velocity_valid)
+        {
+            state->speed = 0.f;
+            state->armed = true;
+            state->last_swing_time = 0.0;
+            if (!actions->hand[hand].velocity_valid && actions->hand[hand].aim_valid && realtime >= xr_melee_velocity_warning_time)
+            {
+                Con_Printf("XR melee: controller linear velocity unavailable; motion attacks disabled until it is valid.\n");
+                xr_melee_velocity_warning_time = realtime + 5.0;
+            }
+            continue;
+        }
+
+        speed = sqrtf(actions->hand[hand].linear_velocity[0] * actions->hand[hand].linear_velocity[0] +
+            actions->hand[hand].linear_velocity[1] * actions->hand[hand].linear_velocity[1] +
+            actions->hand[hand].linear_velocity[2] * actions->hand[hand].linear_velocity[2]);
+        if (IS_NAN(speed)) speed = 0.f;
+        speed = CLAMP(0.f, speed, 6.f);
+        state->speed += (speed - state->speed) * filter;
+        if (state->speed <= release) state->armed = true;
+        if (triggers[hand]) state->armed = false;
+        /* Ignore the rearward wind-up so it cannot consume the forward chop pulse. */
+        forward_fraction = xr_melee_forward_fraction(&actions->hand[hand], actions->hand[hand].linear_velocity);
+        if (state->armed && state->speed >= threshold && forward_fraction >= -0.2f &&
+            now >= state->last_swing_time + cooldown && !triggers[hand])
+        {
+            state->armed = false;
+            xr_melee_pulses[hand].valid = true;
+            xr_melee_pulses[hand].hand = (iw_xr_hand_t)hand;
+            xr_melee_pulses[hand].mode = mode;
+            xr_melee_pulses[hand].speed = state->speed;
+            xr_melee_pulses[hand].damage_scale = xr_weapon_melee_scale_for_item(weapons[hand], mode);
+            if (mode == XR_MELEE_AXE || mode == XR_MELEE_MJOLNIR)
+            {
+                state->haptic_scale = xr_melee_pulses[hand].damage_scale;
+                state->haptic_pending = true;
+            }
+            if (vr_melee_debug.value)
+                Con_Printf("XR melee: hand=%d speed=%.2f mode=%d scale=%.2f\n", hand, state->speed, mode, xr_melee_pulses[hand].damage_scale);
+        }
+    }
+}
+
 static qboolean xr_offhand_continuous_weapon (void) {
     return offhand_weapon_item == IT_NAILGUN || offhand_weapon_item == IT_SUPER_NAILGUN ||
         offhand_weapon_item == IT_LIGHTNING || offhand_weapon_item == HIT_LASER_CANNON ||
@@ -523,6 +739,7 @@ static void xr_keyboard_close(void) { keyboard_active = false; keyboard_trigger 
 static void xr_keyboard_send_special(int key)
 {
     if (key == K_ESCAPE) { xr_keyboard_close(); return; }
+    if (key == K_ENTER) virtual_mouse_trigger_suppressed = true;
     Key_Event(key, true); Key_Event(key, false);
     if (key == K_ENTER && key_dest != key_console) xr_keyboard_close();
 }
@@ -634,6 +851,8 @@ extern qmodel_t *VR_GetWeaponModel(qmodel_t *model);
 extern qboolean VR_IsConfiguredWeaponModel(const qmodel_t *model);
 extern float VR_WeaponWheelScale(const qmodel_t *model);
 extern float VR_WeaponModelScale(const qmodel_t *model);
+extern const char *VR_WeaponMeleeModeName(const qmodel_t *model);
+extern qboolean VR_WeaponMeleeDamageScale(const qmodel_t *model, float *scale);
 
 static qmodel_t *xr_weaponwheel_find_model(const char *name)
 {
@@ -655,6 +874,7 @@ static void xr_weaponwheel_add_builtin_slot(int item, int impulse, const char *n
     q_strlcpy(xr_weapon_names[slot], name, sizeof(xr_weapon_names[slot]));
     xr_weapons[slot].name = xr_weapon_names[slot];
     xr_weapons[slot].model = NULL;
+    xr_weapon_slot_set_builtin_melee(&xr_weapons[slot]);
     q_strlcpy(xr_weapon_models[slot], model, sizeof(xr_weapon_models[slot]));
     xr_weapon_local_fields[slot][0] = 0;
     xr_weapon_local_field_values[slot] = 0;
@@ -676,6 +896,7 @@ static void xr_weaponwheel_set_builtin_slots(void)
         xr_weapons[i].model = NULL;
         xr_weapons[i].replaces_item = 0;
         xr_weapons[i].local_field_value = 0;
+        xr_weapon_slot_set_builtin_melee(&xr_weapons[i]);
         xr_weapon_local_fields[i][0] = 0;
         q_strlcpy(xr_weapon_models[i], xr_builtin_model_paths[i], sizeof(xr_weapon_models[i]));
     }
@@ -725,6 +946,7 @@ static void xr_weaponwheel_apply_extension_entry(const jsonentry_t *entry)
     xr_weapons[slot].replaces_item = replaces_name ? xr_item_bit(replaces_name) : 0;
     local_value = JSON_FindNumber(entry, "local_value");
     xr_weapons[slot].local_field_value = local_value ? (int)*local_value : 0;
+    xr_weapon_slot_set_builtin_melee(&xr_weapons[slot]);
     q_strlcpy(xr_weapon_names[slot], name, sizeof(xr_weapon_names[slot]));
     xr_weapons[slot].name = xr_weapon_names[slot];
     xr_weapon_models[slot][0] = 0;
@@ -818,6 +1040,30 @@ static void xr_weaponwheel_resolve_models(void)
     int i;
     for (i = 0; i < xr_weapon_count; ++i)
         xr_weapons[i].model = xr_weaponwheel_find_model(xr_weapon_models[i]);
+    xr_weapon_apply_melee_metadata();
+}
+
+static void xr_weapon_apply_melee_metadata(void)
+{
+    int i;
+    for (i = 0; i < xr_weapon_count; ++i)
+    {
+        const char *melee = VR_WeaponMeleeModeName(xr_weapons[i].model);
+        float scale;
+        qboolean valid_melee;
+
+        xr_weapon_slot_set_builtin_melee(&xr_weapons[i]);
+        if (melee)
+        {
+            xr_weapons[i].melee_mode = xr_parse_melee_mode(melee, &valid_melee);
+            if (valid_melee) xr_weapons[i].melee_explicit = true;
+        }
+        if (VR_WeaponMeleeDamageScale(xr_weapons[i].model, &scale))
+        {
+            xr_weapons[i].melee_damage_scale = scale;
+            xr_weapons[i].melee_damage_explicit = true;
+        }
+    }
 }
 
 static void xr_weaponwheel_reload_f(void)
@@ -853,6 +1099,7 @@ static void xr_weaponwheel_reload_f(void)
                     q_strlcpy(xr_weapon_names[count], name, sizeof(xr_weapon_names[count]));
                     xr_weapons[count].name = xr_weapon_names[count];
                     xr_weapons[count].model = NULL;
+                    xr_weapon_slot_set_builtin_melee(&xr_weapons[count]);
                     xr_weapon_models[count][0] = 0;
                     xr_weapon_local_fields[count][0] = 0;
                     if (model && *model)
@@ -895,6 +1142,7 @@ static void xr_vignette_init(void)
 }
 void XR_Interaction_Init(void)
 {
+    xr_melee_reset_all();
     Cvar_RegisterVariable(&vr_weaponwheel);
     Cvar_RegisterVariable(&vr_weaponwheel_slowmo);
     Cvar_RegisterVariable(&vr_weaponwheel_distance);
@@ -904,6 +1152,14 @@ void XR_Interaction_Init(void)
     Cvar_RegisterVariable(&vr_weaponwheel_modelyaw);
     Cvar_RegisterVariable(&vr_weaponwheel_spin);
     Cvar_RegisterVariable(&vr_weaponwheel_deflection);
+    Cvar_RegisterVariable(&vr_melee);
+    Cvar_RegisterVariable(&vr_melee_velocity);
+    Cvar_RegisterVariable(&vr_melee_cooldown);
+    Cvar_RegisterVariable(&vr_melee_damage_scale);
+    Cvar_RegisterVariable(&vr_melee_pitch);
+    Cvar_RegisterVariable(&vr_melee_debug);
+    Cvar_RegisterVariable(&vr_weapon_melee);
+    Cvar_RegisterVariable(&vr_weapon_melee_damage_scale);
     Cvar_RegisterVariable(&vr_comfort_vignette);
     Cvar_RegisterVariable(&vr_comfort_vignette_strength);
     Cvar_RegisterVariable(&vr_mouse);
@@ -926,7 +1182,7 @@ void XR_Interaction_Init(void)
 
 void XR_Interaction_Shutdown(void)
 {
-    xr_wheel_close(); xr_keyboard_close(); xr_virtual_pointer_clear(); wheel_bind_active = offhand_wheel_bind_active = false; offhand_weapon_item = 0; offhand_transfer.active = false; offhand_fire.phase = 0; offhand_local_fire.executing = false; offhand_local_fire.frame = offhand_local_fire.attack_finished = 0.f; offhand_fire_main_viewmodel_valid = false; offhand_fire_input_suppressed = false; main_fire_input_active = false; local_offhand_fired_this_frame = false; visual_fire_deadline = 0.0; memset(visual_fire_active, 0, sizeof(visual_fire_active)); memset(visual_fire_second, 0, sizeof(visual_fire_second)); memset(visual_fire_weapon, 0, sizeof(visual_fire_weapon)); memset(xr_local_projectile_spawns, 0, sizeof(xr_local_projectile_spawns)); memset(fire_haptic_next_time, 0, sizeof(fire_haptic_next_time)); keyboard_trigger_suppressed = false; virtual_mouse_trigger_suppressed = false; two_hand_wheel_suppressed = false; vignette_value = 0.f; vignette_yaw_valid = false;
+    xr_wheel_close(); xr_keyboard_close(); xr_virtual_pointer_clear(); wheel_bind_active = offhand_wheel_bind_active = false; offhand_weapon_item = 0; offhand_transfer.active = false; offhand_fire.phase = 0; offhand_local_fire.executing = false; offhand_local_fire.frame = offhand_local_fire.attack_finished = 0.f; offhand_fire_main_viewmodel_valid = false; offhand_fire_input_suppressed = false; main_fire_input_active = false; local_offhand_fired_this_frame = false; visual_fire_deadline = 0.0; memset(visual_fire_active, 0, sizeof(visual_fire_active)); memset(visual_fire_second, 0, sizeof(visual_fire_second)); memset(visual_fire_weapon, 0, sizeof(visual_fire_weapon)); memset(xr_local_projectile_spawns, 0, sizeof(xr_local_projectile_spawns)); memset(fire_haptic_next_time, 0, sizeof(fire_haptic_next_time)); keyboard_trigger_suppressed = false; virtual_mouse_trigger_suppressed = false; two_hand_wheel_suppressed = false; vignette_value = 0.f; vignette_yaw_valid = false; xr_melee_reset_all(); memset(&xr_melee_damage_context, 0, sizeof(xr_melee_damage_context));
 }
 
 void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
@@ -1044,6 +1300,7 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
         menu_scroll_direction = 0;
         xr_virtual_pointer_clear();
     }
+    xr_melee_update(actions, dominant, offhand);
     move = sqrtf(actions->hand[offhand].stick[0] * actions->hand[offhand].stick[0] +
                  actions->hand[offhand].stick[1] * actions->hand[offhand].stick[1]);
     yaw_delta = 0.f;
@@ -1071,14 +1328,56 @@ qboolean XR_Interaction_ConsumesGameplay(void) { return wheel_active || keyboard
 qboolean XR_Interaction_WheelActive(void) { return wheel_active; }
 qboolean XR_Interaction_OffhandAttackActive(void) { return offhand_attack_active && offhand_weapon_item && !wheel_active; }
 qboolean XR_Interaction_MainhandFireInputActive(void) { return main_fire_input_active; }
+qboolean XR_Interaction_GetMeleePulse(xr_hand_role_t role, xr_melee_attack_t *attack)
+{
+    iw_xr_hand_t hand = XR_Input_PhysicalHandForRole(role);
+    if (attack) *attack = xr_melee_pulses[hand];
+    return xr_melee_pulses[hand].valid;
+}
+qboolean XR_Interaction_ConsumeMeleePulse(xr_hand_role_t role, xr_melee_attack_t *attack)
+{
+    iw_xr_hand_t hand = XR_Input_PhysicalHandForRole(role);
+    qboolean valid = xr_melee_pulses[hand].valid;
+    if (attack) *attack = xr_melee_pulses[hand];
+    memset(&xr_melee_pulses[hand], 0, sizeof(xr_melee_pulses[hand]));
+    return valid;
+}
+void XR_Interaction_NotifyMeleeResult(iw_xr_hand_t hand, qboolean contacted)
+{
+    if (hand < 0 || hand >= IW_XR_HAND_COUNT || !contacted)
+        return;
+    xr_melee_hands[hand].last_swing_time = realtime;
+}
+qboolean XR_Interaction_GetMeleeDamageContext(xr_melee_attack_t *attack)
+{
+    if (attack) *attack = xr_melee_damage_context;
+    return xr_melee_damage_context.valid;
+}
+void XR_Interaction_SetMeleeDamageContext(const xr_melee_attack_t *attack)
+{
+    if (attack) xr_melee_damage_context = *attack;
+    else memset(&xr_melee_damage_context, 0, sizeof(xr_melee_damage_context));
+}
+void XR_Interaction_ClearMeleeDamageContext(void) { memset(&xr_melee_damage_context, 0, sizeof(xr_melee_damage_context)); }
+void XR_Interaction_ResetMeleeState(void) { xr_melee_reset_all(); memset(&xr_melee_damage_context, 0, sizeof(xr_melee_damage_context)); }
 qboolean XR_Interaction_ConsumeLocalOffhandFireEvent(void)
 {
     qboolean fired = local_offhand_fired_this_frame;
     local_offhand_fired_this_frame = false;
     return fired;
 }
-qboolean XR_Interaction_LocalOffhandAttackRequested(void) { return cl.maxclients == 1 && XR_Interaction_OffhandAttackActive(); }
-qboolean XR_Interaction_LocalOffhandAttackReady(double time) { return XR_Interaction_LocalOffhandAttackRequested () && time >= offhand_local_fire.next_attack_time; }
+qboolean XR_Interaction_LocalOffhandAttackReady(double time, xr_melee_attack_t *motion)
+{
+    iw_xr_hand_t hand = XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND);
+    if (motion) memset(motion, 0, sizeof(*motion));
+    if (xr_melee_pulses[hand].valid && time >= offhand_local_fire.next_attack_time)
+    {
+        if (motion) *motion = xr_melee_pulses[hand];
+        memset(&xr_melee_pulses[hand], 0, sizeof(xr_melee_pulses[hand]));
+        return true;
+    }
+    return XR_Interaction_OffhandAttackActive() && offhand_weapon_item && time >= offhand_local_fire.next_attack_time;
+}
 void XR_Interaction_SetLocalOffhandCooldown(double time, float attack_finished)
 {
     float delay;
@@ -1220,6 +1519,17 @@ qboolean XR_Interaction_GetNetworkGrenadePitch(float *pitch)
 qboolean XR_Interaction_UseOffhandAim(void) { return offhand_local_fire.executing || (offhand_fire.phase == 2 && offhand_attack_active); }
 int XR_Interaction_MainhandWeaponItem(void) { return offhand_fire_main_viewmodel_valid ? offhand_fire.main_item : cl.stats[STAT_ACTIVEWEAPON]; }
 int XR_Interaction_OffhandWeaponItem(void) { return offhand_weapon_item; }
+xr_melee_mode_t XR_Interaction_GetWeaponMeleeMode(int item)
+{
+    xr_weapon_slot_t *slot;
+    xr_melee_mode_t builtin;
+    if (!item) return XR_MELEE_FIST;
+    slot = xr_weapon_slot_for_item(item);
+    if (slot && slot->melee_explicit) return slot->melee_mode;
+    builtin = xr_builtin_melee_mode(item);
+    if (builtin != XR_MELEE_NONE) return builtin;
+    return vr_weapon_melee.value != 0.f ? XR_MELEE_GUNBUTT : XR_MELEE_NONE;
+}
 /* Render entities stay hand-owned even while cl.viewent temporarily follows the firing weapon. */
 static qboolean xr_get_weapon_viewmodel(entity_t *out, int item, qboolean animate)
 {

@@ -3,6 +3,23 @@
 
 #include "q_stdinc.h"
 #include "xr_bridge.h"
+#include "xr_input.h"
+
+typedef enum {
+    XR_MELEE_NONE = 0,
+    XR_MELEE_AXE,
+    XR_MELEE_MJOLNIR,
+    XR_MELEE_FIST,
+    XR_MELEE_GUNBUTT
+} xr_melee_mode_t;
+
+typedef struct {
+    qboolean valid;
+    iw_xr_hand_t hand;
+    xr_melee_mode_t mode;
+    float speed;
+    float damage_scale;
+} xr_melee_attack_t;
 
 void XR_Interaction_Init(void);
 void XR_Interaction_Shutdown(void);
@@ -16,8 +33,6 @@ qboolean XR_Interaction_OffhandAttackActive(void);
 qboolean XR_Interaction_MainhandFireInputActive(void);
 qboolean XR_Interaction_ConsumeLocalOffhandFireEvent(void);
 qboolean XR_Interaction_UseOffhandAim(void);
-qboolean XR_Interaction_LocalOffhandAttackRequested(void);
-qboolean XR_Interaction_LocalOffhandAttackReady(double time);
 void XR_Interaction_SetLocalOffhandCooldown(double time, float attack_finished);
 void XR_Interaction_BeginLocalOffhandAttack(void);
 void XR_Interaction_EndLocalOffhandAttack(void);
@@ -40,6 +55,16 @@ qboolean XR_Interaction_GetNetworkGrenadePitch(float *pitch);
 void XR_Interaction_ResetOffhandContinuousAudio(void);
 int XR_Interaction_MainhandWeaponItem(void);
 int XR_Interaction_OffhandWeaponItem(void);
+xr_melee_mode_t XR_Interaction_GetWeaponMeleeMode(int item);
+qboolean XR_Interaction_GetMeleePulse(xr_hand_role_t role, xr_melee_attack_t *attack);
+qboolean XR_Interaction_ConsumeMeleePulse(xr_hand_role_t role, xr_melee_attack_t *attack);
+void XR_Interaction_NotifyMeleeResult(iw_xr_hand_t hand, qboolean contacted);
+qboolean XR_Interaction_LocalOffhandAttackReady(double time, xr_melee_attack_t *motion);
+void XR_Interaction_SetMeleeDamageContext(const xr_melee_attack_t *attack);
+qboolean XR_Interaction_GetMeleeDamageContext(xr_melee_attack_t *attack);
+void XR_Interaction_ApplyMeleePitch(vec3_t forward, vec3_t up);
+void XR_Interaction_ClearMeleeDamageContext(void);
+void XR_Interaction_ResetMeleeState(void);
 qboolean XR_Interaction_GetFireViewmodel(int weapon, entity_t *out);
 qboolean XR_Interaction_GetMainhandViewmodel(entity_t *out);
 qboolean XR_Interaction_GetOffhandViewmodel(entity_t *out);

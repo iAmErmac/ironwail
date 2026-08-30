@@ -28,6 +28,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 
 /* Not all embedded progs headers expose this runtime lookup helper. */
 func_t PR_FindProgram (const char *name);
+extern void VID_XR_Haptic (int hand, float amplitude, float duration_seconds);
 
 /*
 
@@ -1143,6 +1144,191 @@ void SV_XRUpdateLocalStats (edict_t *ent)
     cl.statsf[STAT_CELLS] = cells;
 }
 
+static qboolean SV_XRMeleePose (iw_xr_hand_t hand, vec3_t origin, vec3_t forward, vec3_t up)
+{
+	if (R_GetXRHandTrackingPose (hand, origin, forward, NULL, up))
+		return true;
+	if (R_GetXRHandAimPose (hand, origin, forward, NULL, up))
+		return true;
+	if (hand == XR_Input_PhysicalHandForRole (XR_HAND_MAINHAND))
+		return R_GetXRMainHandWeaponPose (origin, forward, NULL, up);
+	return false;
+}
+
+static qboolean SV_XRMeleeTraceIsDamageable (const trace_t *trace)
+{
+	return trace && trace->fraction != 1.f && trace->ent && trace->ent->v.takedamage > 0;
+}
+
+static trace_t SV_XRMeleeTraceRay (const vec3_t origin, const vec3_t direction, float start_offset, float range, int nomonsters, edict_t *ignore)
+{
+	trace_t trace;
+	vec3_t start, end;
+
+	VectorMA (origin, start_offset, direction, start);
+	VectorMA (origin, range, direction, end);
+	trace = SV_Move (start, vec3_origin, vec3_origin, end, nomonsters, ignore);
+	return trace;
+}
+
+static qboolean SV_XRMeleeVisualMuzzle (iw_xr_hand_t hand, const vec3_t origin, const vec3_t forward, vec3_t muzzle)
+{
+	entity_t viewmodel;
+	const qmodel_t *model = NULL;
+
+	if (hand == XR_Input_PhysicalHandForRole (XR_HAND_MAINHAND))
+	{
+		if (XR_Interaction_GetMainhandViewmodel (&viewmodel))
+			model = viewmodel.model;
+		else
+			model = cl.viewent.model;
+	}
+	else if (XR_Interaction_GetOffhandViewmodel (&viewmodel))
+		model = viewmodel.model;
+
+	if (model && R_GetXRWeaponVisualFireOrigin (hand, model, muzzle))
+		return true;
+
+	VectorMA (origin, 12.f, forward, muzzle);
+	return true;
+}
+
+/* QuakeVR widened one swing into hand/muzzle and vertical-offset traces. */
+qboolean SV_XRMeleeTrace (const xr_melee_attack_t *attack, trace_t *result, int nomonsters, edict_t *ignore)
+{
+	trace_t trace;
+	vec3_t origin, forward, up, muzzle;
+	float hand_range, muzzle_range;
+	int i;
+	qboolean found_world = false;
+	const vec3_t *starts[2];
+	float ranges[2];
+
+	if (result)
+	{
+		memset (result, 0, sizeof (*result));
+		result->fraction = 1.f;
+	}
+	if (!attack || !attack->valid || !result || !SV_XRMeleePose (attack->hand, origin, forward, up))
+		return false;
+	XR_Interaction_ApplyMeleePitch (forward, up);
+	SV_XRMeleeVisualMuzzle (attack->hand, origin, forward, muzzle);
+
+	if (attack->mode == XR_MELEE_FIST)
+	{
+		hand_range = 16.f * 1.1f;
+		muzzle_range = 24.f * 1.1f;
+	}
+	else if (attack->mode == XR_MELEE_GUNBUTT)
+	{
+		hand_range = 22.f * 1.1f;
+		muzzle_range = 34.f * 1.1f;
+	}
+	else
+	{
+		hand_range = 22.f * 1.1f;
+		muzzle_range = 35.f * 1.1f;
+	}
+	starts[0] = &origin;
+	starts[1] = &muzzle;
+	ranges[0] = hand_range;
+	ranges[1] = muzzle_range;
+
+	/* Prefer a damageable entity even when another widened ray hits the wall first. */
+	for (i = 0; i < 2; ++i)
+	{
+		trace = SV_XRMeleeTraceRay (*starts[i], forward, -6.f, ranges[i], nomonsters, ignore);
+		if (SV_XRMeleeTraceIsDamageable (&trace))
+		{
+			*result = trace;
+			XR_Interaction_NotifyMeleeResult (attack->hand, true);
+			return true;
+		}
+		trace = SV_XRMeleeTraceRay (*starts[i], up, -3.f, ranges[i] / 1.5f, nomonsters, ignore);
+		if (SV_XRMeleeTraceIsDamageable (&trace))
+		{
+			*result = trace;
+			XR_Interaction_NotifyMeleeResult (attack->hand, true);
+			return true;
+		}
+		trace = SV_XRMeleeTraceRay (*starts[i], up, 3.f, -ranges[i] / 1.5f, nomonsters, ignore);
+		if (SV_XRMeleeTraceIsDamageable (&trace))
+		{
+			*result = trace;
+			XR_Interaction_NotifyMeleeResult (attack->hand, true);
+			return true;
+		}
+	}
+
+	for (i = 0; i < 2; ++i)
+	{
+		trace = SV_XRMeleeTraceRay (*starts[i], forward, -6.f, ranges[i], nomonsters, ignore);
+		if (trace.fraction != 1.f) { *result = trace; found_world = true; break; }
+		trace = SV_XRMeleeTraceRay (*starts[i], up, -3.f, ranges[i] / 1.5f, nomonsters, ignore);
+		if (trace.fraction != 1.f) { *result = trace; found_world = true; break; }
+		trace = SV_XRMeleeTraceRay (*starts[i], up, 3.f, -ranges[i] / 1.5f, nomonsters, ignore);
+		if (trace.fraction != 1.f) { *result = trace; found_world = true; break; }
+	}
+
+	if (!found_world)
+	{
+		memset (result, 0, sizeof (*result));
+		result->fraction = 1.f;
+		VectorMA (origin, hand_range, forward, result->endpos);
+	}
+	else
+		XR_Interaction_NotifyMeleeResult (attack->hand, true);
+	return found_world;
+}
+
+static void SV_XRExecuteFallbackMelee (edict_t *ent, const xr_melee_attack_t *attack)
+{
+	static qboolean reported_missing_damage;
+	func_t damage;
+	edict_t *oldself, *target;
+	trace_t trace;
+	float damage_amount;
+	xr_melee_attack_t previous_context;
+	qboolean had_context;
+
+	if (!ent || !attack || !attack->valid || svs.maxclients > 1)
+		return;
+	SV_XRMeleeTrace (attack, &trace, MOVE_NORMAL, ent);
+	target = trace.ent;
+	damage = PR_FindProgram ("T_Damage");
+	if (!damage)
+	{
+		if (!reported_missing_damage)
+		{
+			Con_Printf ("XR motion melee: T_Damage is unavailable in this progs.dat.\n");
+			reported_missing_damage = true;
+		}
+		return;
+	}
+	if (!target || target == ent || target->v.takedamage <= 0)
+	{
+		SV_StartSound (ent, 0, "weapons/ax1.wav", 255, 1);
+		VID_XR_Haptic (attack->hand, CLAMP (0.f, 0.35f * attack->damage_scale, 1.f), 0.04f);
+		return;
+	}
+	/* The XR damage context applies the bounded multiplier inside T_Damage. */
+	damage_amount = 20.f;
+	G_INT (OFS_PARM0) = EDICT_TO_PROG (target);
+	G_INT (OFS_PARM1) = EDICT_TO_PROG (ent);
+	G_INT (OFS_PARM2) = EDICT_TO_PROG (ent);
+	G_FLOAT (OFS_PARM3) = damage_amount;
+	oldself = PROG_TO_EDICT (pr_global_struct->self);
+	pr_global_struct->self = EDICT_TO_PROG (ent);
+	had_context = XR_Interaction_GetMeleeDamageContext (&previous_context);
+	XR_Interaction_SetMeleeDamageContext (attack);
+	PR_ExecuteProgram (damage);
+	if (had_context) XR_Interaction_SetMeleeDamageContext (&previous_context);
+	else XR_Interaction_ClearMeleeDamageContext ();
+	pr_global_struct->self = EDICT_TO_PROG (oldself);
+	SV_StartSound (ent, 0, "weapons/axhit2.wav", 255, 1);
+	VID_XR_Haptic (attack->hand, CLAMP (0.f, 0.5f * attack->damage_scale, 1.f), 0.05f);
+}
+
 /* Run the game's normal QuakeC attack on a short-lived player copy, then copy only gameplay results back. This gives single-player offhand fire independent aim and animation without replacing the canonical player entity. */
 static void SV_XRLocalOffhandAttack (edict_t *ent)
 {
@@ -1153,10 +1339,19 @@ static void SV_XRLocalOffhandAttack (edict_t *ent)
 	vec3_t forward, right, up;
 	float ammo_before, ammo_after, currentammo_before, attack_finished_before;
 	qboolean fired, ammo_empty;
+	xr_melee_attack_t motion;
+	xr_melee_attack_t previous_context;
+	qboolean had_context;
 	int i, weapon;
 
-	if (!XR_Interaction_LocalOffhandAttackReady (qcvm->time) || ent->v.health <= 0)
+	memset (&motion, 0, sizeof (motion));
+	if (!XR_Interaction_LocalOffhandAttackReady (qcvm->time, &motion) || ent->v.health <= 0)
 		return;
+	if (motion.valid && (motion.mode == XR_MELEE_FIST || motion.mode == XR_MELEE_GUNBUTT))
+	{
+		SV_XRExecuteFallbackMelee (ent, &motion);
+		return;
+	}
 	attack = PR_FindProgram ("W_Attack");
 	if (!attack)
 	{
@@ -1199,6 +1394,9 @@ static void SV_XRLocalOffhandAttack (edict_t *ent)
 	VectorCopy (pr_global_struct->v_up, up);
 	pr_global_struct->self = EDICT_TO_PROG (offhand);
 	XR_Interaction_BeginLocalOffhandAttack ();
+	had_context = XR_Interaction_GetMeleeDamageContext (&previous_context);
+	if (motion.valid)
+		XR_Interaction_SetMeleeDamageContext (&motion);
 	PR_ExecuteProgram (attack);
 	/* Some QuakeC melee weapons advance through scheduled weapon frames before striking. */
 	if (weapon == IT_AXE || weapon == HIT_MJOLNIR || (rogue && weapon == RIT_AXE))
@@ -1211,6 +1409,11 @@ static void SV_XRLocalOffhandAttack (edict_t *ent)
 			PR_ExecuteProgram (melee_think);
 		}
 		pr_global_struct->time = qcvm->time;
+	}
+	if (motion.valid)
+	{
+		if (had_context) XR_Interaction_SetMeleeDamageContext (&previous_context);
+		else XR_Interaction_ClearMeleeDamageContext ();
 	}
 	XR_Interaction_EndLocalOffhandAttack ();
 
@@ -1273,16 +1476,22 @@ void SV_Physics_Client (edict_t *ent, int num)
 	eval_t *attack_finished_field;
 	float attack_finished_before;
 	qboolean local_offhand_fired;
+	qboolean main_motion_valid, main_motion_context;
+	xr_melee_attack_t main_motion;
 
 	if ( ! svs.clients[num-1].active )
 		return;		// unconnected slot
 	attack_finished_field = NULL;
 	attack_finished_before = 0.f;
+	main_motion_valid = false;
+	main_motion_context = false;
+	memset (&main_motion, 0, sizeof (main_motion));
 	if (ent == sv_player && XR_Input_OwnsInput ())
 	{
 		attack_finished_field = GetEdictFieldValueByName (ent, "attack_finished");
 		if (attack_finished_field)
 			attack_finished_before = attack_finished_field->_float;
+		main_motion_valid = XR_Interaction_GetMeleePulse (XR_HAND_MAINHAND, &main_motion);
 	}
 
 //
@@ -1290,7 +1499,18 @@ void SV_Physics_Client (edict_t *ent, int num)
 //
 	pr_global_struct->time = qcvm->time;
 	pr_global_struct->self = EDICT_TO_PROG(ent);
+	if (svs.maxclients == 1 && main_motion_valid &&
+	    (main_motion.mode == XR_MELEE_AXE || main_motion.mode == XR_MELEE_MJOLNIR))
+	{
+		XR_Interaction_SetMeleeDamageContext (&main_motion);
+		main_motion_context = true;
+	}
 	PR_ExecuteProgram (pr_global_struct->PlayerPreThink);
+	if (main_motion_valid && (main_motion.mode == XR_MELEE_FIST || main_motion.mode == XR_MELEE_GUNBUTT))
+	{
+		if (XR_Interaction_ConsumeMeleePulse (XR_HAND_MAINHAND, &main_motion))
+			SV_XRExecuteFallbackMelee (ent, &main_motion);
+	}
 
 	// Single-player offhand fire reuses the loaded game's attack routine, then restores main-hand state.
     SV_XRLocalOffhandAttack (ent);
@@ -1314,12 +1534,18 @@ void SV_Physics_Client (edict_t *ent, int num)
 	{
 	case MOVETYPE_NONE:
 		if (!SV_RunThink (ent))
+		{
+			if (main_motion_context) XR_Interaction_ClearMeleeDamageContext ();
 			return;
+		}
 		break;
 
 	case MOVETYPE_WALK:
 		if (!SV_RunThink (ent))
+		{
+			if (main_motion_context) XR_Interaction_ClearMeleeDamageContext ();
 			return;
+		}
 		if (!SV_CheckWater (ent) && ! ((int)ent->v.flags & FL_WATERJUMP) )
 			SV_AddGravity (ent);
 		SV_CheckStuck (ent);
@@ -1334,13 +1560,19 @@ void SV_Physics_Client (edict_t *ent, int num)
 
 	case MOVETYPE_FLY:
 		if (!SV_RunThink (ent))
+		{
+			if (main_motion_context) XR_Interaction_ClearMeleeDamageContext ();
 			return;
+		}
 		SV_FlyMove (ent, host_frametime, NULL);
 		break;
 
 	case MOVETYPE_NOCLIP:
 		if (!SV_RunThink (ent))
+		{
+			if (main_motion_context) XR_Interaction_ClearMeleeDamageContext ();
 			return;
+		}
 		VectorMA (ent->v.origin, host_frametime, ent->v.velocity, ent->v.origin);
 		break;
 
@@ -1351,6 +1583,8 @@ void SV_Physics_Client (edict_t *ent, int num)
 //
 // call standard player post-think
 //
+	if (main_motion_context)
+		XR_Interaction_ClearMeleeDamageContext ();
 	SV_LinkEdict (ent, true);
 
 	wasunderwater = ent->v.waterlevel >= 3;

@@ -8,7 +8,8 @@
 	"progs/vr/v_axe.mdl": {
 		"scale": 0.68,
 		"wheel_scale": 0.9,
-		"offset": [ 1, 0, -11 ]
+		"offset": [ 1, 0, -11 ],
+		"melee": "axe"
 	},
 	"progs/vr/v_shot.mdl": {
 		"scale": 0.68,
@@ -48,7 +49,8 @@
 	"progs/vr/hipnotic/v_hammer.mdl": {
 		"scale": 0.68,
 		"wheel_scale": 1.2,
-		"offset": [ 1, 0, -11 ]
+		"offset": [ 1, 0, -11 ],
+		"melee": "mjolnir"
 	},
 	"progs/vr/hipnotic/v_laserg.mdl": {
 		"scale": 0.4,
@@ -105,7 +107,8 @@
 	"progs/vr/mg3/v_hammer.mdl": {
 		"scale": 0.68,
 		"wheel_scale": 1.2,
-		"offset": [ 1, 0, -11 ]
+		"offset": [ 1, 0, -11 ],
+		"melee": "mjolnir"
 	},
 	"progs/vr/mg3/v_laserg.mdl": {
 		"scale": 0.65,

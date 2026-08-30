@@ -1059,6 +1059,7 @@ xr->fbos = (GLuint *)calloc(xr->image_count, sizeof(*xr->fbos));
         if (event.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED)
         {
             XrEventDataSessionStateChanged *changed = (XrEventDataSessionStateChanged *)&event;
+            XrSessionState previous_state = xr->session_state;
             xr->session_state = changed->state;
             {
                 char message[96];
@@ -1075,6 +1076,11 @@ xr->fbos = (GLuint *)calloc(xr->image_count, sizeof(*xr->fbos));
                 if (result != XR_SUCCESS)
                     return xr_fail(xr, reason, result, "xrBeginSession");
                 xr->session_running = true;
+            }
+            else if (previous_state == XR_SESSION_STATE_FOCUSED && changed->state != XR_SESSION_STATE_FOCUSED)
+            {
+                IW_XRWin_Haptic (xr, 0, 0.f, 0.f);
+                IW_XRWin_Haptic (xr, 1, 0.f, 0.f);
             }
         }
         memset(&event, 0, sizeof(event));
@@ -1278,7 +1284,7 @@ static void xr_update_actions(iw_xr_win_t *xr)
     XrActionsSyncInfo sync_info;
     int hand;
     memset(&xr->actions, 0, sizeof(xr->actions));
-    if (!xr->session_running || xr->action_set == XR_NULL_HANDLE) return;
+    if (!xr->session_running || xr->action_set == XR_NULL_HANDLE || xr->session_state != XR_SESSION_STATE_FOCUSED) return;
     memset(&active_set, 0, sizeof(active_set));
     active_set.actionSet = xr->action_set;
     memset(&sync_info, 0, sizeof(sync_info));
@@ -1290,6 +1296,7 @@ static void xr_update_actions(iw_xr_win_t *xr)
     {
         iw_xr_hand_snapshot_t *snapshot = &xr->actions.hand[hand];
         XrSpaceLocation location;
+        XrSpaceVelocity aim_velocity, grip_velocity;
         float trackpad[2];
         snapshot->trigger = xr_action_float(xr, xr->trigger_action, xr->hand_paths[hand]);
         snapshot->grip = xr_action_float(xr, xr->grip_action, xr->hand_paths[hand]);
@@ -1310,6 +1317,9 @@ static void xr_update_actions(iw_xr_win_t *xr)
         if (xr_action_bool(xr, xr->menu_action, xr->hand_paths[hand])) snapshot->buttons |= IW_XR_BUTTON_MENU;
         memset(&location, 0, sizeof(location));
         location.type = XR_TYPE_SPACE_LOCATION;
+        memset(&aim_velocity, 0, sizeof(aim_velocity));
+        aim_velocity.type = XR_TYPE_SPACE_VELOCITY;
+        location.next = &aim_velocity;
         if (xr_action_pose_active(xr, xr->aim_action, xr->hand_paths[hand]) &&
             xr->locate_space(xr->aim_spaces[hand], xr->space, xr->frame_state.predictedDisplayTime, &location) == XR_SUCCESS &&
             (location.locationFlags & (XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT)) ==
@@ -1321,6 +1331,9 @@ static void xr_update_actions(iw_xr_win_t *xr)
         }
         memset(&location, 0, sizeof(location));
         location.type = XR_TYPE_SPACE_LOCATION;
+        memset(&grip_velocity, 0, sizeof(grip_velocity));
+        grip_velocity.type = XR_TYPE_SPACE_VELOCITY;
+        location.next = &grip_velocity;
         if (xr_action_pose_active(xr, xr->grip_pose_action, xr->hand_paths[hand]) &&
             xr->locate_space(xr->grip_spaces[hand], xr->space, xr->frame_state.predictedDisplayTime, &location) == XR_SUCCESS &&
             (location.locationFlags & (XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT)) ==
@@ -1329,6 +1342,20 @@ static void xr_update_actions(iw_xr_win_t *xr)
             snapshot->grip_valid = true;
             snapshot->grip_position[0] = location.pose.position.x; snapshot->grip_position[1] = location.pose.position.y; snapshot->grip_position[2] = location.pose.position.z;
             snapshot->grip_orientation[0] = location.pose.orientation.x; snapshot->grip_orientation[1] = location.pose.orientation.y; snapshot->grip_orientation[2] = location.pose.orientation.z; snapshot->grip_orientation[3] = location.pose.orientation.w;
+        }
+        if ((grip_velocity.velocityFlags & XR_SPACE_VELOCITY_LINEAR_VALID_BIT) != 0)
+        {
+            snapshot->velocity_valid = true;
+            snapshot->linear_velocity[0] = grip_velocity.linearVelocity.x;
+            snapshot->linear_velocity[1] = grip_velocity.linearVelocity.y;
+            snapshot->linear_velocity[2] = grip_velocity.linearVelocity.z;
+        }
+        else if ((aim_velocity.velocityFlags & XR_SPACE_VELOCITY_LINEAR_VALID_BIT) != 0)
+        {
+            snapshot->velocity_valid = true;
+            snapshot->linear_velocity[0] = aim_velocity.linearVelocity.x;
+            snapshot->linear_velocity[1] = aim_velocity.linearVelocity.y;
+            snapshot->linear_velocity[2] = aim_velocity.linearVelocity.z;
         }
         snapshot->active = snapshot->aim_valid || snapshot->grip_valid || snapshot->trigger != 0.0f || snapshot->grip != 0.0f || snapshot->stick[0] != 0.0f || snapshot->stick[1] != 0.0f || snapshot->buttons != 0;
         xr->actions.active |= snapshot->active;

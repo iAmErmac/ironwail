@@ -97,8 +97,9 @@ extern cvar_t vr_hud_size;
 extern cvar_t vr_hud_distance;
 extern cvar_t vr_hud_yoffset;
 extern cvar_t vr_hud_render_yoffset;
-extern cvar_t vr_weapon_replace, vr_offhand_render_flip, vr_weapon_pitch, vr_weapon_xoffset, vr_weapon_yoffset, vr_weapon_zoffset;
+extern cvar_t vr_weapon_replace, vr_offhand_render_flip, vr_weapon_pitch, vr_weapon_xoffset, vr_weapon_yoffset, vr_weapon_zoffset, vr_weapon_melee, vr_weapon_melee_damage_scale;
 extern cvar_t vr_weapon_fire_xoffset, vr_weapon_fire_yoffset, vr_weapon_fire_zoffset;
+extern cvar_t vr_melee, vr_melee_velocity, vr_melee_cooldown, vr_melee_damage_scale, vr_melee_pitch;
 extern cvar_t vr_laser_sight, vr_laser_beam, vr_laser_color, vr_laser_beam_width, vr_laser_beam_alpha, vr_laser_alpha, vr_laser_sight_scale, vr_laser_hide_melee;
 extern cvar_t vr_turn_mode;
 extern cvar_t vr_turn_angle;
@@ -1156,6 +1157,7 @@ static enum m_state_e M_GetBaseState (enum m_state_e state)
 	case m_vr_screen:
 	case m_vr_hud:
 	case m_vr_weapon:
+	case m_vr_melee:
 	case m_vr_laser:
 	case m_graphics:
 	case m_gamepad:
@@ -3139,6 +3141,7 @@ void M_Menu_Gamepad_f (void)
 		item (VR_OPT_SCREEN, "Virtual Screen")						\
 		item (VR_OPT_HUD, "VR HUD")							\
 		item (VR_OPT_WEAPON, "VR Weapon")				\
+		item (VR_OPT_MELEE, "Motion Melee")				\
 		item (VR_OPT_LASER, "Laser Sight")				\
 		item (VR_OPT_MIRROR, "Desktop Mirror")					\
 		item (VR_OPT_WORLD_SCALE, "World Scale")					\
@@ -3186,6 +3189,8 @@ void M_Menu_Gamepad_f (void)
 	begin_menu (VR_WEAPON_OPTIONS, m_vr_weapon, TITLE("VR Weapon"))	\
 		item (VR_WEAPON_OPT_REPLACE, "Use VR Models" )			\
 		item (VR_WEAPON_OPT_OFFHAND_FLIP, "Flip Offhand" )	\
+		item (VR_WEAPON_OPT_MELEE, "Weapon Melee" )	\
+		item (VR_WEAPON_OPT_MELEE_SCALE, "Melee Damage Scale" )	\
 		item (VR_WEAPON_OPT_PITCH, "Pitch Adjust" )			\
 		item (VR_WEAPON_OPT_XOFFSET, "X Offset" )					\
 		item (VR_WEAPON_OPT_YOFFSET, "Y Offset" )					\
@@ -3195,6 +3200,15 @@ void M_Menu_Gamepad_f (void)
 		item (VR_WEAPON_OPT_FIRE_ZOFFSET, "Fire Z Offset" )			\
 		item (SPACER, "" )					\
 		item (VR_WEAPON_OPT_RESET, "Reset Defaults" )					\
+	end_menu ()									\
+		begin_menu (VR_MELEE_OPTIONS, m_vr_melee, TITLE("Motion Melee"))	\
+		item (VR_MELEE_OPT_ENABLE, "Motion Melee")					\
+		item (VR_MELEE_OPT_VELOCITY, "Melee Velocity")				\
+		item (VR_MELEE_OPT_COOLDOWN, "Melee Cooldown")				\
+		item (VR_MELEE_OPT_DAMAGE_SCALE, "Damage Scale")				\
+		item (VR_MELEE_OPT_PITCH, "Melee Pitch")					\
+		item (SPACER, "")								\
+		item (VR_MELEE_OPT_RESET, "Reset Defaults")					\
 	end_menu ()									\
 		begin_menu (VR_LASER_OPTIONS, m_vr_laser, TITLE("Laser Sight"))	\
 		item (VR_LASER_OPT_SIGHT, "Laser Sight")				\
@@ -3679,6 +3693,11 @@ static void M_VR_ResetOptions (void)
     Cvar_SetValueQuick (&vr_haptic_intensity, 1.f);
 	Cvar_SetValueQuick (&vr_turn_mode, 0.f);
 	Cvar_SetValueQuick (&vr_turn_angle, 30.f);
+	Cvar_SetValueQuick (&vr_melee, 1.f);
+	Cvar_SetValueQuick (&vr_melee_velocity, 2.5f);
+	Cvar_SetValueQuick (&vr_melee_cooldown, 0.15f);
+	Cvar_SetValueQuick (&vr_melee_damage_scale, 1.f);
+	Cvar_SetValueQuick (&vr_melee_pitch, 45.f);
 }
 
 static void M_VR_ResetScreen (void)
@@ -3719,6 +3738,8 @@ static void M_VR_ResetWeapon (void)
 {
 	Cvar_SetValueQuick (&vr_weapon_replace, 1.f);
 	Cvar_SetValueQuick (&vr_offhand_render_flip, 1.f);
+	Cvar_SetValueQuick (&vr_weapon_melee, 0.f);
+	Cvar_SetValueQuick (&vr_weapon_melee_damage_scale, 0.3f);
 	Cvar_SetValueQuick (&vr_weapon_pitch, -45.f);
 	Cvar_SetValueQuick (&vr_weapon_xoffset, 0.f);
 	Cvar_SetValueQuick (&vr_weapon_yoffset, 0.f);
@@ -3726,6 +3747,14 @@ static void M_VR_ResetWeapon (void)
 	Cvar_SetValueQuick (&vr_weapon_fire_xoffset, 0.f);
 	Cvar_SetValueQuick (&vr_weapon_fire_yoffset, 0.f);
 	Cvar_SetValueQuick (&vr_weapon_fire_zoffset, 0.f);
+}
+static void M_VR_ResetMelee (void)
+{
+	Cvar_SetValueQuick (&vr_melee, 1.f);
+	Cvar_SetValueQuick (&vr_melee_velocity, 2.5f);
+	Cvar_SetValueQuick (&vr_melee_cooldown, 0.15f);
+	Cvar_SetValueQuick (&vr_melee_damage_scale, 1.f);
+	Cvar_SetValueQuick (&vr_melee_pitch, 45.f);
 }
 typedef enum
 {
@@ -3899,6 +3928,12 @@ void M_AdjustSliders (int dir)
 	case VR_WEAPON_OPT_OFFHAND_FLIP:
 		Cvar_SetValueQuick (&vr_offhand_render_flip, !vr_offhand_render_flip.value);
 		break;
+	case VR_WEAPON_OPT_MELEE:
+		Cvar_SetValueQuick (&vr_weapon_melee, !vr_weapon_melee.value);
+		break;
+	case VR_WEAPON_OPT_MELEE_SCALE:
+		Cvar_SetValueQuick (&vr_weapon_melee_damage_scale, CLAMP (0.f, vr_weapon_melee_damage_scale.value + dir * 0.05f, 1.f));
+		break;
 	case VR_WEAPON_OPT_PITCH:
 		Cvar_SetValueQuick (&vr_weapon_pitch, CLAMP (-90.f, vr_weapon_pitch.value + dir, 90.f));
 		break;
@@ -3919,6 +3954,21 @@ void M_AdjustSliders (int dir)
 		break;
 	case VR_WEAPON_OPT_FIRE_ZOFFSET:
 		Cvar_SetValueQuick (&vr_weapon_fire_zoffset, CLAMP (-100.f, vr_weapon_fire_zoffset.value + dir, 100.f));
+		break;
+	case VR_MELEE_OPT_ENABLE:
+		Cvar_SetValueQuick (&vr_melee, !vr_melee.value);
+		break;
+	case VR_MELEE_OPT_VELOCITY:
+		Cvar_SetValueQuick (&vr_melee_velocity, CLAMP (0.1f, vr_melee_velocity.value + dir * 0.1f, 6.f));
+		break;
+	case VR_MELEE_OPT_COOLDOWN:
+		Cvar_SetValueQuick (&vr_melee_cooldown, CLAMP (0.f, vr_melee_cooldown.value + dir * 0.025f, 5.f));
+		break;
+	case VR_MELEE_OPT_DAMAGE_SCALE:
+		Cvar_SetValueQuick (&vr_melee_damage_scale, CLAMP (0.f, vr_melee_damage_scale.value + dir * 0.05f, 4.f));
+		break;
+	case VR_MELEE_OPT_PITCH:
+		Cvar_SetValueQuick (&vr_melee_pitch, CLAMP (-90.f, vr_melee_pitch.value + dir, 90.f));
 		break;
 	case VR_LASER_OPT_SIGHT:
 		Cvar_SetValueQuick (&vr_laser_sight, !vr_laser_sight.value);
@@ -4422,6 +4472,21 @@ qboolean M_SetSliderValue (int option, float f)
 	case VR_WEAPON_OPT_FIRE_ZOFFSET:
 		Cvar_SetValueQuick (&vr_weapon_fire_zoffset, -100.f + f * 200.f);
 		return true;
+	case VR_WEAPON_OPT_MELEE_SCALE:
+		Cvar_SetValueQuick (&vr_weapon_melee_damage_scale, f);
+		return true;
+	case VR_MELEE_OPT_VELOCITY:
+		Cvar_SetValueQuick (&vr_melee_velocity, 0.1f + f * 5.9f);
+		return true;
+	case VR_MELEE_OPT_COOLDOWN:
+		Cvar_SetValueQuick (&vr_melee_cooldown, f * 5.f);
+		return true;
+	case VR_MELEE_OPT_DAMAGE_SCALE:
+		Cvar_SetValueQuick (&vr_melee_damage_scale, f * 4.f);
+		return true;
+	case VR_MELEE_OPT_PITCH:
+		Cvar_SetValueQuick (&vr_melee_pitch, -90.f + f * 180.f);
+		return true;
 	case VR_LASER_OPT_DOT_SCALE:
 		Cvar_SetValueQuick (&vr_laser_sight_scale, 0.1f + f * 9.9f);
 		return true;
@@ -4628,6 +4693,7 @@ static void M_Options_DrawItem (int y, int item)
 	case VR_OPT_HUD:
 	case VR_OPT_WEAPON:
 	case VR_OPT_LASER:
+	case VR_OPT_MELEE:
 		M_Print (x - 4, y, "...");
 
 		break;
@@ -4747,6 +4813,12 @@ static void M_Options_DrawItem (int y, int item)
 	case VR_WEAPON_OPT_OFFHAND_FLIP:
 		M_DrawCheckbox (x, y, vr_offhand_render_flip.value);
 		break;
+	case VR_WEAPON_OPT_MELEE:
+		M_DrawCheckbox (x, y, vr_weapon_melee.value);
+		break;
+	case VR_WEAPON_OPT_MELEE_SCALE:
+		M_DrawSlider (x, y, vr_weapon_melee_damage_scale.value, va ("%.2f", vr_weapon_melee_damage_scale.value));
+		break;
 	case VR_WEAPON_OPT_PITCH:
 		M_DrawSlider (x, y, (vr_weapon_pitch.value + 90.f) / 180.f, va ("%.0f", vr_weapon_pitch.value));
 		break;
@@ -4767,6 +4839,21 @@ static void M_Options_DrawItem (int y, int item)
 		break;
 	case VR_WEAPON_OPT_FIRE_ZOFFSET:
 		M_DrawSlider (x, y, (vr_weapon_fire_zoffset.value + 100.f) / 200.f, va ("%.0f", vr_weapon_fire_zoffset.value));
+		break;
+	case VR_MELEE_OPT_ENABLE:
+		M_DrawCheckbox (x, y, vr_melee.value);
+		break;
+	case VR_MELEE_OPT_VELOCITY:
+		M_DrawSlider (x, y, (vr_melee_velocity.value - 0.1f) / 5.9f, va ("%.1f", vr_melee_velocity.value));
+		break;
+	case VR_MELEE_OPT_COOLDOWN:
+		M_DrawSlider (x, y, vr_melee_cooldown.value / 5.f, va ("%.2f", vr_melee_cooldown.value));
+		break;
+	case VR_MELEE_OPT_DAMAGE_SCALE:
+		M_DrawSlider (x, y, vr_melee_damage_scale.value / 4.f, va ("%.2f", vr_melee_damage_scale.value));
+		break;
+	case VR_MELEE_OPT_PITCH:
+		M_DrawSlider (x, y, (vr_melee_pitch.value + 90.f) / 180.f, va ("%.0f", vr_melee_pitch.value));
 		break;
 	case VR_LASER_OPT_SIGHT:
 		M_DrawCheckbox (x, y, vr_laser_sight.value);
@@ -5367,7 +5454,7 @@ void M_Options_Key (int k)
 		}
 		if (m_state == m_video)
 			VID_SyncCvars (); //sync cvars before leaving menu. FIXME: there are other ways to leave menu
-		if (m_state == m_vr_screen || m_state == m_vr_hud || m_state == m_vr_weapon || m_state == m_vr_laser)
+		if (m_state == m_vr_screen || m_state == m_vr_hud || m_state == m_vr_weapon || m_state == m_vr_melee || m_state == m_vr_laser)
 			M_Menu_VR_f ();
 	 else if (m_state == m_options)
 			M_Menu_Main_f ();
@@ -5410,6 +5497,9 @@ void M_Options_Key (int k)
 		case VR_OPT_WEAPON:
 			M_Options_Init (m_vr_weapon);
 			break;
+		case VR_OPT_MELEE:
+			M_Options_Init (m_vr_melee);
+			break;
 		case VR_OPT_LASER:
 			M_Options_Init (m_vr_laser);
 			break;
@@ -5427,6 +5517,15 @@ void M_Options_Key (int k)
 			break;
 		case VR_WEAPON_OPT_OFFHAND_FLIP:
 			Cvar_SetValueQuick (&vr_offhand_render_flip, !vr_offhand_render_flip.value);
+			break;
+		case VR_WEAPON_OPT_MELEE:
+			Cvar_SetValueQuick (&vr_weapon_melee, !vr_weapon_melee.value);
+			break;
+		case VR_MELEE_OPT_ENABLE:
+			Cvar_SetValueQuick (&vr_melee, !vr_melee.value);
+			break;
+		case VR_MELEE_OPT_RESET:
+			M_VR_ResetMelee ();
 			break;
 		case VR_WEAPON_OPT_RESET:
 			M_VR_ResetWeapon ();

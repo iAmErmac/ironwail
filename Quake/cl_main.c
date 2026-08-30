@@ -107,6 +107,7 @@ void CL_ClearState (void)
 
 // wipe the entire cl structure
 	CL_FreeState ();
+	XR_Interaction_ResetMeleeState ();
 
 	SZ_Clear (&cls.message);
 
