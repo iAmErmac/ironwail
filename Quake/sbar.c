@@ -22,12 +22,23 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // sbar.c -- status bar code
 
 #include "quakedef.h"
+#include "xr_interaction.h"
 
 static int		sb_updates;		// if >= vid.numpages, no update needed
 
 static qboolean Sbar_IsXRHUD (void)
 {
 	return R_HasXRFinalTarget ();
+}
+
+static int Sbar_ActiveWeapon (void)
+{
+	return Sbar_IsXRHUD () ? XR_Interaction_MainhandWeaponItem () : cl.stats[STAT_ACTIVEWEAPON];
+}
+
+static int Sbar_CurrentAmmo (void)
+{
+	return Sbar_IsXRHUD () ? XR_Interaction_MainhandCurrentAmmo () : cl.stats[STAT_AMMO];
 }
 
 #define STAT_MINUS		10	// num frame for '-' stats digit
@@ -554,7 +565,7 @@ Sbar_InventoryBarPic
 qpic_t *Sbar_InventoryBarPic (void)
 {
 	if (rogue)
-		return rsb_invbar[cl.stats[STAT_ACTIVEWEAPON] < RIT_LAVA_NAILGUN];
+		return rsb_invbar[Sbar_ActiveWeapon () < RIT_LAVA_NAILGUN];
 	return sb_ibar;
 }
 
@@ -580,7 +591,7 @@ void Sbar_DrawInventory (void)
 			flashon = (int)((cl.time - time)*10);
 			if (flashon >= 10)
 			{
-				if ( cl.stats[STAT_ACTIVEWEAPON] == (IT_SHOTGUN<<i)  )
+				if ( Sbar_ActiveWeapon () == (IT_SHOTGUN<<i)  )
 					flashon = 1;
 				else
 					flashon = 0;
@@ -608,7 +619,7 @@ void Sbar_DrawInventory (void)
 				flashon = (int)((cl.time - time)*10);
 				if (flashon >= 10)
 				{
-					if (cl.stats[STAT_ACTIVEWEAPON] == (1<<hipweapons[i]))
+					if (Sbar_ActiveWeapon () == (1<<hipweapons[i]))
 						flashon = 1;
 					else
 						flashon = 0;
@@ -656,11 +667,11 @@ void Sbar_DrawInventory (void)
 	if (rogue)
 	{
     // check for powered up weapon.
-		if ( cl.stats[STAT_ACTIVEWEAPON] >= RIT_LAVA_NAILGUN )
+		if ( Sbar_ActiveWeapon () >= RIT_LAVA_NAILGUN )
 		{
 			for (i=0;i<5;i++)
 			{
-				if (cl.stats[STAT_ACTIVEWEAPON] == (RIT_LAVA_NAILGUN << i))
+				if (Sbar_ActiveWeapon () == (RIT_LAVA_NAILGUN << i))
 				{
 					Sbar_DrawPic ((i+2)*24, -16, rsb_weapons[i]);
 				}
@@ -800,7 +811,7 @@ void Sbar_DrawInventoryQW (void)
 				flashon = (int)((cl.time - time)*10);
 				if (flashon >= 10)
 				{
-					if ( cl.stats[STAT_ACTIVEWEAPON] == (IT_SHOTGUN<<i)  )
+					if ( Sbar_ActiveWeapon () == (IT_SHOTGUN<<i)  )
 						flashon = 1;
 					else
 						flashon = 0;
@@ -828,7 +839,7 @@ void Sbar_DrawInventoryQW (void)
 					flashon = (int)((cl.time - time)*10);
 					if (flashon >= 10)
 					{
-						if (cl.stats[STAT_ACTIVEWEAPON] == (1<<hipweapons[i]))
+					if (Sbar_ActiveWeapon () == (1<<hipweapons[i]))
 							flashon = 1;
 						else
 							flashon = 0;
@@ -876,11 +887,11 @@ void Sbar_DrawInventoryQW (void)
 		if (rogue)
 		{
 		// check for powered up weapon.
-			if ( cl.stats[STAT_ACTIVEWEAPON] >= RIT_LAVA_NAILGUN )
+			if ( Sbar_ActiveWeapon () >= RIT_LAVA_NAILGUN )
 			{
 				for (i=0;i<5;i++)
 				{
-					if (cl.stats[STAT_ACTIVEWEAPON] == (RIT_LAVA_NAILGUN << i))
+					if (Sbar_ActiveWeapon () == (RIT_LAVA_NAILGUN << i))
 					{
 						Sbar_DrawPic (24, -69 - scoreboard_y_gap - (16 * 7) + (i+2) * 16, rsb_weapons[i]);
 					}
@@ -1046,7 +1057,7 @@ void Sbar_DrawInventory2 (void)
 
 			if (cl.items & (IT_SHOTGUN<<i))
 			{
-				qboolean active = (cl.stats[STAT_ACTIVEWEAPON] == (IT_SHOTGUN<<i));
+				qboolean active = (Sbar_ActiveWeapon () == (IT_SHOTGUN<<i));
 				time = cl.item_gettime[i];
 				flashon = (int)((cl.time - time)*10);
 				if (flashon >= 10)
@@ -1054,7 +1065,7 @@ void Sbar_DrawInventory2 (void)
 				else
 					flashon = (flashon%5) + 2;
 
-				if (rogue && i >= 2 && cl.stats[STAT_ACTIVEWEAPON] == (RIT_LAVA_NAILGUN << (i - 2)))
+				if (rogue && i >= 2 && Sbar_ActiveWeapon () == (RIT_LAVA_NAILGUN << (i - 2)))
 				{
 					// powered up weapon
 					pic = rsb_weapons[i - 2];
@@ -1076,7 +1087,7 @@ void Sbar_DrawInventory2 (void)
 			{
 				if (cl.items & (1<<hipweapons[i]))
 				{
-					qboolean active = (cl.stats[STAT_ACTIVEWEAPON] == (1<<hipweapons[i]));
+					qboolean active = (Sbar_ActiveWeapon () == (1<<hipweapons[i]));
 					time = cl.item_gettime[hipweapons[i]];
 					flashon = (int)((cl.time - time)*10);
 					if (flashon >= 10)
@@ -1765,8 +1776,8 @@ void Sbar_Draw (void)
 			if (pic)
 				Sbar_DrawPic (224, 0, pic);
 
-			Sbar_DrawNum (248, 0, cl.stats[STAT_AMMO], 3,
-						  cl.stats[STAT_AMMO] <= 10);
+			Sbar_DrawNum (248, 0, Sbar_CurrentAmmo (), 3,
+						  Sbar_CurrentAmmo () <= 10);
 		}
 
 		//johnfitz -- removed the vid.width > 320 check here
@@ -1804,7 +1815,7 @@ void Sbar_Draw (void)
 				Sbar_DrawPic (x, y, pic);
 				x -= 32;
 			}
-			Sbar_DrawNum (x - 48, y, cl.stats[STAT_AMMO], 3, cl.stats[STAT_AMMO] <= 10);
+			Sbar_DrawNum (x - 48, y, Sbar_CurrentAmmo (), 3, Sbar_CurrentAmmo () <= 10);
 
 			Sbar_DrawInventory2 ();
 			if (cl.maxclients != 1)

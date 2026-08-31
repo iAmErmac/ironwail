@@ -175,12 +175,18 @@ makevectors(vector)
 /* Controller poses can replace aim direction only for local single-player firing. */
 static qboolean PF_UseXRControllerAim (void)
 {
-	if (!sv.active || cls.demoplayback || cl.maxclients != 1 || !sv_player)
+	if (!sv.active || cls.demoplayback || cl.maxclients != 1 || svs.maxclients != 1 ||
+		!XR_Input_OwnsInput () || !svs.clients[0].active || !svs.clients[0].edict || !sv_player)
 		return false;
-	return XR_Interaction_UseOffhandAim () || PROG_TO_EDICT (pr_global_struct->self) == sv_player;
+	return XR_Interaction_UseOffhandAim () || PROG_TO_EDICT (pr_global_struct->self) == svs.clients[0].edict;
 }
 
 static qboolean pf_xr_melee_trace_pending;
+
+void PR_ClearXRTraceContext(void)
+{
+	pf_xr_melee_trace_pending = false;
+}
 
 static void PF_ApplyXRMeleePitch (void)
 {
@@ -768,7 +774,8 @@ static void PF_sound (void)
 	attenuation = G_FLOAT(OFS_PARM4);
 
     /* Local offhand weapon code runs on a disposable entity; keep its audio on one stable channel. */
-    if (XR_Interaction_UseOffhandAim () && entity == PROG_TO_EDICT (pr_global_struct->self) && sv_player)
+    if (PF_UseXRControllerAim () && XR_Interaction_UseOffhandAim () &&
+        entity == PROG_TO_EDICT (pr_global_struct->self) && sv_player)
     {
         if ((XR_Interaction_OffhandWeaponItem () == IT_NAILGUN || XR_Interaction_OffhandWeaponItem () == IT_SUPER_NAILGUN || XR_Interaction_OffhandWeaponItem () == IT_LIGHTNING || XR_Interaction_OffhandWeaponItem () == HIT_LASER_CANNON || (rogue && (XR_Interaction_OffhandWeaponItem () == RIT_LAVA_NAILGUN || XR_Interaction_OffhandWeaponItem () == RIT_LAVA_SUPER_NAILGUN))) &&
             channel == 0 && !XR_Interaction_AllowOffhandContinuousAutoSound ()) return;
@@ -808,7 +815,7 @@ traceline (vector1, vector2, tryents)
 static edict_t *PF_XRTraceIgnoreEntity (edict_t *ent)
 {
 	/* The local offhand attack uses a disposable QuakeC entity, but its traces must still ignore the canonical player. */
-	if (sv.active && cl.maxclients == 1 && XR_Interaction_UseOffhandAim () && sv_player)
+	if (PF_UseXRControllerAim () && XR_Interaction_UseOffhandAim () && sv_player)
 		return sv_player;
 	return ent;
 }
@@ -829,7 +836,8 @@ static void PF_traceline (void)
 	if (pf_xr_melee_trace_pending)
 	{
 		pf_xr_melee_trace_pending = false;
-		if (XR_Interaction_GetMeleeDamageContext (&attack) && attack.valid)
+		// Online attacks use the server's normal trace; XR pose context is local single-player only.
+		if (PF_UseXRControllerAim () && XR_Interaction_GetMeleeDamageContext (&attack) && attack.valid)
 			use_xr_melee_trace = true;
 	}
 

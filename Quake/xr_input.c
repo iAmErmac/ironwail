@@ -612,7 +612,8 @@ qboolean XR_Input_Move(usercmd_t *cmd)
     if (cl.inwater && cmd->upmove > 0.f)
         cmd->upmove = q_max(cmd->upmove, cl_upspeed.value * 2.f);
 
-    if (vr_teleport.value == 0.f && length > deadzone)
+    // Teleport is single-player-only; a saved teleport cvar must not disable online stick movement.
+    if ((vr_teleport.value == 0.f || !XR_Input_CanTeleport()) && length > deadzone)
     {
         float scale = (length - deadzone) / (1.0f - deadzone);
         scale /= length;

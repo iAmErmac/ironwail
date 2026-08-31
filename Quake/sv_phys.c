@@ -1329,6 +1329,13 @@ static void SV_XRExecuteFallbackMelee (edict_t *ent, const xr_melee_attack_t *at
 	VID_XR_Haptic (attack->hand, CLAMP (0.f, 0.5f * attack->damage_scale, 1.f), 0.05f);
 }
 
+static qboolean SV_XRLocalSinglePlayerEntity(edict_t *ent)
+{
+    // The disposable offhand QuakeC executor was a listen-server leak; never run it for network clients.
+    return ent && sv.active && !cls.demoplayback && cl.maxclients == 1 && svs.maxclients == 1 &&
+        XR_Input_OwnsInput() && svs.clients[0].active && svs.clients[0].edict == ent;
+}
+
 /* Run the game's normal QuakeC attack on a short-lived player copy, then copy only gameplay results back. This gives single-player offhand fire independent aim and animation without replacing the canonical player entity. */
 static void SV_XRLocalOffhandAttack (edict_t *ent)
 {
@@ -1345,7 +1352,8 @@ static void SV_XRLocalOffhandAttack (edict_t *ent)
 	int i, weapon;
 
 	memset (&motion, 0, sizeof (motion));
-	if (!XR_Interaction_LocalOffhandAttackReady (qcvm->time, &motion) || ent->v.health <= 0)
+	if (!SV_XRLocalSinglePlayerEntity(ent) ||
+		!XR_Interaction_LocalOffhandAttackReady (qcvm->time, &motion) || ent->v.health <= 0)
 		return;
 	if (motion.valid && (motion.mode == XR_MELEE_FIST || motion.mode == XR_MELEE_GUNBUTT))
 	{
@@ -1456,7 +1464,14 @@ static void SV_XRUpdateOffhandContinuousSound (edict_t *ent)
 	static qboolean was_firing;
 	static double stop_time;
 	int weapon = XR_Interaction_OffhandWeaponItem ();
-	qboolean firing = svs.maxclients == 1 && XR_Interaction_OffhandAttackActive () &&
+	qboolean firing;
+	if (!SV_XRLocalSinglePlayerEntity(ent))
+	{
+		was_firing = false;
+		stop_time = 0.0;
+		return;
+	}
+	firing = XR_Interaction_OffhandAttackActive () &&
 		(weapon == IT_NAILGUN || weapon == IT_SUPER_NAILGUN || weapon == IT_LIGHTNING ||
 		 weapon == HIT_LASER_CANNON || (rogue && (weapon == RIT_LAVA_NAILGUN || weapon == RIT_LAVA_SUPER_NAILGUN)));
 	if (firing) stop_time = 0.0;
@@ -1486,7 +1501,7 @@ void SV_Physics_Client (edict_t *ent, int num)
 	main_motion_valid = false;
 	main_motion_context = false;
 	memset (&main_motion, 0, sizeof (main_motion));
-	if (ent == sv_player && XR_Input_OwnsInput ())
+	if (SV_XRLocalSinglePlayerEntity(ent))
 	{
 		attack_finished_field = GetEdictFieldValueByName (ent, "attack_finished");
 		if (attack_finished_field)
@@ -1517,7 +1532,7 @@ void SV_Physics_Client (edict_t *ent, int num)
 	local_offhand_fired = XR_Interaction_ConsumeLocalOffhandFireEvent ();
     SV_XRUpdateOffhandContinuousSound (ent);
 
-	if (XR_Input_OwnsInput () && svs.maxclients == 1 && ent->v.waterlevel == 2 &&
+	if (SV_XRLocalSinglePlayerEntity(ent) && ent->v.waterlevel == 2 &&
 	    ent->v.button2 && (svs.clients[num - 1].cmd.forwardmove != 0 || svs.clients[num - 1].cmd.sidemove != 0))
 		ent->v.velocity[2] = q_max (ent->v.velocity[2], 225.f);
 
@@ -1593,12 +1608,10 @@ void SV_Physics_Client (edict_t *ent, int num)
 	pr_global_struct->self = EDICT_TO_PROG(ent);
 	PR_ExecuteProgram (pr_global_struct->PlayerPostThink);
 	SV_XRUpdateLocalStats (ent);
-	if (attack_finished_field &&
+	if (attack_finished_field && SV_XRLocalSinglePlayerEntity(ent) &&
 		!(local_offhand_fired && !XR_Interaction_MainhandFireInputActive ()))
 	{
 		iw_xr_hand_t hand = XR_Input_PhysicalHandForRole (XR_HAND_MAINHAND);
-		if (cl.maxclients > 1 && XR_Interaction_OffhandAttackActive ())
-			hand = XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND);
 		XR_Interaction_NotifyWeaponFire (hand, attack_finished_before, attack_finished_field->_float, qcvm->time);
 	}
 
@@ -1816,6 +1829,9 @@ void SV_Physics (void)
 	int	i;
 	int	entity_cap; // For sv_freezenonclients 
 	edict_t	*ent;
+
+	PR_ClearXRTraceContext ();
+	XR_Interaction_ClearMeleeDamageContext ();
 
 // let the progs know that a new frame has started
 	pr_global_struct->self = EDICT_TO_PROG(qcvm->edicts);

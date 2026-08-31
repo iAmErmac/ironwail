@@ -263,6 +263,25 @@ PR_RunError
 Aborts the currently executing function
 ============
 */
+typedef struct
+{
+	qcvm_t *vm;
+	float saved_damage;
+} pr_xr_damage_override_t;
+
+static pr_xr_damage_override_t pr_xr_damage_overrides[MAX_STACK_DEPTH];
+static int pr_xr_damage_override_depth;
+
+static void PR_RestoreXRDamageOverrides (void)
+{
+	while (pr_xr_damage_override_depth > 0)
+	{
+		pr_xr_damage_override_depth--;
+		if (pr_xr_damage_overrides[pr_xr_damage_override_depth].vm == qcvm)
+			G_FLOAT(OFS_PARM3) = pr_xr_damage_overrides[pr_xr_damage_override_depth].saved_damage;
+	}
+}
+
 void PR_RunError (const char *error, ...)
 {
 	va_list	argptr;
@@ -277,6 +296,9 @@ void PR_RunError (const char *error, ...)
 
 	Con_Printf("%s\n", string);
 
+	PR_RestoreXRDamageOverrides ();
+	PR_ClearXRTraceContext ();
+	XR_Interaction_ClearMeleeDamageContext ();
 	qcvm->depth = 0;	// dump the stack so host_error can shutdown functions
 
 	Host_Error("Program error");
@@ -401,8 +423,7 @@ void PR_ExecuteProgram (func_t fnum)
 	int profile, startprofile;
 	edict_t		*ed;
 	int		exitdepth;
-	qboolean	xr_damage_override = false;
-	float		xr_damage_saved = 0.f;
+	qboolean	xr_damage_override_pushed = false;
 
 	if (!fnum || fnum >= qcvm->progs->numfunctions)
 	{
@@ -414,11 +435,18 @@ void PR_ExecuteProgram (func_t fnum)
 	f = &qcvm->functions[fnum];
 	{
 		xr_melee_attack_t context;
-		if (XR_Interaction_GetMeleeDamageContext(&context) && !strcmp(PR_GetString(f->s_name), "T_Damage"))
+		// XR damage scaling was another client-only input leak; apply it only in local single-player and restore it on exit.
+		if (sv.active && svs.maxclients == 1 && cl.maxclients == 1 && XR_Input_OwnsInput () &&
+			XR_Interaction_GetMeleeDamageContext(&context) && !strcmp(PR_GetString(f->s_name), "T_Damage"))
 		{
-			xr_damage_override = true;
-			xr_damage_saved = G_FLOAT(OFS_PARM3);
-			G_FLOAT(OFS_PARM3) = xr_damage_saved * CLAMP(0.f, context.damage_scale, 4.f);
+			if (pr_xr_damage_override_depth < Q_COUNTOF(pr_xr_damage_overrides))
+			{
+				pr_xr_damage_overrides[pr_xr_damage_override_depth].vm = qcvm;
+				pr_xr_damage_overrides[pr_xr_damage_override_depth].saved_damage = G_FLOAT(OFS_PARM3);
+				pr_xr_damage_override_depth++;
+				G_FLOAT(OFS_PARM3) = pr_xr_damage_overrides[pr_xr_damage_override_depth - 1].saved_damage * CLAMP(0.f, context.damage_scale, 4.f);
+				xr_damage_override_pushed = true;
+			}
 		}
 	}
 
@@ -683,7 +711,11 @@ void PR_ExecuteProgram (func_t fnum)
 		st = &qcvm->statements[PR_LeaveFunction()];
 		if (qcvm->depth == exitdepth)
 		{ // Done
-			if (xr_damage_override) G_FLOAT(OFS_PARM3) = xr_damage_saved;
+			if (xr_damage_override_pushed && pr_xr_damage_override_depth > 0 && pr_xr_damage_overrides[pr_xr_damage_override_depth - 1].vm == qcvm)
+			{
+				G_FLOAT(OFS_PARM3) = pr_xr_damage_overrides[pr_xr_damage_override_depth - 1].saved_damage;
+				pr_xr_damage_override_depth--;
+			}
 			return;
 		}
 		break;

@@ -26,16 +26,102 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "net_defs.h"
 
+#if defined(ANDROID_GLES3)
+#include <ifaddrs.h>
+#include <net/if.h>
+#endif
+
 static sys_socket_t net_acceptsocket = INVALID_SOCKET;	// socket for fielding new connections
 static sys_socket_t net_controlsocket;
 static sys_socket_t net_broadcastsocket = 0;
 static struct sockaddr_in broadcastaddr;
 
 static in_addr_t	myAddr;
+static qboolean	android_ip_override;
 
 #include "net_udp.h"
 
 //=============================================================================
+
+#if defined(ANDROID_GLES3)
+static qboolean UDP_AndroidUsableAddress (const struct ifaddrs *interface)
+{
+    const struct sockaddr_in *address;
+    uint32_t host_address;
+
+    if (!interface || !interface->ifa_addr || interface->ifa_addr->sa_family != AF_INET ||
+        !(interface->ifa_flags & IFF_UP) || (interface->ifa_flags & IFF_LOOPBACK))
+        return false;
+
+    address = (const struct sockaddr_in *)interface->ifa_addr;
+    host_address = ntohl(address->sin_addr.s_addr);
+    return (host_address >> 24) != 127 &&
+        (host_address & 0xffff0000u) != 0xa9fe0000u && host_address != 0;
+}
+
+static qboolean UDP_AndroidPrivateAddress (in_addr_t address)
+{
+    uint32_t host_address = ntohl(address);
+    return (host_address >> 24) == 10 ||
+        (host_address & 0xfff00000u) == 0xac100000u ||
+        (host_address & 0xffff0000u) == 0xc0a80000u;
+}
+
+static in_addr_t UDP_AndroidLocalAddress (void)
+{
+    struct ifaddrs *interfaces = NULL;
+    struct ifaddrs *interface;
+    in_addr_t candidate = 0;
+    in_addr_t private_candidate = 0;
+
+    if (getifaddrs(&interfaces) == 0)
+    {
+        for (interface = interfaces; interface; interface = interface->ifa_next)
+        {
+            const struct sockaddr_in *address;
+
+            if (!UDP_AndroidUsableAddress(interface))
+                continue;
+            address = (const struct sockaddr_in *)interface->ifa_addr;
+            if (!candidate)
+                candidate = address->sin_addr.s_addr;
+            if (UDP_AndroidPrivateAddress(address->sin_addr.s_addr))
+            {
+                private_candidate = address->sin_addr.s_addr;
+                break;
+            }
+        }
+        freeifaddrs(interfaces);
+    }
+
+    if (private_candidate)
+        return private_candidate;
+    if (candidate)
+        return candidate;
+
+    Con_SafePrintf("UDP_Init: no non-loopback IPv4 interface found; using 127.0.0.1\n");
+    return htonl(INADDR_LOOPBACK);
+}
+#endif
+
+void UDP_RefreshLocalAddress (void)
+{
+#if defined(ANDROID_GLES3)
+	struct qsockaddr addr;
+	char *tst;
+
+	if (!android_ip_override)
+		myAddr = UDP_AndroidLocalAddress();
+
+	if (!tcpipAvailable)
+		return;
+
+	UDP_GetSocketAddr (net_controlsocket, &addr);
+	strcpy(my_tcpip_address, UDP_AddrToString (&addr));
+	tst = strrchr(my_tcpip_address, ':');
+	if (tst) *tst = 0;
+#endif
+}
 
 sys_socket_t UDP_Init (void)
 {
@@ -103,6 +189,25 @@ sys_socket_t UDP_Init (void)
 		}
 	}
 
+#if defined(ANDROID_GLES3)
+	// Android hostnames can resolve to loopback; advertise the reachable LAN interface instead.
+	i = COM_CheckParm ("-ip");
+	if (i)
+	{
+		if (i >= com_argc-1)
+			Sys_Error ("NET_Init: you must specify an IP address after -ip");
+		myAddr = inet_addr(com_argv[i + 1]);
+		if (myAddr == INADDR_NONE)
+			Sys_Error ("%s is not a valid IP address", com_argv[i + 1]);
+		android_ip_override = true;
+	}
+	else
+	{
+		android_ip_override = false;
+		myAddr = UDP_AndroidLocalAddress();
+	}
+#endif
+
 	if ((net_controlsocket = UDP_OpenSocket(0)) == INVALID_SOCKET)
 	{
 		Con_SafePrintf("UDP_Init: Unable to open control socket, UDP disabled\n");
@@ -139,6 +244,8 @@ void UDP_Listen (qboolean state)
 	// enable listening
 	if (state)
 	{
+		// Refresh after Android networking comes up; startup can precede Wi-Fi readiness.
+		UDP_RefreshLocalAddress();
 		if (net_acceptsocket != INVALID_SOCKET)
 			return;
 		if ((net_acceptsocket = UDP_OpenSocket (net_hostport)) == INVALID_SOCKET)
@@ -174,6 +281,7 @@ sys_socket_t UDP_OpenSocket (int port)
 
 	memset(&address, 0, sizeof(struct sockaddr_in));
 	address.sin_family = AF_INET;
+	// Bind the listener to every interface; myAddr is only the advertised address.
 	address.sin_addr.s_addr = INADDR_ANY;
 	address.sin_port = htons((unsigned short)port);
 	if (bind (newsocket, (struct sockaddr *)&address, sizeof(address)) == 0)

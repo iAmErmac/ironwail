@@ -21,6 +21,12 @@ typedef struct {
     float damage_scale;
 } xr_melee_attack_t;
 
+typedef enum {
+    XR_NETWORK_ATTACK_NONE = 0,
+    XR_NETWORK_ATTACK_MAINHAND,
+    XR_NETWORK_ATTACK_OFFHAND
+} xr_network_attack_owner_t;
+
 void XR_Interaction_Init(void);
 void XR_Interaction_Shutdown(void);
 void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions);
@@ -31,6 +37,10 @@ qboolean XR_Interaction_ConsumesGameplay(void);
 qboolean XR_Interaction_WheelActive(void);
 qboolean XR_Interaction_OffhandAttackActive(void);
 qboolean XR_Interaction_MainhandFireInputActive(void);
+qboolean XR_Interaction_OffhandNetworkAttackActive(void);
+xr_network_attack_owner_t XR_Interaction_PrepareNetworkAttack(qboolean main_requested, int user_impulse, int *network_impulse);
+void XR_Interaction_CommitNetworkAttack(xr_network_attack_owner_t owner, int network_impulse);
+qboolean XR_Interaction_PrepareNetworkViewAngles(xr_network_attack_owner_t owner, vec3_t angles);
 qboolean XR_Interaction_ConsumeLocalOffhandFireEvent(void);
 qboolean XR_Interaction_UseOffhandAim(void);
 void XR_Interaction_SetLocalOffhandCooldown(double time, float attack_finished);
@@ -45,6 +55,8 @@ void XR_Interaction_SetLocalOffhandBeamEntity(int entity, double time);
 qboolean XR_Interaction_IsLocalOffhandBeamEntity(int entity);
 void XR_Interaction_RecordLocalProjectileSpawn(int entity, iw_xr_hand_t hand, int weapon);
 qboolean XR_Interaction_ConsumeLocalProjectileSpawn(int entity, iw_xr_hand_t *hand, int *weapon, qboolean *second_offset);
+qboolean XR_Interaction_PeekNetworkProjectileVisual(iw_xr_hand_t *hand, int *weapon);
+qboolean XR_Interaction_ConsumeNetworkProjectileVisual(iw_xr_hand_t *hand, int *weapon, qboolean *second_offset);
 void XR_Interaction_ClearLocalProjectileSpawns(void);
 qboolean XR_Interaction_AllowOffhandContinuousAutoSound(void);
 qboolean XR_Interaction_GetVisualFireHand(iw_xr_hand_t *hand);
@@ -54,6 +66,7 @@ void XR_Interaction_NotifyWeaponFire(iw_xr_hand_t hand, float previous_attack_fi
 qboolean XR_Interaction_GetNetworkGrenadePitch(float *pitch);
 void XR_Interaction_ResetOffhandContinuousAudio(void);
 int XR_Interaction_MainhandWeaponItem(void);
+int XR_Interaction_MainhandCurrentAmmo(void);
 int XR_Interaction_OffhandWeaponItem(void);
 xr_melee_mode_t XR_Interaction_GetWeaponMeleeMode(int item);
 qboolean XR_Interaction_GetMeleePulse(xr_hand_role_t role, xr_melee_attack_t *attack);

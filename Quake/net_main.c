@@ -25,6 +25,10 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "net_sys.h"
 #include "net_defs.h"
 
+#if defined(ANDROID_GLES3)
+#include "net_udp.h"
+#endif
+
 #ifndef WITHOUT_CURL
 #include <curl/curl.h>
 #endif
@@ -79,6 +83,15 @@ double SetNetTime (void)
 {
 	net_time = Sys_DoubleTime();
 	return net_time;
+}
+
+void NET_RefreshLocalAddress (void)
+{
+#if defined(ANDROID_GLES3)
+	// Refresh Android's advertised address after Wi-Fi becomes available.
+	if (net_landrivers[0].initialized)
+		UDP_RefreshLocalAddress();
+#endif
 }
 
 

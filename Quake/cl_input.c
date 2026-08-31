@@ -59,15 +59,11 @@ kbutton_t	in_left, in_right, in_forward, in_back;
 kbutton_t	in_lookup, in_lookdown, in_moveleft, in_moveright;
 kbutton_t	in_strafe, in_speed, in_use, in_jump, in_attack;
 
-static void CL_XRPrepareNetworkViewAngles (vec3_t angles)
+static qboolean CL_XRPrepareNetworkViewAngles (xr_network_attack_owner_t owner, vec3_t angles)
 {
-    float pitch;
-
-    if (cl.maxclients <= 1 ||
-        (!(in_attack.state & 3) && !XR_Interaction_OffhandAttackActive ()))
-        return;
-    if (XR_Interaction_GetNetworkGrenadePitch (&pitch))
-        angles[PITCH] = pitch;
+    if (cl.maxclients > 1)
+        return XR_Interaction_PrepareNetworkViewAngles(owner, angles);
+    return true;
 }
 
 kbutton_t	in_up, in_down;
@@ -372,8 +368,6 @@ void CL_BaseMove (usercmd_t *cmd)
 
 	cmd->upmove += cl_upspeed.value * CL_KeyState (&in_up);
 	cmd->upmove -= cl_upspeed.value * CL_KeyState (&in_down);
-	cmd->upmove += cl_upspeed.value * CL_KeyState (&in_jump);
-
 	if (! (in_klook.state & 1) )
 	{
 		cmd->forwardmove += cl_forwardspeed.value * CL_KeyState (&in_forward);
@@ -401,6 +395,10 @@ void CL_SendMove (const usercmd_t *cmd)
 {
 	int		i;
 	int		bits;
+	int		network_impulse;
+	qboolean	main_requested;
+	qboolean	cutscene_skip;
+	xr_network_attack_owner_t attack_owner;
 	sizebuf_t	buf;
 	byte	data[128];
 	vec3_t	wire_angles;
@@ -412,9 +410,14 @@ void CL_SendMove (const usercmd_t *cmd)
 	if (cmd) 
 	{
 		cl.cmd = *cmd;
+		network_impulse = in_impulse;
+		main_requested = (in_attack.state & 3) != 0;
+		// XR used to let both hands influence the same wire attack; choose one canonical owner first.
+		attack_owner = XR_Interaction_PrepareNetworkAttack(main_requested, in_impulse, &network_impulse);
 		VectorCopy (cl.viewangles, wire_angles);
-		/* Keep the headset view local; only the grenade firing command gets controller pitch. */
-		CL_XRPrepareNetworkViewAngles (wire_angles);
+		// Keep the headset view local; only the serialized firing command gets controller aim.
+		if (!CL_XRPrepareNetworkViewAngles (attack_owner, wire_angles))
+			attack_owner = XR_NETWORK_ATTACK_NONE;
 
 	//
 	// send the movement message
@@ -440,7 +443,11 @@ void CL_SendMove (const usercmd_t *cmd)
 	//
 		bits = 0;
 
-		if ((in_attack.state & 3) || (cl.maxclients > 1 && XR_Interaction_OffhandAttackActive()) || XR_Input_WantsCutsceneSkip())
+		cutscene_skip = XR_Input_WantsCutsceneSkip();
+		if (attack_owner != XR_NETWORK_ATTACK_NONE)
+			bits |= 1;
+		// Cutscene confirmation uses the legacy button channel, but is not gameplay attack arbitration.
+		if (attack_owner == XR_NETWORK_ATTACK_NONE && cutscene_skip && network_impulse == in_impulse)
 			bits |= 1;
 		in_attack.state &= ~2;
 
@@ -450,7 +457,7 @@ void CL_SendMove (const usercmd_t *cmd)
 
 		MSG_WriteByte (&buf, bits);
 
-		MSG_WriteByte (&buf, in_impulse);
+		MSG_WriteByte (&buf, network_impulse);
 		in_impulse = 0;
 	}
 
@@ -471,6 +478,11 @@ void CL_SendMove (const usercmd_t *cmd)
 	{
 		Con_Printf ("CL_SendMove: lost server connection\n");
 		CL_Disconnect ();
+	}
+	else if (cmd)
+	{
+		// Commit only after transmission; Quake discards the first two startup movement packets.
+		XR_Interaction_CommitNetworkAttack(attack_owner, network_impulse);
 	}
 }
 

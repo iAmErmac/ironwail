@@ -6481,6 +6481,7 @@ char	lanConfig_joinname[22];
 void M_Menu_LanConfig_f (void)
 {
 	IN_DeactivateForMenu();
+	NET_RefreshLocalAddress();
 	key_dest = key_menu;
 	m_state = m_lanconfig;
 	m_entersound = true;
@@ -6593,6 +6594,9 @@ void M_LanConfig_Key (int key)
 	case K_KP_ENTER:
 	case K_ABUTTON:
 	case K_MOUSE1:
+		// Clicking a text row selects it; only an explicit confirm submits it.
+		if (key == K_MOUSE1 && (lanConfig_cursor == 0 || lanConfig_cursor == 2))
+			break;
 		if (lanConfig_cursor == 0)
 			break;
 

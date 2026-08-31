@@ -315,7 +315,12 @@ static uint32_t R_XRLaserColor (float alpha)
 
 static qboolean R_XRLaserHiddenForMelee (int weapon)
 {
-    return vr_laser_hide_melee.value != 0.f && XR_Interaction_GetWeaponMeleeMode (weapon) != XR_MELEE_NONE;
+    xr_melee_mode_t mode;
+    if (vr_laser_hide_melee.value == 0.f)
+        return false;
+    mode = XR_Interaction_GetWeaponMeleeMode (weapon);
+    // Gun-butt is an optional firing fallback; only dedicated melee weapons hide their laser.
+    return mode == XR_MELEE_AXE || mode == XR_MELEE_MJOLNIR;
 }
 
 static qboolean R_XRGetVisualFireModel (iw_xr_hand_t hand, int weapon, const qmodel_t **model);
@@ -334,8 +339,8 @@ static void R_XRPrepareLasers (void)
         return;
     for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand) r_xr_laser[hand].valid = false;
 
-        if (XR_Interaction_WheelActive () || (!vr_laser_sight.value && !vr_laser_beam.value)) return;
-    /* Each laser uses its owning hand's logical weapon, never STAT_ACTIVEWEAPON globally. */
+    if (XR_Interaction_WheelActive () || (!vr_laser_sight.value && !vr_laser_beam.value)) return;
+    // Lasers are local presentation; trace each hand against the client world only.
     for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand)
     {
         int weapon = hand == mainhand ? XR_Interaction_MainhandWeaponItem () : (hand == offhand ? XR_Interaction_OffhandWeaponItem () : 0);
@@ -343,8 +348,7 @@ static void R_XRPrepareLasers (void)
         vec3_t target, right, up;
         uint32_t color;
         if (!weapon || R_XRLaserHiddenForMelee (weapon) ||
-            (hand == mainhand ? !R_GetXRMainHandWeaponPose (laser->start, laser->forward, NULL, NULL) :
-             !R_XRGetWeaponOrientation ((iw_xr_hand_t)hand, laser->start, laser->forward, right, up))) continue;
+            !R_XRGetWeaponOrientation ((iw_xr_hand_t)hand, laser->start, laser->forward, right, up)) continue;
         VectorMA (laser->start, 8192.f, laser->forward, target);
         TraceLine (laser->start, target, laser->end);
         laser->valid = true;
@@ -386,6 +390,28 @@ static qboolean R_XRIsProjectileModel (const entity_t *e)
 		!strcmp (name, "progs/hook.mdl") ||
 		(e->model->flags & (EF_ROCKET | EF_GRENADE | EF_TRACER | EF_TRACER2 | EF_TRACER3)) ||
 		VR_IsConfiguredProjectileModel(e->model);
+}
+
+static qboolean R_XRProjectileMatchesWeapon (const entity_t *e, int weapon)
+{
+	const char *name;
+	if (!e || !e->model || !weapon)
+		return false;
+	name = e->model->name;
+	switch (weapon)
+	{
+	case IT_NAILGUN:
+	case IT_SUPER_NAILGUN:
+		return !strcmp (name, "progs/spike.mdl") || !strcmp (name, "progs/s_spike.mdl") || (e->model->flags & (EF_TRACER | EF_TRACER2 | EF_TRACER3));
+	case IT_GRENADE_LAUNCHER:
+		return !strcmp (name, "progs/grenade.mdl") || (e->model->flags & EF_GRENADE);
+	case IT_ROCKET_LAUNCHER:
+		return !strcmp (name, "progs/missile.mdl") || (e->model->flags & EF_ROCKET);
+	case IT_LIGHTNING:
+		return !strcmp (name, "progs/laser.mdl") || !strcmp (name, "progs/lasrspik.mdl") || (e->model->flags & EF_TRACER3);
+	default:
+		return VR_IsConfiguredProjectileModel (e->model);
+	}
 }
 
 static qboolean R_GetXRWeaponVisualOriginInternal (iw_xr_hand_t hand, const qmodel_t *model, vec3_t origin, qboolean fire_origin, qboolean fire2_origin)
@@ -517,11 +543,22 @@ void R_ApplyXRProjectileVisualOffset (const entity_t *e, vec3_t origin)
 		memset (cache, 0, sizeof (*cache));
 		if (!XR_Interaction_ConsumeLocalProjectileSpawn (slot, &hand, &weapon, &second_offset))
 		{
-			hand = XR_Input_PhysicalHandForRole (XR_HAND_MAINHAND);
 			if (cl.maxclients > 1)
-				XR_Interaction_GetVisualFireHand (&hand);
-			weapon = hand == XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND) ? XR_Interaction_OffhandWeaponItem () : XR_Interaction_MainhandWeaponItem ();
-			second_offset = XR_Interaction_UseSecondVisualProjectileOffset (hand);
+			{
+				// Protocol has no projectile owner, so require a matching weapon model before consuming local intent.
+				if (!XR_Interaction_PeekNetworkProjectileVisual (&hand, &weapon))
+					return;
+				if (!R_XRProjectileMatchesWeapon (e, weapon))
+					return;
+				if (!XR_Interaction_ConsumeNetworkProjectileVisual (&hand, &weapon, &second_offset))
+					return;
+			}
+			else
+			{
+				hand = XR_Input_PhysicalHandForRole (XR_HAND_MAINHAND);
+				weapon = XR_Interaction_MainhandWeaponItem ();
+				second_offset = XR_Interaction_UseSecondVisualProjectileOffset (hand);
+			}
 		}
 		cache->entity = e;
 		cache->model = e->model;

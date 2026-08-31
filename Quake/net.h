@@ -47,6 +47,7 @@ extern	int		net_activeconnections;
 
 
 void	NET_Init (void);
+void	NET_RefreshLocalAddress (void);
 void	NET_Shutdown (void);
 
 struct qsocket_s	*NET_CheckNewConnections (void);

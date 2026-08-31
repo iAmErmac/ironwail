@@ -314,6 +314,7 @@ void PR_PopQCVM(qcvm_t *oldvm);
 void PR_Init (void);
 
 void PR_ExecuteProgram (func_t fnum);
+void PR_ClearXRTraceContext(void);
 func_t PR_FindProgram (const char *name);
 void PR_ClearProgs(qcvm_t *vm);
 qboolean PR_LoadProgs (const char *filename, qboolean fatal);

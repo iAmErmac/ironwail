@@ -11,6 +11,7 @@ extern cvar_t ui_mouse;
 extern cvar_t host_timescale;
 extern double host_frametime;
 extern cvar_t vr_world_scale;
+extern cvar_t vr_stabilize_mode;
 extern cvar_t vr_teleport_beam_color, vr_teleport_beam_alpha;
 extern void R_EmitLine(const vec3_t a, const vec3_t b, uint32_t color);
 extern entity_t *CL_NewTempEntity(void);
@@ -58,12 +59,24 @@ static char xr_weapon_models[16][MAX_QPATH];
 static char xr_weapon_local_fields[16][32];
 static int xr_weapon_local_field_values[16];
 
-static qboolean wheel_active, wheel_bind_active, offhand_wheel_bind_active, offhand_attack_active, keyboard_active, keyboard_trigger, keyboard_select, keyboard_caps, keyboard_trigger_suppressed, virtual_mouse_trigger, virtual_mouse_trigger_suppressed, two_hand_wheel_suppressed;
+static qboolean wheel_active, wheel_bind_active, offhand_wheel_bind_active, offhand_attack_active, keyboard_active, keyboard_trigger, keyboard_select, keyboard_caps, keyboard_trigger_suppressed, virtual_mouse_trigger, virtual_mouse_trigger_suppressed, two_hand_wheel_suppressed, two_hand_mode_active;
 static int wheel_selection = -1, keyboard_mode, wheel_hand, keyboard_row, keyboard_col, keyboard_nav_x, keyboard_nav_y, menu_scroll_direction;
-/* Each hand owns a presentation weapon; Quake retains one authoritative weapon selection. */
+// Each hand owns a presentation weapon; Quake retains one authoritative weapon selection.
 static int offhand_weapon_item;
 static struct { qboolean active; int item, expected_main, haptic_hand; double deadline; } offhand_transfer;
-static struct { int phase, item, main_item; float presentation_frame; qboolean presentation_frame_valid; double deadline; } offhand_fire;
+// Netplay wraps one canonical attack with acknowledged offhand select/fire/restore phases.
+enum { XR_OFFHAND_IDLE, XR_OFFHAND_WAIT_SELECT, XR_OFFHAND_FIRING, XR_OFFHAND_WAIT_RESTORE };
+static struct {
+    int phase, item, main_item;
+    int main_impulse;
+    int pending_impulse;
+    qboolean selection_sent;
+    qboolean main_fire_pending;
+    qboolean restore_sent;
+    float presentation_frame;
+    qboolean presentation_frame_valid;
+    double deadline;
+} offhand_fire;
 static struct { qboolean executing, animation_active; float frame, attack_finished, animation_start_frame; double next_attack_time, animation_start_time, animation_end_time; } offhand_local_fire;
 static iw_xr_hand_t visual_fire_hand;
 static double visual_fire_deadline;
@@ -81,10 +94,16 @@ static xr_local_projectile_spawn_t xr_local_projectile_spawns[MAX_EDICTS];
 static qboolean offhand_fire_input_suppressed;
 static qboolean main_fire_input_active;
 static qboolean local_offhand_fired_this_frame;
+static qboolean network_visual_fire_pending;
+static iw_xr_hand_t network_visual_fire_hand;
+static int network_visual_fire_weapon;
+static double network_visual_fire_deadline;
 static double fire_haptic_next_time[IW_XR_HAND_COUNT];
 static struct { int entity; double deadline; } offhand_beam;
 
 static qboolean offhand_continuous_auto_sound_played;
+
+static int xr_server_active_weapon_item(void);
 
 typedef struct {
     float speed;
@@ -114,6 +133,29 @@ static void xr_mark_visual_fire (iw_xr_hand_t hand)
 {
     visual_fire_hand = hand;
     visual_fire_deadline = realtime + 0.25;
+}
+
+static void xr_notify_network_fire(iw_xr_hand_t hand, int weapon)
+{
+    float amplitude = 0.35f;
+    double interval = 0.1;
+    xr_melee_mode_t mode;
+    if (hand < 0 || hand >= IW_XR_HAND_COUNT || realtime < fire_haptic_next_time[hand])
+        return;
+    mode = xr_melee_hands[hand].mode;
+    if (xr_melee_hands[hand].haptic_pending)
+    {
+        amplitude = CLAMP(0.f, 0.35f * xr_melee_hands[hand].haptic_scale, 1.f);
+        xr_melee_hands[hand].haptic_pending = false;
+    }
+    else if (mode == XR_MELEE_AXE || mode == XR_MELEE_MJOLNIR)
+        interval = 0.5;
+    else if (weapon == IT_NAILGUN || weapon == IT_SUPER_NAILGUN || weapon == IT_LIGHTNING)
+        interval = 0.1;
+    else
+        interval = 0.2;
+    VID_XR_Haptic(hand, amplitude, 0.025f);
+    fire_haptic_next_time[hand] = realtime + interval;
 }
 
 static void xr_update_visual_fire_state(iw_xr_hand_t hand, qboolean active, int weapon)
@@ -183,6 +225,35 @@ qboolean XR_Interaction_ConsumeLocalProjectileSpawn(int entity, iw_xr_hand_t *ha
     return true;
 }
 
+qboolean XR_Interaction_ConsumeNetworkProjectileVisual(iw_xr_hand_t *hand, int *weapon, qboolean *second_offset)
+{
+    if (cl.maxclients <= 1 || !network_visual_fire_pending || realtime >= network_visual_fire_deadline ||
+        !hand || !weapon || !second_offset)
+    {
+        if (realtime >= network_visual_fire_deadline)
+            network_visual_fire_pending = false;
+        return false;
+    }
+    *hand = network_visual_fire_hand;
+    *weapon = network_visual_fire_weapon;
+    *second_offset = XR_Interaction_UseSecondVisualProjectileOffset(*hand);
+    network_visual_fire_pending = false;
+    return true;
+}
+
+qboolean XR_Interaction_PeekNetworkProjectileVisual(iw_xr_hand_t *hand, int *weapon)
+{
+    if (cl.maxclients <= 1 || !network_visual_fire_pending || realtime >= network_visual_fire_deadline || !hand || !weapon)
+    {
+        if (realtime >= network_visual_fire_deadline)
+            network_visual_fire_pending = false;
+        return false;
+    }
+    *hand = network_visual_fire_hand;
+    *weapon = network_visual_fire_weapon;
+    return true;
+}
+
 void XR_Interaction_ClearLocalProjectileSpawns(void)
 {
     memset(xr_local_projectile_spawns, 0, sizeof(xr_local_projectile_spawns));
@@ -190,7 +261,7 @@ void XR_Interaction_ClearLocalProjectileSpawns(void)
 
 qboolean XR_Interaction_AllowOffhandFireInput(void)
 {
-    return !offhand_fire_input_suppressed;
+    return !offhand_fire_input_suppressed && !two_hand_mode_active;
 }
 
 void XR_Interaction_NotifyWeaponFire(iw_xr_hand_t hand, float previous_attack_finished, float attack_finished, double time)
@@ -345,7 +416,9 @@ static void xr_melee_update(const iw_xr_action_snapshot_t *actions, int dominant
     memset(xr_melee_pulses, 0, sizeof(xr_melee_pulses));
     for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand)
         xr_melee_hands[hand].haptic_pending = false;
-    weapons[dominant] = cl.stats[STAT_ACTIVEWEAPON];
+    // The network transaction may temporarily select the offhand weapon; melee ownership must
+    // follow the preserved main-hand presentation rather than that transient server selection.
+    weapons[dominant] = XR_Interaction_MainhandWeaponItem();
     weapons[offhand] = offhand_weapon_item;
     triggers[dominant] = (actions->hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) != 0;
     triggers[offhand] = (actions->hand[offhand].buttons & IW_XR_BUTTON_TRIGGER) != 0;
@@ -366,9 +439,12 @@ static void xr_melee_update(const iw_xr_action_snapshot_t *actions, int dominant
         state->mode = mode;
         state->initialized = true;
 
-        blocked = !vr_melee.value || key_dest != key_game || sv.paused || cl.stats[STAT_HEALTH] <= 0 ||
+        // Custom XR traces and damage cannot be reproduced by a remote server; online melee is ID-gated.
+        blocked = !vr_melee.value || key_dest != key_game || cl.intermission || sv.paused || cl.stats[STAT_HEALTH] <= 0 ||
             wheel_active || keyboard_active || virtual_mouse_trigger || XR_Input_IsTeleportAiming() ||
-            (hand == offhand && cl.maxclients > 1) || (xr_melee_mode_is_fallback(mode) && cl.maxclients > 1) ||
+            (hand == offhand && two_hand_mode_active) ||
+            (hand == offhand && cl.maxclients > 1 && !xr_melee_mainhand_network_safe(weapons[hand], mode)) ||
+            (xr_melee_mode_is_fallback(mode) && cl.maxclients > 1) ||
             (hand == dominant && cl.maxclients > 1 && mode != XR_MELEE_NONE &&
                 !xr_melee_mainhand_network_safe(weapons[hand], mode));
         if (blocked || mode == XR_MELEE_NONE || !actions->hand[hand].velocity_valid)
@@ -502,7 +578,7 @@ static qboolean xr_offhand_weapon_has_ammo (int item)
 static qboolean xr_wheel_item_available(int item)
 {
     /* cl.items is the authoritative full inventory mask; STAT_ITEMS is a presentation mirror. */
-    return (cl.items & item) != 0 || (cl.stats[STAT_ITEMS] & item) != 0 || cl.stats[STAT_ACTIVEWEAPON] == item;
+    return (cl.items & item) != 0 || (cl.stats[STAT_ITEMS] & item) != 0 || xr_server_active_weapon_item() == item;
 }
 
 static void xr_weaponwheel_update_local_fields(void)
@@ -558,75 +634,247 @@ static int xr_weapon_slot_index(int item)
     return -1;
 }
 
-static void xr_select_weapon_item(int item)
+static int xr_server_active_weapon_item(void)
 {
-    int slot = xr_weapon_slot_index(item);
-    if (slot >= 0) Cbuf_AddText(va("impulse %i\n", xr_weapons[slot].impulse));
+    int item = cl.stats[STAT_ACTIVEWEAPON];
+    int model_index = cl.stats[STAT_WEAPON];
+    qmodel_t *model;
+    int i;
+
+    if (item)
+        return item;
+    if (model_index <= 0 || model_index >= MAX_MODELS)
+        return 0;
+    model = cl.model_precache[model_index];
+    if (!model)
+        return 0;
+    for (i = 0; i < xr_weapon_count; ++i)
+        if (xr_weapon_models[i][0] && !q_strcasecmp(model->name, xr_weapon_models[i]))
+            return xr_weapons[i].item;
+    return 0;
 }
 
-static void xr_offhand_fire_cancel(void)
+static int xr_weapon_impulse_for_item(int item)
 {
-    int restore_item = offhand_fire.main_item;
-    if (!restore_item && offhand_transfer.active)
-        restore_item = offhand_transfer.expected_main;
-    if (restore_item)
-        xr_select_weapon_item(restore_item);
-    offhand_transfer.active = false;
-    offhand_attack_active = false;
-    offhand_fire.phase = 0;
+    int slot = xr_weapon_slot_index(item);
+    if (slot >= 0 && xr_weapons[slot].impulse > 0)
+        return xr_weapons[slot].impulse;
+    // Known zero-ammo melee weapons still need a normal impulse for netplay selection.
+    if (item == IT_AXE || item == RIT_AXE)
+        return 1;
+    if (item == HIT_MJOLNIR)
+        return hipnotic ? 226 : 1;
+    return 0;
+}
+
+static qboolean xr_offhand_motion_pending(void)
+{
+    iw_xr_hand_t hand = XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND);
+    return xr_melee_pulses[hand].valid;
+}
+
+static void xr_offhand_fire_clear(void)
+{
+    offhand_fire.phase = XR_OFFHAND_IDLE;
     offhand_fire.item = 0;
     offhand_fire.main_item = 0;
+    offhand_fire.main_impulse = 0;
+    offhand_fire.pending_impulse = 0;
+    offhand_fire.selection_sent = false;
+    offhand_fire.main_fire_pending = false;
+    offhand_fire.restore_sent = false;
     offhand_fire.presentation_frame_valid = false;
     offhand_fire_main_viewmodel_valid = false;
 }
 
-/* Multiplayer temporarily selects the offhand weapon for the canonical network command, while preserving the main-hand viewmodel locally. */
+static void xr_offhand_queue_restore(void)
+{
+    int impulse;
+    if (!offhand_fire.main_item || offhand_fire.main_item == offhand_fire.item)
+    {
+        offhand_attack_active = false;
+        memset(&xr_melee_pulses[XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND)], 0,
+            sizeof(xr_melee_pulses[XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND)]));
+        xr_offhand_fire_clear();
+        return;
+    }
+    impulse = offhand_fire.main_impulse;
+    if (!impulse)
+        impulse = xr_weapon_impulse_for_item(offhand_fire.main_item);
+    if (!impulse)
+    {
+        // Do not expose the temporary server weapon when its restore mapping is unknown.
+        offhand_attack_active = false;
+        memset(&xr_melee_pulses[XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND)], 0,
+            sizeof(xr_melee_pulses[XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND)]));
+        offhand_fire.phase = XR_OFFHAND_WAIT_RESTORE;
+        offhand_fire.pending_impulse = 0;
+        offhand_fire.restore_sent = false;
+        return;
+    }
+    offhand_attack_active = false;
+    memset(&xr_melee_pulses[XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND)], 0,
+        sizeof(xr_melee_pulses[XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND)]));
+    offhand_fire.phase = XR_OFFHAND_WAIT_RESTORE;
+    offhand_fire.pending_impulse = impulse;
+    offhand_fire.restore_sent = false;
+    offhand_fire.deadline = realtime + 1.0;
+}
+
+static void xr_offhand_fire_cancel_external(void)
+{
+    offhand_attack_active = false;
+    memset(&xr_melee_pulses[XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND)], 0,
+        sizeof(xr_melee_pulses[XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND)]));
+    xr_offhand_fire_clear();
+}
+
+static void xr_offhand_fire_cancel_for_main(void)
+{
+    if (offhand_fire.phase == XR_OFFHAND_IDLE)
+    {
+        offhand_attack_active = false;
+        memset(&xr_melee_pulses[XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND)], 0,
+            sizeof(xr_melee_pulses[XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND)]));
+        return;
+    }
+    offhand_attack_active = false;
+    memset(&xr_melee_pulses[XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND)], 0,
+        sizeof(xr_melee_pulses[XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND)]));
+    offhand_fire.main_fire_pending = true;
+    if (offhand_fire.phase == XR_OFFHAND_WAIT_SELECT &&
+        !offhand_fire.selection_sent && xr_server_active_weapon_item() != offhand_fire.item)
+    {
+        xr_offhand_fire_clear();
+        return;
+    }
+    if (offhand_fire.phase == XR_OFFHAND_WAIT_SELECT &&
+        xr_server_active_weapon_item() != offhand_fire.item)
+    {
+        // Wait for the server's selection acknowledgement before restoring.
+        offhand_fire.pending_impulse = 0;
+        return;
+    }
+    if (offhand_fire.phase == XR_OFFHAND_WAIT_RESTORE)
+    {
+        if (xr_server_active_weapon_item() == offhand_fire.main_item)
+        {
+            xr_offhand_fire_clear();
+            return;
+        }
+        if (!offhand_fire.pending_impulse && offhand_fire.restore_sent)
+        {
+            int impulse = offhand_fire.main_impulse;
+            if (impulse)
+            {
+                offhand_fire.pending_impulse = impulse;
+                offhand_fire.restore_sent = false;
+                offhand_fire.deadline = realtime + 1.0;
+            }
+        }
+        // Keep the main model until the server acknowledges the restore impulse.
+        return;
+    }
+    xr_offhand_queue_restore();
+}
+
+// Multiplayer temporarily selects the offhand weapon for the canonical network command, while preserving the main-hand viewmodel locally.
 static void xr_offhand_fire_update(void)
 {
+    if (two_hand_mode_active)
+    {
+        xr_offhand_fire_cancel_for_main();
+        return;
+    }
     if (cl.maxclients == 1) {
-        offhand_fire.phase = 0;
+        xr_offhand_fire_clear();
         offhand_fire_main_viewmodel_valid = false;
         return;
     }
-    if (offhand_fire.phase == 0)
+    if (wheel_active)
     {
-        if (!offhand_attack_active || !offhand_weapon_item || wheel_active) return;
+        xr_offhand_fire_cancel_for_main();
+        return;
+    }
+    if (main_fire_input_active)
+        xr_offhand_fire_cancel_for_main();
+
+    if (offhand_fire.phase == XR_OFFHAND_IDLE)
+    {
+        if (main_fire_input_active)
+            return;
+        if ((!offhand_attack_active && !xr_offhand_motion_pending()) || !offhand_weapon_item || wheel_active)
+            return;
         offhand_fire.presentation_frame_valid = false;
         offhand_fire.item = offhand_weapon_item;
-        offhand_fire.main_item = cl.stats[STAT_ACTIVEWEAPON];
+        offhand_fire.main_item = xr_server_active_weapon_item();
+        offhand_fire.main_impulse = xr_weapon_impulse_for_item(offhand_fire.main_item);
+        offhand_fire.pending_impulse = xr_weapon_impulse_for_item(offhand_fire.item);
+        if (offhand_fire.main_item != offhand_fire.item &&
+            (!offhand_fire.main_impulse || !offhand_fire.pending_impulse))
+        {
+            xr_offhand_fire_clear();
+            return;
+        }
         offhand_fire_main_viewmodel = cl.viewent;
         offhand_fire_main_viewmodel_valid = true;
         offhand_fire.deadline = realtime + 1.0;
-        if (cl.stats[STAT_ACTIVEWEAPON] == offhand_fire.item)
-            offhand_fire.phase = 2;
+        if (xr_server_active_weapon_item() == offhand_fire.item)
+            offhand_fire.phase = XR_OFFHAND_FIRING;
         else
         {
-            offhand_fire.phase = 1;
-            xr_select_weapon_item(offhand_fire.item);
+            offhand_fire.phase = XR_OFFHAND_WAIT_SELECT;
         }
         return;
     }
-    if (offhand_fire.phase == 1)
+    if (offhand_fire.phase == XR_OFFHAND_WAIT_SELECT)
     {
-        if (cl.stats[STAT_ACTIVEWEAPON] == offhand_fire.item)
-            offhand_fire.phase = 2;
+        if (xr_server_active_weapon_item() == offhand_fire.item)
+        {
+            if (offhand_fire.main_fire_pending || (!offhand_attack_active && !xr_offhand_motion_pending()))
+                xr_offhand_queue_restore();
+            else
+                offhand_fire.phase = XR_OFFHAND_FIRING;
+        }
         else if (realtime >= offhand_fire.deadline)
-            offhand_fire.phase = 0;
+        {
+            if (offhand_fire.selection_sent)
+            {
+                // A lost selection packet must be retried before any attack or restore decision.
+                offhand_fire.pending_impulse = xr_weapon_impulse_for_item(offhand_fire.item);
+                offhand_fire.selection_sent = false;
+                offhand_fire.deadline = realtime + 1.0;
+            }
+            else
+            {
+                if (!offhand_attack_active)
+                    memset(&xr_melee_pulses[XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND)], 0,
+                        sizeof(xr_melee_pulses[XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND)]));
+                xr_offhand_fire_clear();
+            }
+        }
         return;
     }
-    if (offhand_fire.phase == 2 && !offhand_attack_active)
+    if (offhand_fire.phase == XR_OFFHAND_FIRING &&
+        (main_fire_input_active || (!offhand_attack_active && !xr_offhand_motion_pending())))
     {
         offhand_fire.presentation_frame = cl.viewent.frame;
         offhand_fire.presentation_frame_valid = true;
-        offhand_fire.phase = 3;
-        offhand_fire.deadline = realtime + 1.0;
-        if (offhand_fire.main_item && offhand_fire.main_item != offhand_fire.item)
-            xr_select_weapon_item(offhand_fire.main_item);
+        xr_offhand_queue_restore();
     }
-    else if (offhand_fire.phase == 3 &&
-        (cl.stats[STAT_ACTIVEWEAPON] == offhand_fire.main_item || realtime >= offhand_fire.deadline))
-        offhand_fire.phase = 0;
-    if (offhand_fire.phase == 0)
+    else if (offhand_fire.phase == XR_OFFHAND_WAIT_RESTORE)
+    {
+        if (xr_server_active_weapon_item() == offhand_fire.main_item)
+            xr_offhand_fire_clear();
+        else if (realtime >= offhand_fire.deadline && offhand_fire.main_impulse)
+        {
+            // Movement packets are unreliable, so keep restoring until the server confirms it.
+            offhand_fire.pending_impulse = offhand_fire.main_impulse;
+            offhand_fire.restore_sent = false;
+            offhand_fire.deadline = realtime + 1.0;
+        }
+    }
+    if (offhand_fire.phase == XR_OFFHAND_IDLE)
     {
         offhand_fire_main_viewmodel_valid = false;
         offhand_fire.presentation_frame_valid = false;
@@ -646,7 +894,7 @@ static int xr_wheel_fallback_slot(int excluded_item)
 static void xr_offhand_transfer_update(void)
 {
     if (!offhand_transfer.active) return;
-    if (cl.stats[STAT_ACTIVEWEAPON] == offhand_transfer.expected_main) {
+    if (xr_server_active_weapon_item() == offhand_transfer.expected_main) {
         offhand_weapon_item = offhand_transfer.item;
         xr_offhand_reset_local_fire();
         offhand_transfer.active = false;
@@ -655,14 +903,14 @@ static void xr_offhand_transfer_update(void)
         offhand_transfer.active = false;
 }
 
-/* Taking the active weapon waits for QuakeC to select a fallback before ownership changes, so one inventory weapon cannot appear in both hands. */
+// Taking the active weapon waits for QuakeC to select a fallback before ownership changes, so one inventory weapon cannot appear in both hands.
 static void xr_offhand_assign_weapon(int item)
 {
     int fallback;
 
     if (item == offhand_weapon_item || offhand_transfer.active || !xr_offhand_weapon_has_ammo(item)) return;
     xr_offhand_reset_local_fire();
-    if (item != cl.stats[STAT_ACTIVEWEAPON]) {
+    if (item != xr_server_active_weapon_item()) {
         offhand_weapon_item = item;
         VID_XR_Haptic(wheel_hand, 0.8f, 0.08f);
         return;
@@ -712,15 +960,15 @@ static void xr_wheel_select(float x, float y)
 static void xr_mainhand_assign_weapon(int slot)
 {
     if (xr_weapons[slot].item == offhand_weapon_item) {
-        if (offhand_transfer.active || cl.stats[STAT_ACTIVEWEAPON] == offhand_weapon_item) return;
+        if (offhand_transfer.active || xr_server_active_weapon_item() == offhand_weapon_item) return;
         offhand_transfer.active = true;
-        offhand_transfer.item = cl.stats[STAT_ACTIVEWEAPON];
+        offhand_transfer.item = xr_server_active_weapon_item();
         offhand_transfer.expected_main = offhand_weapon_item;
         offhand_transfer.haptic_hand = wheel_hand;
         offhand_transfer.deadline = realtime + 1.0;
         VID_XR_Haptic(wheel_hand, 0.8f, 0.08f);
         Cbuf_AddText(va("impulse %i\n", xr_weapons[slot].impulse));
-    } else if (cl.stats[STAT_ACTIVEWEAPON] != xr_weapons[slot].item) {
+    } else if (xr_server_active_weapon_item() != xr_weapons[slot].item) {
         VID_XR_Haptic(wheel_hand, 0.8f, 0.08f);
         Cbuf_AddText(va("impulse %i\n", xr_weapons[slot].impulse));
     }
@@ -734,7 +982,21 @@ static void xr_wheel_commit(void)
     xr_wheel_close();
 }
 
+static void xr_keyboard_set_selection(int row, int col);
 static void xr_keyboard_close(void) { keyboard_active = false; keyboard_trigger = false; }
+
+static void xr_keyboard_open(qboolean trigger, qboolean select)
+{
+    menu_scroll_direction = 0;
+    keyboard_active = true;
+    keyboard_mode = 0;
+    keyboard_caps = false;
+    keyboard_trigger = trigger;
+    keyboard_select = select;
+    keyboard_nav_x = keyboard_nav_y = 0;
+    xr_keyboard_set_selection(0, 0);
+    xr_wheel_close();
+}
 
 static void xr_keyboard_send_special(int key)
 {
@@ -1182,17 +1444,22 @@ void XR_Interaction_Init(void)
 
 void XR_Interaction_Shutdown(void)
 {
-    xr_wheel_close(); xr_keyboard_close(); xr_virtual_pointer_clear(); wheel_bind_active = offhand_wheel_bind_active = false; offhand_weapon_item = 0; offhand_transfer.active = false; offhand_fire.phase = 0; offhand_local_fire.executing = false; offhand_local_fire.frame = offhand_local_fire.attack_finished = 0.f; offhand_fire_main_viewmodel_valid = false; offhand_fire_input_suppressed = false; main_fire_input_active = false; local_offhand_fired_this_frame = false; visual_fire_deadline = 0.0; memset(visual_fire_active, 0, sizeof(visual_fire_active)); memset(visual_fire_second, 0, sizeof(visual_fire_second)); memset(visual_fire_weapon, 0, sizeof(visual_fire_weapon)); memset(xr_local_projectile_spawns, 0, sizeof(xr_local_projectile_spawns)); memset(fire_haptic_next_time, 0, sizeof(fire_haptic_next_time)); keyboard_trigger_suppressed = false; virtual_mouse_trigger_suppressed = false; two_hand_wheel_suppressed = false; vignette_value = 0.f; vignette_yaw_valid = false; xr_melee_reset_all(); memset(&xr_melee_damage_context, 0, sizeof(xr_melee_damage_context));
+    xr_wheel_close(); xr_keyboard_close(); xr_virtual_pointer_clear(); wheel_bind_active = offhand_wheel_bind_active = false; offhand_weapon_item = 0; offhand_transfer.active = false; memset(&offhand_fire, 0, sizeof(offhand_fire)); offhand_local_fire.executing = false; offhand_local_fire.frame = offhand_local_fire.attack_finished = 0.f; offhand_fire_main_viewmodel_valid = false; offhand_fire_input_suppressed = false; main_fire_input_active = false; local_offhand_fired_this_frame = false; network_visual_fire_pending = false; network_visual_fire_deadline = 0.0; visual_fire_deadline = 0.0; memset(visual_fire_active, 0, sizeof(visual_fire_active)); memset(visual_fire_second, 0, sizeof(visual_fire_second)); memset(visual_fire_weapon, 0, sizeof(visual_fire_weapon)); memset(xr_local_projectile_spawns, 0, sizeof(xr_local_projectile_spawns)); memset(fire_haptic_next_time, 0, sizeof(fire_haptic_next_time)); keyboard_trigger_suppressed = false; virtual_mouse_trigger_suppressed = false; two_hand_wheel_suppressed = false; two_hand_mode_active = false; vignette_value = 0.f; vignette_yaw_valid = false; xr_melee_reset_all(); memset(&xr_melee_damage_context, 0, sizeof(xr_melee_damage_context));
 }
 
 void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
 {
     int dominant, offhand, mouse_hand; float move, yaw_delta; qboolean grip, main_grip, offhand_grip, wheel_hold, trigger, mouse_trigger, mouse_confirm, mouse_grip, menu_combo, both_grips;
     if (!actions || !actions->active) { XR_Interaction_Shutdown(); return; }
+    if (cl.maxclients > 1 && (cls.state != ca_connected || cls.signon != SIGNONS || cl.intermission || cl.stats[STAT_HEALTH] <= 0))
+    {
+        offhand_attack_active = false;
+        xr_offhand_fire_clear();
+        network_visual_fire_pending = false;
+    }
     xr_weaponwheel_update_local_fields();
-    /* Keep a held weapon selected when its ammo reaches zero, like the main hand. */
-    if (offhand_weapon_item && (!xr_wheel_item_available(offhand_weapon_item) ||
-        (!offhand_transfer.active && cl.stats[STAT_ACTIVEWEAPON] == offhand_weapon_item))) {
+    if (offhand_weapon_item && !xr_wheel_item_available(offhand_weapon_item)) {
+        // The network attack temporarily uses the main weapon slot; do not clear a valid offhand weapon when both hands share an item.
         offhand_weapon_item = 0;
         xr_offhand_reset_local_fire();
     }
@@ -1206,6 +1473,8 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
     offhand_grip = actions->hand[offhand].grip > 0.5f || (actions->hand[offhand].buttons & IW_XR_BUTTON_GRIP) != 0;
     grip = wheel_bind_active || offhand_wheel_bind_active;
     both_grips = main_grip && offhand_grip;
+    two_hand_mode_active = vr_stabilize_mode.value != 0.f &&
+        (actions->hand[offhand].grip_valid || actions->hand[offhand].aim_valid) && both_grips;
     if (both_grips) two_hand_wheel_suppressed = true;
     else if (!main_grip && !offhand_grip) two_hand_wheel_suppressed = false;
     trigger = (actions->hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) != 0;
@@ -1213,8 +1482,6 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
     main_fire_input_active = trigger;
     local_offhand_fired_this_frame = false;
     offhand_fire_input_suppressed = cl.maxclients > 1 && trigger;
-    if (offhand_fire_input_suppressed)
-        xr_offhand_fire_cancel();
     xr_offhand_transfer_update();
     xr_offhand_fire_update();
     if (!offhand_attack_active && xr_offhand_continuous_weapon ())
@@ -1225,11 +1492,11 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
     }
     {
         qboolean main_fire = trigger;
-        qboolean offhand_fire_active = offhand_attack_active && offhand_weapon_item && (cl.maxclients == 1 || offhand_fire.phase == 2);
+        qboolean offhand_fire_active = offhand_attack_active && !trigger && offhand_weapon_item && (cl.maxclients == 1 || offhand_fire.phase == XR_OFFHAND_FIRING);
         xr_update_visual_fire_state((iw_xr_hand_t)dominant, main_fire, XR_Interaction_MainhandWeaponItem());
         xr_update_visual_fire_state((iw_xr_hand_t)offhand, offhand_fire_active, offhand_weapon_item);
     }
-    if (cl.maxclients > 1 && offhand_fire.phase == 2 && offhand_attack_active)
+    if (cl.maxclients > 1 && offhand_fire.phase == XR_OFFHAND_FIRING && offhand_attack_active && !trigger)
         xr_mark_visual_fire (XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND));
     else if (trigger && !offhand_attack_active)
         xr_mark_visual_fire ((iw_xr_hand_t)dominant);
@@ -1269,13 +1536,21 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
         if (mouse_confirm && !virtual_mouse_trigger && pointer_active) {
             virtual_mouse_trigger_suppressed = true;
             Key_Event(K_MOUSE1, true);
+			// Menu text rows consume the click, then the XR keyboard handles typing.
+			if (Key_TextEntry() == TEXTMODE_ON) {
+				Key_Event(K_MOUSE1, false);
+				xr_keyboard_open(mouse_trigger, (actions->hand[dominant].buttons & IW_XR_BUTTON_PRIMARY) != 0);
+				virtual_mouse_trigger = false;
+			} else {
+				virtual_mouse_trigger = mouse_confirm && (pointer_active || virtual_mouse_trigger);
+			}
         }
-        if (!mouse_confirm && virtual_mouse_trigger) Key_Event(K_MOUSE1, false);
-        virtual_mouse_trigger = mouse_confirm && (pointer_active || virtual_mouse_trigger);
+        if (!keyboard_active) {
+            if (!mouse_confirm && virtual_mouse_trigger) Key_Event(K_MOUSE1, false);
+            virtual_mouse_trigger = mouse_confirm && (pointer_active || virtual_mouse_trigger);
+        }
     } else if ((key_dest == key_console || key_dest == key_message) && Key_TextEntry() == TEXTMODE_ON) {
-        menu_scroll_direction = 0;
-        keyboard_active = true; keyboard_mode = 0; keyboard_caps = false; keyboard_trigger = keyboard_select = false;
-        keyboard_nav_x = keyboard_nav_y = 0; xr_keyboard_set_selection(0, 0); xr_wheel_close();
+        xr_keyboard_open(false, false);
     } else if (wheel_active && !(wheel_hand == dominant ? wheel_bind_active : offhand_wheel_bind_active)) {
         menu_scroll_direction = 0;
         xr_wheel_cursor_from_pose();
@@ -1326,7 +1601,7 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
 
 qboolean XR_Interaction_ConsumesGameplay(void) { return wheel_active || keyboard_active || keyboard_trigger_suppressed || virtual_mouse_trigger || virtual_mouse_trigger_suppressed; }
 qboolean XR_Interaction_WheelActive(void) { return wheel_active; }
-qboolean XR_Interaction_OffhandAttackActive(void) { return offhand_attack_active && offhand_weapon_item && !wheel_active; }
+qboolean XR_Interaction_OffhandAttackActive(void) { return offhand_attack_active && offhand_weapon_item && !wheel_active && !two_hand_mode_active; }
 qboolean XR_Interaction_MainhandFireInputActive(void) { return main_fire_input_active; }
 qboolean XR_Interaction_GetMeleePulse(xr_hand_role_t role, xr_melee_attack_t *attack)
 {
@@ -1502,22 +1777,148 @@ void XR_Interaction_ResetOffhandContinuousAudio(void) { offhand_continuous_auto_
 qboolean XR_Interaction_GetNetworkGrenadePitch(float *pitch)
 {
     vec3_t forward;
-    float planar;
+    vec3_t right, up, angles;
     int weapon;
 
     if (!pitch || cl.maxclients <= 1)
         return false;
-    weapon = XR_Interaction_UseOffhandAim () ? offhand_weapon_item : cl.stats[STAT_ACTIVEWEAPON];
-    if (weapon != IT_GRENADE_LAUNCHER || !R_GetXRMainHandWeaponPose (NULL, forward, NULL, NULL))
+    weapon = xr_server_active_weapon_item();
+    if (weapon != IT_GRENADE_LAUNCHER ||
+        !R_GetXRMainHandWeaponPose (NULL, forward, right, up))
         return false;
-    planar = sqrtf (forward[0] * forward[0] + forward[1] * forward[1]);
-    if (planar < 0.001f)
-        return false;
-    *pitch = RAD2DEG (atan2f (-forward[2], planar));
+    VectorAngles (forward, angles);
+    *pitch = angles[PITCH];
     return true;
 }
-qboolean XR_Interaction_UseOffhandAim(void) { return offhand_local_fire.executing || (offhand_fire.phase == 2 && offhand_attack_active); }
-int XR_Interaction_MainhandWeaponItem(void) { return offhand_fire_main_viewmodel_valid ? offhand_fire.main_item : cl.stats[STAT_ACTIVEWEAPON]; }
+
+qboolean XR_Interaction_OffhandNetworkAttackActive(void)
+{
+    // The server has one attack bit; offhand may own it only after active-weapon acknowledgement.
+    return cl.maxclients > 1 && !two_hand_mode_active && offhand_fire.phase == XR_OFFHAND_FIRING &&
+        xr_server_active_weapon_item() == offhand_fire.item && offhand_weapon_item &&
+        !wheel_active && (offhand_attack_active || xr_offhand_motion_pending());
+}
+
+xr_network_attack_owner_t XR_Interaction_PrepareNetworkAttack(qboolean main_requested, int user_impulse, int *network_impulse)
+{
+    if (network_impulse)
+        *network_impulse = user_impulse;
+    if (cl.maxclients <= 1)
+        return main_requested ? XR_NETWORK_ATTACK_MAINHAND : XR_NETWORK_ATTACK_NONE;
+
+    if (user_impulse)
+    {
+        xr_offhand_fire_cancel_external();
+        return XR_NETWORK_ATTACK_NONE;
+    }
+    if (main_requested)
+    {
+        xr_offhand_fire_cancel_for_main();
+        if (offhand_fire.phase != XR_OFFHAND_IDLE)
+        {
+            // Main fire is suppressed, but the restore impulse must still reach the server.
+            if (network_impulse && offhand_fire.pending_impulse)
+                *network_impulse = offhand_fire.pending_impulse;
+            return XR_NETWORK_ATTACK_NONE;
+        }
+        return XR_NETWORK_ATTACK_MAINHAND;
+    }
+    if (offhand_fire.phase == XR_OFFHAND_WAIT_SELECT || offhand_fire.phase == XR_OFFHAND_WAIT_RESTORE)
+    {
+        if (network_impulse && offhand_fire.pending_impulse)
+            *network_impulse = offhand_fire.pending_impulse;
+        return XR_NETWORK_ATTACK_NONE;
+    }
+    return XR_Interaction_OffhandNetworkAttackActive() ? XR_NETWORK_ATTACK_OFFHAND : XR_NETWORK_ATTACK_NONE;
+}
+
+void XR_Interaction_CommitNetworkAttack(xr_network_attack_owner_t owner, int network_impulse)
+{
+    iw_xr_hand_t offhand = XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND);
+    if (offhand_fire.pending_impulse && network_impulse == offhand_fire.pending_impulse)
+    {
+        if (offhand_fire.phase == XR_OFFHAND_WAIT_SELECT)
+            offhand_fire.selection_sent = true;
+        else if (offhand_fire.phase == XR_OFFHAND_WAIT_RESTORE)
+            offhand_fire.restore_sent = true;
+        offhand_fire.pending_impulse = 0;
+    }
+    if (cl.maxclients <= 1)
+        return;
+    if (owner == XR_NETWORK_ATTACK_OFFHAND)
+    {
+        if (!offhand_attack_active && xr_melee_pulses[offhand].valid)
+            memset(&xr_melee_pulses[offhand], 0, sizeof(xr_melee_pulses[offhand]));
+        network_visual_fire_hand = offhand;
+        network_visual_fire_weapon = offhand_weapon_item;
+        network_visual_fire_deadline = realtime + 0.25;
+        network_visual_fire_pending = true;
+        xr_mark_visual_fire(offhand);
+        xr_notify_network_fire(offhand, offhand_weapon_item);
+    }
+    else if (owner == XR_NETWORK_ATTACK_MAINHAND)
+    {
+        iw_xr_hand_t mainhand = XR_Input_PhysicalHandForRole(XR_HAND_MAINHAND);
+        if (xr_melee_pulses[mainhand].valid)
+            memset(&xr_melee_pulses[mainhand], 0, sizeof(xr_melee_pulses[mainhand]));
+        network_visual_fire_hand = mainhand;
+        network_visual_fire_weapon = XR_Interaction_MainhandWeaponItem();
+        network_visual_fire_deadline = realtime + 0.25;
+        network_visual_fire_pending = true;
+        xr_notify_network_fire(mainhand, network_visual_fire_weapon);
+    }
+}
+
+qboolean XR_Interaction_PrepareNetworkViewAngles(xr_network_attack_owner_t owner, vec3_t angles)
+{
+    vec3_t forward;
+    vec3_t right, up;
+    if (owner == XR_NETWORK_ATTACK_MAINHAND || owner == XR_NETWORK_ATTACK_OFFHAND)
+    {
+        // Convert the owning hand to legacy Quake angles; no XR pose enters the packet.
+        if (!R_GetXRMainHandWeaponPose(NULL, forward, right, up))
+            return owner == XR_NETWORK_ATTACK_MAINHAND;
+        VectorAngles(forward, angles);
+        angles[ROLL] = 0.f;
+        if (owner == XR_NETWORK_ATTACK_MAINHAND)
+        {
+            float grenade_pitch;
+            if (XR_Interaction_GetNetworkGrenadePitch(&grenade_pitch))
+                angles[PITCH] = grenade_pitch;
+        }
+    }
+    return true;
+}
+
+qboolean XR_Interaction_UseOffhandAim(void) { return offhand_local_fire.executing || (offhand_fire.phase == XR_OFFHAND_FIRING && xr_server_active_weapon_item() == offhand_fire.item); }
+int XR_Interaction_MainhandWeaponItem(void) { return offhand_fire_main_viewmodel_valid ? offhand_fire.main_item : xr_server_active_weapon_item(); }
+int XR_Interaction_MainhandCurrentAmmo(void)
+{
+    int weapon = XR_Interaction_MainhandWeaponItem();
+    if (!offhand_fire_main_viewmodel_valid)
+        return cl.stats[STAT_AMMO];
+    if (weapon == IT_AXE || weapon == RIT_AXE)
+        return 0;
+    if (weapon == IT_SHOTGUN || weapon == IT_SUPER_SHOTGUN)
+        return cl.stats[STAT_SHELLS];
+    if (weapon == IT_NAILGUN || weapon == IT_SUPER_NAILGUN)
+        return cl.stats[STAT_NAILS];
+    if (weapon == IT_GRENADE_LAUNCHER || weapon == IT_ROCKET_LAUNCHER)
+        return cl.stats[STAT_ROCKETS];
+    if (weapon == IT_LIGHTNING || weapon == HIT_LASER_CANNON || weapon == HIT_MJOLNIR)
+        return cl.stats[STAT_CELLS];
+    if (rogue)
+    {
+        if (weapon == RIT_LAVA_NAILGUN || weapon == RIT_LAVA_SUPER_NAILGUN)
+            return cl.stats[STAT_NAILS];
+        if (weapon == RIT_MULTI_GRENADE || weapon == RIT_MULTI_ROCKET)
+            return cl.stats[STAT_ROCKETS];
+        if (weapon == RIT_PLASMA_GUN)
+            return cl.stats[STAT_CELLS];
+    }
+    // Unknown mod weapons retain the server-reported value until metadata defines their ammo pool.
+    return cl.stats[STAT_AMMO];
+}
 int XR_Interaction_OffhandWeaponItem(void) { return offhand_weapon_item; }
 xr_melee_mode_t XR_Interaction_GetWeaponMeleeMode(int item)
 {
@@ -1552,8 +1953,15 @@ static qboolean xr_get_weapon_viewmodel(entity_t *out, int item, qboolean animat
 
 qboolean XR_Interaction_GetMainhandViewmodel(entity_t *out)
 {
+    entity_t resolved;
     if (!out || wheel_active || !offhand_fire_main_viewmodel_valid) return false;
     *out = offhand_fire_main_viewmodel;
+    if (offhand_fire.main_item && xr_get_weapon_viewmodel(&resolved, offhand_fire.main_item, true))
+    {
+        // The server briefly reports the offhand weapon as active; rebuild the main model from its saved item.
+        out->model = resolved.model;
+        out->scale = resolved.scale;
+    }
     return true;
 }
 
@@ -1572,20 +1980,20 @@ static int xr_alias_frame_count (qmodel_t *model)
 
 qboolean XR_Interaction_GetOffhandViewmodel(entity_t *out)
 {
-    if (!offhand_weapon_item || wheel_active) return false;
+    if (!offhand_weapon_item || wheel_active || two_hand_mode_active) return false;
     if (!xr_get_weapon_viewmodel(out, offhand_weapon_item, false)) return false;
     if (cl.maxclients == 1)
     {
         /* Local fire preserves its own frame timeline because cl.viewent remains the main-hand presentation. */
         out->frame = (int)xr_local_offhand_presentation_frame (xr_alias_frame_count (out->model));
     }
-    else if (offhand_fire.phase == 2 && cl.stats[STAT_ACTIVEWEAPON] == offhand_weapon_item)
+    else if (offhand_fire.phase == XR_OFFHAND_FIRING && xr_server_active_weapon_item() == offhand_weapon_item)
     {
         out->frame = cl.viewent.frame;
         offhand_fire.presentation_frame = cl.viewent.frame;
         offhand_fire.presentation_frame_valid = true;
     }
-    else if (offhand_fire.phase == 3 && offhand_fire.presentation_frame_valid)
+    else if (offhand_fire.phase == XR_OFFHAND_WAIT_RESTORE && offhand_fire.presentation_frame_valid)
         out->frame = (int)offhand_fire.presentation_frame;
     out->lerpflags = LERP_RESETMOVE | LERP_RESETANIM;
     return true;
@@ -1674,7 +2082,7 @@ void XR_Interaction_AddWorldEntities(void)
         ent->alpha = ENTALPHA_DEFAULT;
     }
     for (i = 0; i < xr_weapon_count && wheel_entity_count < (int)Q_COUNTOF(wheel_entities); ++i) {
-        if (cl.stats[STAT_ACTIVEWEAPON] != xr_weapons[i].item || !xr_wheel_slot_visible(i) || !xr_weapons[i].model) continue;
+        if (xr_server_active_weapon_item() != xr_weapons[i].item || !xr_wheel_slot_visible(i) || !xr_weapons[i].model) continue;
         entity_t *ent = &wheel_entities[wheel_entity_count++];
         memset(ent, 0, sizeof(*ent));
         ent->model = xr_weapons[i].model;

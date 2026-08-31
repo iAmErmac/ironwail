@@ -26,6 +26,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 extern void VID_XR_Haptic (int hand, float amplitude, float duration_seconds);
 #include "xr_bridge.h"
 #include "xr_input.h"
+#include "xr_interaction.h"
 #include "json.h"
 extern cvar_t vr_mode, vr_weapon_replace;
 extern cvar_t vr_weapon_fire_xoffset, vr_weapon_fire_yoffset, vr_weapon_fire_zoffset;
@@ -1074,6 +1075,16 @@ void V_CalcRefdef (void)
 	view->frame = cl.stats[STAT_WEAPONFRAME];
 	view->colormap = vid.colormap;
 	view->scale = ENTSCALE_ENCODE(VR_GetWeaponModel(cl.model_precache[cl.stats[STAT_WEAPON]]) != cl.model_precache[cl.stats[STAT_WEAPON]] ? VR_WeaponModelScale(view->model) : 1.f);
+	{
+		entity_t mainhand_view;
+		if (XR_Input_OwnsInput () && XR_Interaction_GetMainhandViewmodel (&mainhand_view))
+		{
+			// Keep the server's temporary offhand selection out of the main-hand view entity.
+			view->model = mainhand_view.model;
+			view->frame = mainhand_view.frame;
+			view->scale = mainhand_view.scale;
+		}
+	}
 
 //johnfitz -- v_gunkick
 	if (v_gunkick.value == 1) //original quake kick
