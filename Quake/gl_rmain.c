@@ -78,6 +78,7 @@ extern qboolean SV_BoxInPVS (vec3_t mins, vec3_t maxs, byte *pvs, mnode_t *node)
 refdef_t	r_refdef;
 extern cvar_t vr_world_scale, vr_roomscale, vr_smooth_stairs;
 extern cvar_t vr_laser_sight, vr_laser_beam, vr_laser_color, vr_laser_beam_width, vr_laser_beam_alpha, vr_laser_alpha, vr_laser_sight_scale, vr_laser_hide_melee;
+extern cvar_t vr_laser_beam_xoffset, vr_laser_beam_yoffset, vr_laser_beam_zoffset;
 extern qboolean VID_XR_GetActions(iw_xr_action_snapshot_t *actions);
 extern qboolean XR_Input_GetTeleportAim(vec3_t start, vec3_t target);
 
@@ -128,8 +129,9 @@ static vec3_t r_xr_controller_forward, r_xr_controller_right, r_xr_controller_up
 static qboolean r_xr_hand_tracking_valid[IW_XR_HAND_COUNT], r_xr_hand_aim_valid[IW_XR_HAND_COUNT];
 static vec3_t r_xr_hand_tracking_origin[IW_XR_HAND_COUNT], r_xr_hand_tracking_forward[IW_XR_HAND_COUNT], r_xr_hand_tracking_right[IW_XR_HAND_COUNT], r_xr_hand_tracking_up[IW_XR_HAND_COUNT];
 static vec3_t r_xr_hand_aim_origin[IW_XR_HAND_COUNT], r_xr_hand_aim_forward[IW_XR_HAND_COUNT], r_xr_hand_aim_right[IW_XR_HAND_COUNT], r_xr_hand_aim_up[IW_XR_HAND_COUNT];
-typedef struct { qboolean valid; vec3_t start, end, forward; } xr_laser_t;
+typedef struct { qboolean valid; vec3_t start, end, forward, right, up; } xr_laser_t;
 static xr_laser_t r_xr_laser[IW_XR_HAND_COUNT];
+static xr_laser_t r_xr_remote_laser[MAX_SCOREBOARD];
 static qboolean r_xr_pointer_valid, r_xr_teleport_marker_valid;
 static vec3_t r_xr_pointer_start, r_xr_pointer_end, r_xr_teleport_marker_origin;
 static uint32_t r_xr_teleport_marker_color;
@@ -329,32 +331,69 @@ static void R_XRPrepareLasers (void)
 {
     iw_xr_hand_t mainhand = XR_Input_PhysicalHandForRole (XR_HAND_MAINHAND);
     iw_xr_hand_t offhand = XR_Input_PhysicalHandForRole (XR_HAND_OFFHAND);
-    int hand;
+    int hand, player;
     if (!r_xr_eye_pass)
     {
         for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand) r_xr_laser[hand].valid = false;
+        for (player = 0; player < MAX_SCOREBOARD; ++player) r_xr_remote_laser[player].valid = false;
         return;
     }
     if (r_xr_eye_index != 0)
         return;
     for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand) r_xr_laser[hand].valid = false;
+    for (player = 0; player < MAX_SCOREBOARD; ++player) r_xr_remote_laser[player].valid = false;
 
-    if (XR_Interaction_WheelActive () || (!vr_laser_sight.value && !vr_laser_beam.value)) return;
+    if (XR_Interaction_WheelActive () || (vr_laser_sight.value < 1.f && vr_laser_beam.value < 1.f)) return;
     // Lasers are local presentation; trace each hand against the client world only.
     for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand)
     {
         int weapon = hand == mainhand ? XR_Interaction_MainhandWeaponItem () : (hand == offhand ? XR_Interaction_OffhandWeaponItem () : 0);
         xr_laser_t *laser = &r_xr_laser[hand];
-        vec3_t target, right, up;
+        vec3_t target;
         uint32_t color;
         if (!weapon || R_XRLaserHiddenForMelee (weapon) ||
-            !R_XRGetWeaponOrientation ((iw_xr_hand_t)hand, laser->start, laser->forward, right, up)) continue;
+            !R_XRGetWeaponOrientation ((iw_xr_hand_t)hand, laser->start, laser->forward, laser->right, laser->up)) continue;
         VectorMA (laser->start, 8192.f, laser->forward, target);
         TraceLine (laser->start, target, laser->end);
         laser->valid = true;
-        if (vr_laser_sight.value)
+        if (vr_laser_sight.value >= 1.f)
         {
             dlight_t *light = CL_AllocDlight (0x56524c53 + hand);
+            color = R_XRLaserColor (1.f);
+            VectorCopy (laser->end, light->origin);
+            VectorSet (light->color, (color & 255) / 255.f, ((color >> 8) & 255) / 255.f, ((color >> 16) & 255) / 255.f);
+            light->radius = 16.f; light->die = cl.time + 0.1; light->decay = 0.f;
+        }
+    }
+
+    if (cl.maxclients <= 1 || (vr_laser_sight.value < 2.f && vr_laser_beam.value < 2.f))
+        return;
+    for (player = 1; player <= cl.maxclients && player <= MAX_SCOREBOARD; ++player)
+    {
+        entity_t *ent;
+        xr_laser_t *laser;
+        vec3_t angles, target;
+        uint32_t color;
+        if (player == cl.viewentity || player >= cl.num_entities)
+            continue;
+        ent = &cl_entities[player];
+        if (!ent->model || ent->alpha == ENTALPHA_ZERO)
+            continue;
+        laser = &r_xr_remote_laser[player - 1];
+        VectorCopy (ent->angles, angles);
+        // Player entities carry Quake's visual one-third pitch; restore the full network aim here.
+        angles[PITCH] = -angles[PITCH] * 3.f;
+        angles[ROLL] = 0.f;
+        AngleVectors (angles, laser->forward, laser->right, laser->up);
+        VectorCopy (ent->origin, laser->start);
+        laser->start[2] += DEFAULT_VIEWHEIGHT;
+        VectorMA (laser->start, 8.f, laser->forward, laser->start);
+        VectorMA (laser->start, 8192.f, laser->forward, target);
+        TraceLine (laser->start, target, laser->end);
+        laser->valid = true;
+        if (vr_laser_sight.value >= 2.f)
+        {
+            dlight_t *light = CL_AllocDlight (0x56524c53 + IW_XR_HAND_COUNT + player);
             color = R_XRLaserColor (1.f);
             VectorCopy (laser->end, light->origin);
             VectorSet (light->color, (color & 255) / 255.f, ((color >> 8) & 255) / 255.f, ((color >> 16) & 255) / 255.f);
@@ -365,13 +404,26 @@ static void R_XRPrepareLasers (void)
 
 static void R_XRUpdateLaserDots (void)
 {
-    int hand;
+    int hand, player;
     for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand)
     {
         xr_laser_t *laser = &r_xr_laser[hand];
         vec3_t origin;
-        if (!laser->valid || !vr_laser_sight.value) R_SetVRLaserDot ((iw_xr_hand_t)hand, false, vec3_origin, 0, 0.f);
+        if (!laser->valid || vr_laser_sight.value < 1.f) R_SetVRLaserDot ((iw_xr_hand_t)hand, false, vec3_origin, 0, 0.f);
         else { VectorMA (laser->end, -0.5f, laser->forward, origin); R_SetVRLaserDot ((iw_xr_hand_t)hand, true, origin, R_XRLaserColor (vr_laser_alpha.value), CLAMP (0.1f, vr_laser_sight_scale.value, 20.f)); }
+    }
+    for (player = 1; player <= MAX_SCOREBOARD; ++player)
+        R_SetVRPlayerLaserDot (player, false, vec3_origin, 0, 0.f);
+    if (vr_laser_sight.value < 2.f)
+        return;
+    for (player = 1; player <= cl.maxclients && player <= MAX_SCOREBOARD; ++player)
+    {
+        xr_laser_t *laser = &r_xr_remote_laser[player - 1];
+        vec3_t origin;
+        if (!laser->valid)
+            continue;
+        VectorMA (laser->end, -0.5f, laser->forward, origin);
+        R_SetVRPlayerLaserDot (player, true, origin, R_XRLaserColor (vr_laser_alpha.value), CLAMP (0.1f, vr_laser_sight_scale.value, 20.f));
     }
 }
 static void R_XRDrawLaserBeam (void);
@@ -2107,14 +2159,19 @@ static void R_XRDrawLaserBeamForHand (const xr_laser_t *laser)
 {
 	debugvert_t verts[16];
 	uint16_t idx[48];
-	vec3_t direction, side, up, radial;
+	vec3_t beam_start, direction, side, up, radial;
 	uint32_t color;
 	float length, radius;
 	int i;
 
 	if (!laser->valid || !vr_laser_beam.value)
 		return;
-	VectorSubtract (laser->end, laser->start, direction);
+	// Offset only the origin; keep the endpoint unchanged so the beam converges with the dot.
+	VectorCopy (laser->start, beam_start);
+	VectorMA (beam_start, vr_laser_beam_xoffset.value, laser->forward, beam_start);
+	VectorMA (beam_start, vr_laser_beam_yoffset.value, laser->right, beam_start);
+	VectorMA (beam_start, vr_laser_beam_zoffset.value, laser->up, beam_start);
+	VectorSubtract (laser->end, beam_start, direction);
 	length = VectorNormalize (direction);
 	if (length <= 0.01f)
 		return;
@@ -2134,7 +2191,7 @@ static void R_XRDrawLaserBeamForHand (const xr_laser_t *laser)
 		float angle = (float)i * (2.f * (float)M_PI / 8.f);
 		VectorScale (side, cosf (angle), radial);
 		VectorMA (radial, sinf (angle), up, radial);
-		VectorMA (laser->start, radius, radial, verts[i * 2].pos);
+		VectorMA (beam_start, radius, radial, verts[i * 2].pos);
 		VectorMA (laser->end, radius, radial, verts[i * 2 + 1].pos);
 		verts[i * 2].color = color;
 		verts[i * 2 + 1].color = color;
@@ -2169,9 +2226,13 @@ static void R_XRDrawLaserBeamForHand (const xr_laser_t *laser)
 }
 static void R_XRDrawLaserBeam (void)
 {
-    int hand;
+    int hand, player;
     for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand)
         R_XRDrawLaserBeamForHand (&r_xr_laser[hand]);
+    if (vr_laser_beam.value < 2.f)
+        return;
+    for (player = 1; player <= cl.maxclients && player <= MAX_SCOREBOARD; ++player)
+        R_XRDrawLaserBeamForHand (&r_xr_remote_laser[player - 1]);
 }
 
 static void R_XRDrawTeleportMarker (void)

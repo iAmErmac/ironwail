@@ -101,6 +101,7 @@ extern cvar_t vr_weapon_replace, vr_offhand_render_flip, vr_weapon_pitch, vr_wea
 extern cvar_t vr_weapon_fire_xoffset, vr_weapon_fire_yoffset, vr_weapon_fire_zoffset;
 extern cvar_t vr_melee, vr_melee_velocity, vr_melee_cooldown, vr_melee_damage_scale, vr_melee_pitch;
 extern cvar_t vr_laser_sight, vr_laser_beam, vr_laser_color, vr_laser_beam_width, vr_laser_beam_alpha, vr_laser_alpha, vr_laser_sight_scale, vr_laser_hide_melee;
+extern cvar_t vr_laser_beam_xoffset, vr_laser_beam_yoffset, vr_laser_beam_zoffset;
 extern cvar_t vr_turn_mode;
 extern cvar_t vr_turn_angle;
 extern cvar_t vr_dominant_hand, vr_stabilize_mode;
@@ -3213,6 +3214,9 @@ void M_Menu_Gamepad_f (void)
 		begin_menu (VR_LASER_OPTIONS, m_vr_laser, TITLE("Laser Sight"))	\
 		item (VR_LASER_OPT_SIGHT, "Laser Sight")				\
 		item (VR_LASER_OPT_BEAM, "Laser Beam")				\
+		item (VR_LASER_OPT_BEAM_XOFFSET, "Beam XOffset")			\
+		item (VR_LASER_OPT_BEAM_YOFFSET, "Beam YOffset")			\
+		item (VR_LASER_OPT_BEAM_ZOFFSET, "Beam ZOffset")			\
 		item (VR_LASER_OPT_DOT_SCALE, "Dot Scale")\
 		item (VR_LASER_OPT_DOT_ALPHA, "Dot Alpha")				\
 		item (VR_LASER_OPT_BEAM_WIDTH, "Beam Width")			\
@@ -3732,6 +3736,9 @@ static void M_VR_ResetLaser (void)
 	Cvar_SetValueQuick (&vr_laser_alpha, 0.5f);
 	Cvar_SetValueQuick (&vr_laser_beam_width, 0.3f);
 	Cvar_SetValueQuick (&vr_laser_beam_alpha, 0.2f);
+	Cvar_SetValueQuick (&vr_laser_beam_xoffset, 0.f);
+	Cvar_SetValueQuick (&vr_laser_beam_yoffset, 0.f);
+	Cvar_SetValueQuick (&vr_laser_beam_zoffset, 0.f);
 	Cvar_SetValueQuick (&vr_laser_hide_melee, 1.f);
 }
 static void M_VR_ResetWeapon (void)
@@ -3802,6 +3809,23 @@ static void M_CycleCvar (cvar_t *cvar, int minval, int maxval, int dir)
 		value += range;
 	value += minval;
 	Cvar_SetValueQuick (cvar, (float) value);
+}
+
+static const char *M_VR_LaserModeName (float value)
+{
+	switch ((int)CLAMP (0.f, value, 2.f))
+	{
+	case 1: return "On (Self)";
+	case 2: return "On (All Players)";
+	default: return "Off";
+	}
+}
+
+static void M_VR_CycleLaserMode (cvar_t *cvar, int dir)
+{
+	int mode = (int)CLAMP (0.f, cvar->value, 2.f);
+	mode = (mode + 3 + dir) % 3;
+	Cvar_SetValueQuick (cvar, (float)mode);
 }
 
 void M_AdjustSliders (int dir)
@@ -3971,10 +3995,19 @@ void M_AdjustSliders (int dir)
 		Cvar_SetValueQuick (&vr_melee_pitch, CLAMP (-90.f, vr_melee_pitch.value + dir, 90.f));
 		break;
 	case VR_LASER_OPT_SIGHT:
-		Cvar_SetValueQuick (&vr_laser_sight, !vr_laser_sight.value);
+		M_VR_CycleLaserMode (&vr_laser_sight, dir);
 		break;
 	case VR_LASER_OPT_BEAM:
-		Cvar_SetValueQuick (&vr_laser_beam, !vr_laser_beam.value);
+		M_VR_CycleLaserMode (&vr_laser_beam, dir);
+		break;
+	case VR_LASER_OPT_BEAM_XOFFSET:
+		Cvar_SetValueQuick (&vr_laser_beam_xoffset, CLAMP (-100.f, vr_laser_beam_xoffset.value + dir, 100.f));
+		break;
+	case VR_LASER_OPT_BEAM_YOFFSET:
+		Cvar_SetValueQuick (&vr_laser_beam_yoffset, CLAMP (-100.f, vr_laser_beam_yoffset.value + dir, 100.f));
+		break;
+	case VR_LASER_OPT_BEAM_ZOFFSET:
+		Cvar_SetValueQuick (&vr_laser_beam_zoffset, CLAMP (-100.f, vr_laser_beam_zoffset.value + dir, 100.f));
 		break;
 	case VR_LASER_OPT_DOT_SCALE:
 		Cvar_SetValueQuick (&vr_laser_sight_scale, CLAMP (0.1f, vr_laser_sight_scale.value + dir * 0.1f, 10.f));
@@ -4499,6 +4532,15 @@ qboolean M_SetSliderValue (int option, float f)
 	case VR_LASER_OPT_BEAM_ALPHA:
 		Cvar_SetValueQuick (&vr_laser_beam_alpha, 0.05f + f * 0.95f);
 		return true;
+	case VR_LASER_OPT_BEAM_XOFFSET:
+		Cvar_SetValueQuick (&vr_laser_beam_xoffset, -100.f + f * 200.f);
+		return true;
+	case VR_LASER_OPT_BEAM_YOFFSET:
+		Cvar_SetValueQuick (&vr_laser_beam_yoffset, -100.f + f * 200.f);
+		return true;
+	case VR_LASER_OPT_BEAM_ZOFFSET:
+		Cvar_SetValueQuick (&vr_laser_beam_zoffset, -100.f + f * 200.f);
+		return true;
 	case OPT_UISCALE:	// console and menu scale
 		target_scale_frac = f;
 		l = (vid.width / 320.0) - 1;
@@ -4856,10 +4898,19 @@ static void M_Options_DrawItem (int y, int item)
 		M_DrawSlider (x, y, (vr_melee_pitch.value + 90.f) / 180.f, va ("%.0f", vr_melee_pitch.value));
 		break;
 	case VR_LASER_OPT_SIGHT:
-		M_DrawCheckbox (x, y, vr_laser_sight.value);
+		M_Print (x, y, M_VR_LaserModeName (vr_laser_sight.value));
 		break;
 	case VR_LASER_OPT_BEAM:
-		M_DrawCheckbox (x, y, vr_laser_beam.value);
+		M_Print (x, y, M_VR_LaserModeName (vr_laser_beam.value));
+		break;
+	case VR_LASER_OPT_BEAM_XOFFSET:
+		M_DrawSlider (x, y, (vr_laser_beam_xoffset.value + 100.f) / 200.f, va ("%.0f", vr_laser_beam_xoffset.value));
+		break;
+	case VR_LASER_OPT_BEAM_YOFFSET:
+		M_DrawSlider (x, y, (vr_laser_beam_yoffset.value + 100.f) / 200.f, va ("%.0f", vr_laser_beam_yoffset.value));
+		break;
+	case VR_LASER_OPT_BEAM_ZOFFSET:
+		M_DrawSlider (x, y, (vr_laser_beam_zoffset.value + 100.f) / 200.f, va ("%.0f", vr_laser_beam_zoffset.value));
 		break;
 	case VR_LASER_OPT_DOT_SCALE:
 		M_DrawSlider (x, y, (vr_laser_sight_scale.value - 0.1f) / 9.9f, va ("%.1f", vr_laser_sight_scale.value));

@@ -36,10 +36,11 @@ static int	ramp2[8] = {0x6f, 0x6e, 0x6d, 0x6c, 0x6b, 0x6a, 0x68, 0x66};
 static int	ramp3[8] = {0x6d, 0x6b, 6, 5, 4, 3};
 
 particle_t	*particles;
-static qboolean r_vr_laser_dot_active[IW_XR_HAND_COUNT];
-static vec3_t r_vr_laser_dot_origin[IW_XR_HAND_COUNT];
-static uint32_t r_vr_laser_dot_color[IW_XR_HAND_COUNT];
-static float r_vr_laser_dot_scale[IW_XR_HAND_COUNT];
+#define MAX_VR_LASER_DOTS (IW_XR_HAND_COUNT + MAX_SCOREBOARD)
+static qboolean r_vr_laser_dot_active[MAX_VR_LASER_DOTS];
+static vec3_t r_vr_laser_dot_origin[MAX_VR_LASER_DOTS];
+static uint32_t r_vr_laser_dot_color[MAX_VR_LASER_DOTS];
+static float r_vr_laser_dot_scale[MAX_VR_LASER_DOTS];
 int			r_numparticles, r_numactiveparticles;
 
 static float uvscale;
@@ -106,6 +107,20 @@ void R_SetVRLaserDot (iw_xr_hand_t hand, qboolean active, const vec3_t origin, u
         VectorCopy (origin, r_vr_laser_dot_origin[hand]);
         r_vr_laser_dot_color[hand] = color;
         r_vr_laser_dot_scale[hand] = scale;
+    }
+}
+
+void R_SetVRPlayerLaserDot (int player, qboolean active, const vec3_t origin, uint32_t color, float scale)
+{
+    int dot;
+    if (player < 1 || player > MAX_SCOREBOARD) return;
+    dot = IW_XR_HAND_COUNT + player - 1;
+    r_vr_laser_dot_active[dot] = active;
+    if (active)
+    {
+        VectorCopy (origin, r_vr_laser_dot_origin[dot]);
+        r_vr_laser_dot_color[dot] = color;
+        r_vr_laser_dot_scale[dot] = scale;
     }
 }
 
@@ -714,7 +729,7 @@ static void R_DrawParticles_Real (qboolean alpha, qboolean showtris)
 	qboolean draw_regular = r_particles.value && (showtris || alpha == ((int)r_particles.value != 2));
 	qboolean draw_laser_dot = false;
     int i, hand;
-    for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand) draw_laser_dot |= r_vr_laser_dot_active[hand] && !showtris && alpha;
+    for (hand = 0; hand < countof (r_vr_laser_dot_active); ++hand) draw_laser_dot |= r_vr_laser_dot_active[hand] && !showtris && alpha;
 
 	if (!draw_regular && !draw_laser_dot)
 		return;
@@ -765,7 +780,7 @@ static void R_DrawParticles_Real (qboolean alpha, qboolean showtris)
 		//johnfitz
 	}
 
-	for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand)
+	for (hand = 0; hand < countof (r_vr_laser_dot_active); ++hand)
 	{
 		if (!draw_laser_dot || !r_vr_laser_dot_active[hand]) continue;
 		if (numpartverts == countof(partverts)) R_FlushParticleBatch ();

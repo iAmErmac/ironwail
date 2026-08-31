@@ -564,9 +564,11 @@ qboolean XR_Input_Move(usercmd_t *cmd)
     iw_xr_action_snapshot_t actions;
     iw_xr_hand_t movement = XR_Input_MovementHand();
     float x, y, length, deadzone;
-    qboolean jump;
     if (!cmd || !xr_owns_input)
         return false;
+    // Menu navigation consumes the stick; do not turn it into gameplay movement.
+    if (key_dest != key_game)
+        return true;
     if (VID_XR_GetActions (&actions))
     {
         x = actions.hand[movement].stick[0];
@@ -575,7 +577,6 @@ qboolean XR_Input_Move(usercmd_t *cmd)
     else
     {
         x = y = 0.f;
-        jump = false;
     }
     length = sqrtf(x * x + y * y);
     deadzone = CLAMP(0.0f, vr_move_deadzone.value, 0.95f);

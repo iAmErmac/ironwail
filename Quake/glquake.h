@@ -565,6 +565,7 @@ void R_EntityMatrix (float matrix[16], vec3_t origin, vec3_t angles, unsigned ch
 void R_InitParticles (void);
 particle_t *R_AllocParticle (void);
 void R_SetVRLaserDot (iw_xr_hand_t hand, qboolean active, const vec3_t origin, uint32_t color, float scale);
+void R_SetVRPlayerLaserDot (int player, qboolean active, const vec3_t origin, uint32_t color, float scale);
 void R_DrawParticles (qboolean alpha);
 void R_DrawParticles_ShowTris (void);
 void CL_RunParticles (void);
