@@ -561,14 +561,18 @@ static qboolean xr_offhand_weapon_has_ammo (int item)
         if (item == HIT_MJOLNIR) return cl.stats[STAT_CELLS] > 0;
     }
     if (rogue) {
-        if (item == RIT_LAVA_NAILGUN || item == RIT_LAVA_SUPER_NAILGUN) return cl.stats[STAT_NAILS] > 0;
+        if (item == RIT_LAVA_NAILGUN) return cl.stats[STAT_NAILS] >= 1;
+        if (item == RIT_LAVA_SUPER_NAILGUN) return cl.stats[STAT_NAILS] >= 2;
         if (item == RIT_MULTI_GRENADE || item == RIT_MULTI_ROCKET) return cl.stats[STAT_ROCKETS] > 0;
         if (item == RIT_PLASMA_GUN) return cl.stats[STAT_CELLS] > 0;
         if (item == RIT_AXE) return true;
     }
     switch (item) {
-    case IT_SHOTGUN: case IT_SUPER_SHOTGUN: return cl.stats[STAT_SHELLS] > 0;
-    case IT_NAILGUN: case IT_SUPER_NAILGUN: return cl.stats[STAT_NAILS] > 0;
+    // Quake's alternate fire modes consume two units, so one shell or nail is not enough.
+    case IT_SHOTGUN: return cl.stats[STAT_SHELLS] >= 1;
+    case IT_SUPER_SHOTGUN: return cl.stats[STAT_SHELLS] >= 2;
+    case IT_NAILGUN: return cl.stats[STAT_NAILS] >= 1;
+    case IT_SUPER_NAILGUN: return cl.stats[STAT_NAILS] >= 2;
     case IT_GRENADE_LAUNCHER: case IT_ROCKET_LAUNCHER: return cl.stats[STAT_ROCKETS] > 0;
     case IT_LIGHTNING: return cl.stats[STAT_CELLS] > 0;
     default: return true;
@@ -781,6 +785,8 @@ static void xr_offhand_fire_cancel_for_main(void)
 // Multiplayer temporarily selects the offhand weapon for the canonical network command, while preserving the main-hand viewmodel locally.
 static void xr_offhand_fire_update(void)
 {
+    int active_item;
+
     if (two_hand_mode_active)
     {
         xr_offhand_fire_cancel_for_main();
@@ -799,11 +805,21 @@ static void xr_offhand_fire_update(void)
     if (main_fire_input_active)
         xr_offhand_fire_cancel_for_main();
 
+    if (offhand_fire.phase != XR_OFFHAND_IDLE)
+    {
+        active_item = xr_server_active_weapon_item();
+        // A rejected QuakeC attack can switch the server weapon; release the transaction instead of trapping main fire.
+        if (!xr_offhand_weapon_has_ammo(offhand_fire.item) ||
+            (offhand_fire.phase == XR_OFFHAND_FIRING && active_item != offhand_fire.item))
+            xr_offhand_fire_cancel_for_main();
+    }
+
     if (offhand_fire.phase == XR_OFFHAND_IDLE)
     {
         if (main_fire_input_active)
             return;
-        if ((!offhand_attack_active && !xr_offhand_motion_pending()) || !offhand_weapon_item || wheel_active)
+        if ((!offhand_attack_active && !xr_offhand_motion_pending()) || !offhand_weapon_item || wheel_active ||
+            !xr_offhand_weapon_has_ammo(offhand_weapon_item))
             return;
         offhand_fire.presentation_frame_valid = false;
         offhand_fire.item = offhand_weapon_item;
@@ -889,6 +905,32 @@ static int xr_wheel_fallback_slot(int excluded_item)
             return slot;
     }
     return -1;
+}
+
+static void xr_offhand_switch_unusable_weapon(void)
+{
+    int i, start, active_item, slot = -1;
+
+    if (!offhand_weapon_item || offhand_transfer.active || offhand_fire.phase != XR_OFFHAND_IDLE ||
+        xr_offhand_weapon_has_ammo(offhand_weapon_item))
+        return;
+
+    start = xr_weapon_slot_index(offhand_weapon_item);
+    active_item = xr_server_active_weapon_item();
+    for (i = 1; i <= xr_weapon_count; ++i)
+    {
+        int candidate = (start + i) % xr_weapon_count;
+        if (candidate >= 0 && xr_weapons[candidate].item != offhand_weapon_item &&
+            xr_weapons[candidate].item != active_item && xr_wheel_slot_visible(candidate))
+        {
+            slot = candidate;
+            break;
+        }
+    }
+
+    xr_offhand_reset_local_fire();
+    offhand_attack_active = false;
+    offhand_weapon_item = slot >= 0 ? xr_weapons[slot].item : 0;
 }
 
 static void xr_offhand_transfer_update(void)
@@ -1497,7 +1539,12 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
     local_offhand_fired_this_frame = false;
     offhand_fire_input_suppressed = cl.maxclients > 1 && trigger;
     xr_offhand_transfer_update();
+    if (offhand_weapon_item && !xr_offhand_weapon_has_ammo(offhand_weapon_item) &&
+        offhand_fire.phase != XR_OFFHAND_IDLE)
+        xr_offhand_fire_cancel_for_main();
+    xr_offhand_switch_unusable_weapon();
     xr_offhand_fire_update();
+    xr_offhand_switch_unusable_weapon();
     if (!offhand_attack_active && xr_offhand_continuous_weapon ())
     {
         offhand_local_fire.animation_active = false;
@@ -1810,7 +1857,8 @@ qboolean XR_Interaction_OffhandNetworkAttackActive(void)
     // The server has one attack bit; offhand may own it only after active-weapon acknowledgement.
     return cl.maxclients > 1 && !two_hand_mode_active && offhand_fire.phase == XR_OFFHAND_FIRING &&
         xr_server_active_weapon_item() == offhand_fire.item && offhand_weapon_item &&
-        !wheel_active && (offhand_attack_active || xr_offhand_motion_pending());
+        !wheel_active && xr_offhand_weapon_has_ammo(offhand_fire.item) &&
+        (offhand_attack_active || xr_offhand_motion_pending());
 }
 
 xr_network_attack_owner_t XR_Interaction_PrepareNetworkAttack(qboolean main_requested, int user_impulse, int *network_impulse)
