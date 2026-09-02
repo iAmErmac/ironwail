@@ -75,6 +75,33 @@ iw_xr_hand_t XR_Input_MouseHand(void) { return vr_dominant_hand.value == 1.f ? I
 iw_xr_hand_t XR_Input_RightStickHand(void) { return vr_dominant_hand.value == 1.f ? IW_XR_HAND_LEFT : IW_XR_HAND_RIGHT; }
 iw_xr_hand_t XR_Input_LeftStickHand(void) { return vr_dominant_hand.value == 1.f ? IW_XR_HAND_RIGHT : IW_XR_HAND_LEFT; }
 
+qboolean XR_Input_FlyModeActive(void)
+{
+    edict_t *player;
+
+    if (!xr_owns_input || !sv.active || cl.maxclients != 1 || svs.maxclients != 1 ||
+        !svs.clients || !svs.clients[0].active)
+        return false;
+    player = svs.clients[0].edict;
+    return player && !player->free && player->v.health > 0 && player->v.movetype == MOVETYPE_FLY;
+}
+
+void XR_Input_PrepareFlyViewAngles(vec3_t angles)
+{
+    vec3_t forward;
+    float planar;
+
+    if (!angles || !XR_Input_FlyModeActive () || !R_GetXRViewBasis (forward, NULL, NULL))
+        return;
+    planar = sqrtf (forward[0] * forward[0] + forward[1] * forward[1]);
+    if (planar < 0.001f)
+        return;
+    // Fly movement uses the same camera direction that VR rendering presents to the player.
+    angles[PITCH] = RAD2DEG (atan2f (-forward[2], planar));
+    angles[YAW] = RAD2DEG (atan2f (forward[1], forward[0]));
+    angles[ROLL] = 0.f;
+}
+
 static void XR_Input_MenuHaptic(void) {
     iw_xr_hand_t offhand = XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND);
     VID_XR_Haptic(offhand, 0.22f, 0.025f);
@@ -177,7 +204,8 @@ void XR_Input_Shutdown(void)
 static qboolean XR_Input_CanTeleport(void)
 {
     return vr_teleport.value != 0.f && sv.active && !sv.paused &&
-        svs.maxclients == 1 && cl.maxclients <= 1 && key_dest == key_game;
+        svs.maxclients == 1 && cl.maxclients <= 1 && key_dest == key_game &&
+        !XR_Input_FlyModeActive ();
 }
 
 static void XR_Input_UpdateTeleportAim(iw_xr_hand_t hand)
@@ -578,6 +606,9 @@ qboolean XR_Input_Move(usercmd_t *cmd)
     {
         x = y = 0.f;
     }
+
+    if (XR_Input_FlyModeActive () && (in_jump.state & 1))
+        cmd->upmove += cl_upspeed.value;
     length = sqrtf(x * x + y * y);
     deadzone = CLAMP(0.0f, vr_move_deadzone.value, 0.95f);
     if (vr_roomscale.value != 0.f && cl.maxclients <= 1 && host_frametime > 0.f)

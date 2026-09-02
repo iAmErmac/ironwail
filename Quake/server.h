@@ -268,6 +268,11 @@ extern	edict_t		*sv_player;
 
 void SV_CalcStats(client_t *client, int *statsi, float *statsf, const char **statss);
 void SV_XRUpdateLocalStats (edict_t *ent);
+void SV_SetLocalInfiniteAmmo (qboolean enabled);
+qboolean SV_GetLocalInfiniteAmmo (void);
+qboolean SV_GiveLocalWeapons (qboolean include_keys, qboolean include_ammo);
+qboolean SV_GiveLocalAmmo (void);
+qboolean SV_GiveLocalKeys (void);
 
 //===========================================================
 

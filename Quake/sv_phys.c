@@ -30,6 +30,11 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 func_t PR_FindProgram (const char *name);
 extern void VID_XR_Haptic (int hand, float amplitude, float duration_seconds);
 
+static qboolean sv_local_infinite_ammo;
+static qboolean sv_local_give_weapons;
+static qboolean sv_local_give_keys;
+static qboolean sv_local_give_ammo;
+
 /*
 
 
@@ -956,6 +961,13 @@ static float SV_XRGetEdictFieldFloat (edict_t *ent, const char *name, float fall
     return field ? field->_float : fallback;
 }
 
+static void SV_XRSetEdictFieldFloat (edict_t *ent, const char *name, float value)
+{
+	eval_t *field = GetEdictFieldValueByName (ent, name);
+	if (field)
+		field->_float = value;
+}
+
 static qboolean SV_XRCopyEdictField (edict_t *dst, edict_t *src, const char *name)
 {
     eval_t *dst_field = GetEdictFieldValueByName (dst, name);
@@ -1142,6 +1154,87 @@ void SV_XRUpdateLocalStats (edict_t *ent)
     cl.statsf[STAT_NAILS] = nails;
     cl.statsf[STAT_ROCKETS] = rockets;
     cl.statsf[STAT_CELLS] = cells;
+}
+
+static qboolean SV_LocalSinglePlayerCheatAllowed (void)
+{
+	return sv.active && deathmatch.value == 0.f && coop.value == 0.f &&
+		cl.maxclients == 1 && svs.maxclients == 1 && svs.clients &&
+		svs.clients[0].active && svs.clients[0].edict && !svs.clients[0].edict->free &&
+		svs.clients[0].edict == sv_player;
+}
+
+static void SV_RefillLocalAmmo (edict_t *ent)
+{
+	if (!ent)
+		return;
+
+	// Refill after QuakeC runs so this remains a local single-player feature and never changes a packet.
+	ent->v.ammo_shells = 100.f;
+	ent->v.ammo_nails = 200.f;
+	ent->v.ammo_rockets = 100.f;
+	ent->v.ammo_cells = 200.f;
+	if (rogue)
+	{
+		SV_XRSetEdictFieldFloat (ent, "ammo_shells1", 100.f);
+		SV_XRSetEdictFieldFloat (ent, "ammo_nails1", 200.f);
+		SV_XRSetEdictFieldFloat (ent, "ammo_rockets1", 100.f);
+		SV_XRSetEdictFieldFloat (ent, "ammo_cells1", 200.f);
+		SV_XRSetEdictFieldFloat (ent, "ammo_lava_nails", 200.f);
+		SV_XRSetEdictFieldFloat (ent, "ammo_multi_rockets", 100.f);
+		SV_XRSetEdictFieldFloat (ent, "ammo_plasma", 200.f);
+	}
+
+	ent->v.currentammo = SV_XROffhandCurrentAmmo (ent, (int)ent->v.weapon);
+}
+
+void SV_SetLocalInfiniteAmmo (qboolean enabled)
+{
+	// Menu actions queue work until the server frame owns the QuakeC player state.
+	sv_local_infinite_ammo = enabled && SV_LocalSinglePlayerCheatAllowed ();
+	if (sv_local_infinite_ammo)
+		sv_local_give_ammo = true;
+	else
+		sv_local_give_ammo = false;
+}
+
+qboolean SV_GetLocalInfiniteAmmo (void)
+{
+	if (sv_local_infinite_ammo && !SV_LocalSinglePlayerCheatAllowed ())
+		sv_local_infinite_ammo = false;
+	return sv_local_infinite_ammo;
+}
+
+qboolean SV_GiveLocalKeys (void)
+{
+	if (SV_LocalSinglePlayerCheatAllowed ())
+	{
+		sv_local_give_keys = true;
+		return true;
+	}
+	return false;
+}
+
+qboolean SV_GiveLocalWeapons (qboolean include_keys, qboolean include_ammo)
+{
+	if (SV_LocalSinglePlayerCheatAllowed ())
+	{
+		sv_local_give_weapons = true;
+		sv_local_give_keys = include_keys;
+		sv_local_give_ammo = include_ammo;
+		return true;
+	}
+	return false;
+}
+
+qboolean SV_GiveLocalAmmo (void)
+{
+	if (SV_LocalSinglePlayerCheatAllowed ())
+	{
+		sv_local_give_ammo = true;
+		return true;
+	}
+	return false;
 }
 
 static qboolean SV_XRMeleePose (iw_xr_hand_t hand, vec3_t origin, vec3_t forward, vec3_t up)
@@ -1496,6 +1589,45 @@ void SV_Physics_Client (edict_t *ent, int num)
 
 	if ( ! svs.clients[num-1].active )
 		return;		// unconnected slot
+	if (ent == sv_player && SV_LocalSinglePlayerCheatAllowed ())
+	{
+		if (sv_local_give_weapons)
+		{
+			int weapons;
+
+			// Bulk weapon commands could collapse to the last forwarded command; apply one inventory mask in the server frame.
+			if (rogue)
+				weapons = RIT_AXE | RIT_LAVA_NAILGUN | RIT_LAVA_SUPER_NAILGUN |
+					RIT_MULTI_GRENADE | RIT_MULTI_ROCKET | RIT_PLASMA_GUN;
+			else
+			{
+				weapons = IT_AXE | IT_SHOTGUN | IT_SUPER_SHOTGUN | IT_NAILGUN |
+					IT_SUPER_NAILGUN | IT_GRENADE_LAUNCHER | IT_ROCKET_LAUNCHER |
+					IT_LIGHTNING;
+				if (hipnotic)
+					weapons |= HIT_MJOLNIR | HIT_PROXIMITY_GUN | HIT_LASER_CANNON;
+			}
+			ent->v.items = (int)ent->v.items | weapons;
+			sv_local_give_weapons = false;
+		}
+		if (sv_local_give_keys)
+		{
+			ent->v.items = (int)ent->v.items | IT_KEY1 | IT_KEY2;
+			sv_local_give_keys = false;
+		}
+		if (sv_local_give_ammo)
+		{
+			SV_RefillLocalAmmo (ent);
+			sv_local_give_ammo = false;
+		}
+	}
+	else if (!SV_LocalSinglePlayerCheatAllowed ())
+	{
+		sv_local_give_weapons = false;
+		sv_local_give_keys = false;
+		sv_local_give_ammo = false;
+		sv_local_infinite_ammo = false;
+	}
 	attack_finished_field = NULL;
 	attack_finished_before = 0.f;
 	main_motion_valid = false;
@@ -1607,6 +1739,13 @@ void SV_Physics_Client (edict_t *ent, int num)
 	pr_global_struct->time = qcvm->time;
 	pr_global_struct->self = EDICT_TO_PROG(ent);
 	PR_ExecuteProgram (pr_global_struct->PlayerPostThink);
+	if (sv_local_infinite_ammo)
+	{
+		if (SV_LocalSinglePlayerCheatAllowed ())
+			SV_RefillLocalAmmo (ent);
+		else
+			sv_local_infinite_ammo = false;
+	}
 	SV_XRUpdateLocalStats (ent);
 	if (attack_finished_field && SV_XRLocalSinglePlayerEntity(ent) &&
 		!(local_offhand_fired && !XR_Interaction_MainhandFireInputActive ()))

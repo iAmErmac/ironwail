@@ -415,6 +415,7 @@ void CL_SendMove (const usercmd_t *cmd)
 		// XR used to let both hands influence the same wire attack; choose one canonical owner first.
 		attack_owner = XR_Interaction_PrepareNetworkAttack(main_requested, in_impulse, &network_impulse);
 		VectorCopy (cl.viewangles, wire_angles);
+		XR_Input_PrepareFlyViewAngles (wire_angles);
 		// Keep the headset view local; only the serialized firing command gets controller aim.
 		if (!CL_XRPrepareNetworkViewAngles (attack_owner, wire_angles))
 			attack_owner = XR_NETWORK_ATTACK_NONE;

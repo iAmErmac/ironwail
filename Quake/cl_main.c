@@ -56,6 +56,28 @@ cvar_t	cl_mwheelpitch = {"cl_mwheelpitch", "5", CVAR_ARCHIVE};
 cvar_t	cl_startdemos = {"cl_startdemos", "1", CVAR_ARCHIVE};
 cvar_t	cl_confirmquit = {"cl_confirmquit", "2", CVAR_ARCHIVE}; // 0=off; 1=simple; 2=classic
 
+static qboolean cl_default_player_name_assigned;
+
+void CL_EnsureDefaultPlayerName (void)
+{
+	char name[16];
+	uint64_t entropy;
+	unsigned suffix;
+
+	if (cl_default_player_name_assigned || q_strcasecmp (cl_name.string, "player"))
+		return;
+
+	entropy = (uint64_t)(Sys_DoubleTime () * 1000000.0);
+	entropy ^= (uint64_t)(uintptr_t)&entropy;
+	entropy ^= entropy >> 17;
+	entropy *= 0xed5ad4bbULL;
+	entropy ^= entropy >> 11;
+	suffix = (unsigned)(entropy % 10000);
+	q_snprintf (name, sizeof (name), "Player#%04u", suffix);
+	Cvar_Set (cl_name.name, name);
+	cl_default_player_name_assigned = true;
+}
+
 client_static_t	cls;
 client_state_t	cl;
 // FIXME: put these on hunk?
@@ -231,6 +253,7 @@ void CL_SignonReply (void)
 		break;
 
 	case 2:
+		CL_EnsureDefaultPlayerName ();
 		MSG_WriteByte (&cls.message, clc_stringcmd);
 		MSG_WriteString (&cls.message, va("name \"%s\"\n", cl_name.string));
 

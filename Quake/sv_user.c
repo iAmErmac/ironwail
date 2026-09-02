@@ -329,7 +329,11 @@ void SV_AirMove (void)
 	float		wishspeed;
 	float		fmove, smove;
 
-	AngleVectors (sv_player->v.angles, forward, right, up);
+	// VR fly sends the headset pitch in the normal view-angle fields.
+	if (sv_player->v.movetype == MOVETYPE_FLY)
+		AngleVectors (sv_player->v.v_angle, forward, right, up);
+	else
+		AngleVectors (sv_player->v.angles, forward, right, up);
 
 	fmove = cmd.forwardmove;
 	smove = cmd.sidemove;
@@ -341,7 +345,10 @@ void SV_AirMove (void)
 	for (i=0 ; i<3 ; i++)
 		wishvel[i] = forward[i]*fmove + right[i]*smove;
 
-	if ( (int)sv_player->v.movetype != MOVETYPE_WALK)
+	// Keep jump and swim-down as world vertical input while stick movement follows the camera pitch.
+	if (sv_player->v.movetype == MOVETYPE_FLY)
+		wishvel[2] += cmd.upmove;
+	else if ( (int)sv_player->v.movetype != MOVETYPE_WALK)
 		wishvel[2] = cmd.upmove;
 	else
 		wishvel[2] = 0;

@@ -34,6 +34,7 @@ void XR_Interaction_AddWorldEntities(void);
 void XR_Interaction_DrawWorldModels(void);
 void XR_Interaction_Draw(void);
 qboolean XR_Interaction_ConsumesGameplay(void);
+qboolean XR_Interaction_OpenKeyboardForMenu(void);
 qboolean XR_Interaction_WheelActive(void);
 qboolean XR_Interaction_OffhandAttackActive(void);
 qboolean XR_Interaction_MainhandFireInputActive(void);

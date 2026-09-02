@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "bgmusic.h"
 #include "q_ctype.h"
+#include "xr_interaction.h"
 
 #include <time.h>
 
@@ -139,6 +140,7 @@ void M_Menu_Main_f (void);
 		void M_Menu_Video_f (void);
 		void M_Menu_Gamepad_f (void);
 	void M_Menu_Mods_f (void);
+	void M_Menu_Cheats_f (void);
 		void M_Menu_ModInfo_f (const filelist_item_t *item);
 	void M_Menu_Help_f (void);
 	void M_Menu_Quit_f (void);
@@ -161,6 +163,7 @@ void M_Main_Draw (void);
 		//void M_Video_Draw (void);
 		//void M_Gamepad_Draw (void);
 	void M_Mods_Draw (void);
+	void M_Cheats_Draw (void);
 		void M_ModInfo_Draw (void);
 	void M_Help_Draw (void);
 	void M_Quit_Draw (void);
@@ -183,6 +186,7 @@ void M_Main_Key (int key);
 		//void M_Video_Key (int key);
 		//void M_Gamepad_Key (int key);
 	void M_Mods_Key (int key);
+	void M_Cheats_Key (int key);
 		void M_ModInfo_Key (int key);
 	void M_Help_Key (int key);
 	void M_Quit_Key (int key);
@@ -205,6 +209,7 @@ void M_Main_Mousemove (float cx, float cy);
 		//void M_Video_Mousemove (float cx, float cy);
 		//void M_Gamepad_Mousemove (float cx, float cy);
 	void M_Mods_Mousemove (float cx, float cy);
+	void M_Cheats_Mousemove (float cx, float cy);
 	//void M_Help_Mousemove (float cx, float cy);
 	//void M_Quit_Mousemove (float cx, float cy);
 
@@ -2319,6 +2324,7 @@ void M_Menu_Setup_f (void)
 	key_dest = key_menu;
 	m_state = m_setup;
 	m_entersound = true;
+	CL_EnsureDefaultPlayerName ();
 	Q_strcpy(setup_myname, cl_name.string);
 	Q_strcpy(setup_hostname, hostname.string);
 	setup_top = setup_oldtop = ((int)cl_color.value) >> 4;
@@ -3130,6 +3136,7 @@ void M_Menu_Gamepad_f (void)
 		item (OPT_MUSICVOL,				"Music Volume")					\
 		item (OPT_GAME,					"Game")							\
 		item (OPT_MODS,					"Mods")							\
+		item (OPT_CHEATS,				"Cheats")							\
 		item (SPACER,					"")								\
 		item (OPT_CONSOLE,				"Console")						\
 		item (OPT_DEFAULTS,				"Reset All")					\
@@ -4730,6 +4737,7 @@ static void M_Options_DrawItem (int y, int item)
 	case OPT_CUSTOMIZE:
 	case OPT_GAMEPAD:
 	case OPT_MODS:
+	case OPT_CHEATS:
 	case GPAD_OPT_CALIBRATE:
 	case VR_OPT_SCREEN:
 	case VR_OPT_HUD:
@@ -5538,6 +5546,9 @@ void M_Options_Key (int k)
 			break;
 		case OPT_MODS:
 			M_Menu_Mods_f ();
+			break;
+		case OPT_CHEATS:
+			M_Menu_Cheats_f ();
 			break;
 		case VR_OPT_SCREEN:
 			M_Options_Init (m_vr_screen);
@@ -7815,6 +7826,224 @@ void M_RefreshMods (void)
 }
 
 //=============================================================================
+// Cheats menu
+
+#define CHEATLIST_TOP		32
+#define CHEATLIST_BOTTOM	12
+
+enum
+{
+	CHEAT_ACTION_COMMAND,
+	CHEAT_ACTION_WEAPONS,
+	CHEAT_ACTION_WEAPONS_KEYS,
+	CHEAT_ACTION_AMMO,
+	CHEAT_ACTION_KEYS,
+	CHEAT_ACTION_INFINITE_AMMO,
+};
+
+typedef struct
+{
+	const char	*label;
+	const char	*command;
+	int			action;
+} cheatmenu_item_t;
+
+static const cheatmenu_item_t cheatsmenu_items[] =
+{
+	{ "Activate Cheats (sv_cheats 1)", "sv_cheats 1\n", CHEAT_ACTION_COMMAND },
+	{ "God Mode", "god\n", CHEAT_ACTION_COMMAND },
+	{ "Fly Mode", "fly\n", CHEAT_ACTION_COMMAND },
+	{ "Noclip Mode", "noclip\n", CHEAT_ACTION_COMMAND },
+	{ "Notarget Mode", "notarget\n", CHEAT_ACTION_COMMAND },
+	{ "All Weapons and Keys", NULL, CHEAT_ACTION_WEAPONS_KEYS },
+	{ "All Weapons", NULL, CHEAT_ACTION_WEAPONS },
+	{ "All Ammo Only", NULL, CHEAT_ACTION_AMMO },
+	{ "All Keys Only", NULL, CHEAT_ACTION_KEYS },
+	{ "Give Quad Damage", "impulse 255\n", CHEAT_ACTION_COMMAND },
+	{ "Give Rune", "impulse 11\n", CHEAT_ACTION_COMMAND },
+	{ "Full Health", "give h 100\n", CHEAT_ACTION_COMMAND },
+	{ "Max Health", "give h 250\n", CHEAT_ACTION_COMMAND },
+	{ "Full Armor", "give a 100\n", CHEAT_ACTION_COMMAND },
+	{ "Max Armor", "give a 200\n", CHEAT_ACTION_COMMAND },
+	{ "Infinite Ammo", NULL, CHEAT_ACTION_INFINITE_AMMO },
+};
+
+static struct
+{
+	menulist_t	list;
+	int			x, y, cols;
+	enum m_state_e	prev;
+} cheatsmenu;
+
+static void M_Cheats_UpdateLayout (void)
+{
+	int height;
+
+	M_UpdateBounds ();
+
+	height = CHEATLIST_TOP + Q_COUNTOF (cheatsmenu_items) * 8 + CHEATLIST_BOTTOM;
+	if (height <= m_height)
+	{
+		cheatsmenu.y = m_top + (((m_height - height) / 2) & ~7);
+		cheatsmenu.list.viewsize = Q_COUNTOF (cheatsmenu_items);
+	}
+	else
+	{
+		cheatsmenu.y = m_top;
+		cheatsmenu.list.viewsize = (m_height - CHEATLIST_TOP - CHEATLIST_BOTTOM - 8) / 8;
+	}
+
+	cheatsmenu.cols = CLAMP (32, m_width / 8 - 2, 48);
+	cheatsmenu.x = m_left + (m_width - cheatsmenu.cols * 8) / 2;
+	M_List_Rescroll (&cheatsmenu.list);
+}
+
+void M_Menu_Cheats_f (void)
+{
+	IN_DeactivateForMenu ();
+	key_dest = key_menu;
+	cheatsmenu.prev = m_state == m_options ? m_options : m_main;
+	m_state = m_cheats;
+	m_entersound = true;
+
+	cheatsmenu.list.numitems = Q_COUNTOF (cheatsmenu_items);
+	cheatsmenu.list.isactive_fn = NULL;
+	cheatsmenu.list.search.match_fn = NULL;
+	M_List_ClearSearch (&cheatsmenu.list);
+	if (cheatsmenu.list.cursor < 0 || cheatsmenu.list.cursor >= cheatsmenu.list.numitems)
+		cheatsmenu.list.cursor = 0;
+	M_Cheats_UpdateLayout ();
+}
+
+void M_Cheats_Draw (void)
+{
+	int firstvis, numvis, i, y;
+	qboolean infinite_ammo;
+
+	M_Cheats_UpdateLayout ();
+	M_List_Update (&cheatsmenu.list);
+
+	M_DrawTransPic (16, 4, Draw_CachePic ("gfx/qplaque.lmp"));
+	M_PrintAligned (m_left + m_width / 2, cheatsmenu.y + 4, ALIGN_CENTER, "CHEATS");
+
+	y = cheatsmenu.y + CHEATLIST_TOP;
+	M_DrawQuakeBar (cheatsmenu.x - 8, y - 8, cheatsmenu.cols + 2);
+	if (M_List_GetOverflow (&cheatsmenu.list) > 0)
+	{
+		if (cheatsmenu.list.scroll > 0)
+			M_DrawEllipsisBar (cheatsmenu.x, y - 16, cheatsmenu.cols);
+		if (cheatsmenu.list.scroll + cheatsmenu.list.viewsize < cheatsmenu.list.numitems)
+			M_DrawEllipsisBar (cheatsmenu.x, y + cheatsmenu.list.viewsize * 8, cheatsmenu.cols);
+	}
+
+	infinite_ammo = SV_GetLocalInfiniteAmmo ();
+	M_List_GetVisibleRange (&cheatsmenu.list, &firstvis, &numvis);
+	for (i = 0; i < numvis; ++i)
+	{
+		int index = firstvis + i;
+		const cheatmenu_item_t *item = &cheatsmenu_items[index];
+		const char *label = item->label;
+		char labelbuf[64];
+
+		if (item->action == CHEAT_ACTION_INFINITE_AMMO)
+		{
+			q_snprintf (labelbuf, sizeof (labelbuf), "%s [%s]", item->label,
+				infinite_ammo ? "ON" : "OFF");
+			label = labelbuf;
+		}
+
+		if (index == cheatsmenu.list.cursor)
+		{
+			M_DrawArrowCursor (cheatsmenu.x - 16, y + i * 8);
+			M_PrintWhite (cheatsmenu.x, y + i * 8, label);
+		}
+		else
+			M_Print (cheatsmenu.x, y + i * 8, label);
+	}
+}
+
+static void M_Cheats_Activate (void)
+{
+	const cheatmenu_item_t *item = &cheatsmenu_items[cheatsmenu.list.cursor];
+
+	if (item->action == CHEAT_ACTION_INFINITE_AMMO)
+	{
+		SV_SetLocalInfiniteAmmo (!SV_GetLocalInfiniteAmmo ());
+	}
+	else if (item->action == CHEAT_ACTION_WEAPONS_KEYS)
+	{
+		if (!SV_GiveLocalWeapons (true, true))
+			Cbuf_AddText ("impulse 9\n");
+	}
+	else if (item->action == CHEAT_ACTION_WEAPONS)
+	{
+		if (!SV_GiveLocalWeapons (false, true))
+			Cbuf_AddText ("give 0\ngive 2\ngive 3\ngive 4\ngive 5\ngive 6\ngive 6a\ngive 7\ngive 8\ngive 9\ngive s 100\ngive n 200\ngive r 100\ngive c 200\ngive l 100\ngive m 100\ngive p 200\n");
+	}
+	else if (item->action == CHEAT_ACTION_AMMO)
+	{
+		if (!SV_GiveLocalAmmo ())
+			Cbuf_AddText ("give s 100\ngive n 200\ngive r 100\ngive c 200\ngive l 100\ngive m 100\ngive p 200\n");
+	}
+	else if (item->action == CHEAT_ACTION_KEYS)
+	{
+		if (!SV_GiveLocalKeys ())
+			Cbuf_AddText ("impulse 13\nimpulse 14\n");
+	}
+	else if (item->command)
+	{
+		Cbuf_AddText (item->command);
+	}
+
+	m_entersound = true;
+}
+
+void M_Cheats_Key (int key)
+{
+	if (M_List_Key (&cheatsmenu.list, key))
+		return;
+
+	switch (key)
+	{
+	case K_ESCAPE:
+	case K_BBUTTON:
+	case K_MOUSE4:
+	case K_MOUSE2:
+		if (cheatsmenu.prev == m_options)
+			M_Menu_Options_f ();
+		else
+			M_Menu_Main_f ();
+		break;
+
+	case K_ENTER:
+	case K_KP_ENTER:
+	case K_ABUTTON:
+		M_Cheats_Activate ();
+		break;
+
+	case K_MOUSE1:
+	{
+		int y = (int)m_mousey - cheatsmenu.y - CHEATLIST_TOP;
+		if (y >= 0 && y < cheatsmenu.list.viewsize * 8)
+		{
+			M_List_Mousemove (&cheatsmenu.list, y);
+			M_Cheats_Activate ();
+		}
+		break;
+	}
+
+	default:
+		break;
+	}
+}
+
+void M_Cheats_Mousemove (float cx, float cy)
+{
+	(void)cx;
+	M_List_Mousemove (&cheatsmenu.list, cy - cheatsmenu.y - CHEATLIST_TOP);
+}
+
+//=============================================================================
 /* Mod info menu */
 
 #define MODINFO_HEADERCOLS			16
@@ -8062,6 +8291,7 @@ void M_Init (void)
 	Cmd_AddCommand ("menu_quit", M_Menu_Quit_f);
 	Cmd_AddCommand ("menu_credits", M_Menu_Credits_f); // needed by the 2021 re-release
 	Cmd_AddCommand ("menu_mods", M_Menu_Mods_f);
+	Cmd_AddCommand ("menu_cheats", M_Menu_Cheats_f);
 	Cmd_AddCommand ("menu_maps", M_Menu_Maps_f);
 
 	Cvar_RegisterVariable (&ui_mouse);
@@ -8180,6 +8410,10 @@ void M_Draw (void)
 		M_Mods_Draw ();
 		break;
 
+	case m_cheats:
+		M_Cheats_Draw ();
+		break;
+
 	case m_modinfo:
 		M_ModInfo_Draw ();
 		break;
@@ -8263,6 +8497,11 @@ void M_Keydown (int key, qboolean repeat)
 		}
 	}
 
+	// XR controller A must open an active text field instead of confirming the menu item.
+	if (key == K_ABUTTON && key_dest == key_menu && Key_TextEntry () == TEXTMODE_ON &&
+		XR_Interaction_OpenKeyboardForMenu ())
+		return;
+
 	switch (M_GetBaseState (m_state))
 	{
 	default:
@@ -8319,6 +8558,10 @@ void M_Keydown (int key, qboolean repeat)
 
 	case m_mods:
 		M_Mods_Key (key);
+		return;
+
+	case m_cheats:
+		M_Cheats_Key (key);
 		return;
 
 	case m_modinfo:
@@ -8414,6 +8657,10 @@ static void M_MousemoveCanvas (float x, float y)
 
 	case m_mods:
 		M_Mods_Mousemove (x, y);
+		return;
+
+	case m_cheats:
+		M_Cheats_Mousemove (x, y);
 		return;
 
 	//case m_help:

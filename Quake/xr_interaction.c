@@ -998,6 +998,14 @@ static void xr_keyboard_open(qboolean trigger, qboolean select)
     xr_wheel_close();
 }
 
+qboolean XR_Interaction_OpenKeyboardForMenu(void)
+{
+    if (!XR_Input_OwnsInput() || key_dest != key_menu || keyboard_active)
+        return false;
+    xr_keyboard_open(false, true);
+    return true;
+}
+
 static void xr_keyboard_send_special(int key)
 {
     if (key == K_ESCAPE) { xr_keyboard_close(); return; }
@@ -1051,6 +1059,12 @@ static void xr_keyboard_press(void)
         if (col == 2) { keyboard_mode = keyboard_mode == 2 ? 0 : 2; return; }
         if (col >= 8) { xr_keyboard_send_special(K_ENTER); return; }
         Char_Event(' '); return;
+    }
+    if (row == 3 && col == 9) {
+        // Close text entry without sending Enter to the menu behind the keyboard.
+        virtual_mouse_trigger_suppressed = true;
+        xr_keyboard_close();
+        return;
     }
     if (row == 2 && col == 9) { xr_keyboard_send_special(K_BACKSPACE); return; }
     ch = letters[row][col];
@@ -1533,7 +1547,7 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
         xr_virtual_pointer_update(&actions->hand[mouse_hand]);
         if (pointer_active || virtual_mouse_trigger)
             M_MousemoveNormalized(CLAMP(0.f, virtual_mouse_x, 1.f), CLAMP(0.f, virtual_mouse_y, 1.f));
-        if (mouse_confirm && !virtual_mouse_trigger && pointer_active) {
+        if (mouse_confirm && !virtual_mouse_trigger && !virtual_mouse_trigger_suppressed && pointer_active) {
             virtual_mouse_trigger_suppressed = true;
             Key_Event(K_MOUSE1, true);
 			// Menu text rows consume the click, then the XR keyboard handles typing.
@@ -2163,6 +2177,7 @@ void XR_Interaction_Draw(void)
                     else if (keyboard_caps || keyboard_mode == 1) key[0] = toupper(key[0]);
                     label = key;
                 } else if (i == 2 && col == 9) label = "BKSP";
+                else if (i == 3 && col == 9) label = "CLOSE";
                 xr_keyboard_key(x + 1, y + 1, key_width - 2, key_height - 2, i == selected_row && col == selected_col);
                 if (label) xr_keyboard_label(x + (key_width - (int)strlen(label) * 16) / 2, y + (key_height - 16) / 2, label);
             }

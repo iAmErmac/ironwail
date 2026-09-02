@@ -332,6 +332,7 @@ void	CL_DecayLights (void);
 void	CL_SetLightstyle (int i, const char *str);
 
 void CL_Init (void);
+void CL_EnsureDefaultPlayerName (void);
 
 void CL_EstablishConnection (const char *host);
 
@@ -349,6 +350,7 @@ typedef struct
 } kbutton_t;
 
 extern	kbutton_t	in_mlook, in_klook;
+extern	kbutton_t	in_jump;
 extern 	kbutton_t 	in_strafe;
 extern 	kbutton_t 	in_speed;
 

@@ -77,7 +77,7 @@ extern qboolean SV_BoxInPVS (vec3_t mins, vec3_t maxs, byte *pvs, mnode_t *node)
 //
 refdef_t	r_refdef;
 extern cvar_t vr_world_scale, vr_roomscale, vr_smooth_stairs;
-extern cvar_t vr_laser_sight, vr_laser_beam, vr_laser_color, vr_laser_beam_width, vr_laser_beam_alpha, vr_laser_alpha, vr_laser_sight_scale, vr_laser_hide_melee;
+extern cvar_t vr_laser_sight, vr_laser_beam, vr_laser_deathmatch_allow, vr_laser_color, vr_laser_beam_width, vr_laser_beam_alpha, vr_laser_alpha, vr_laser_sight_scale, vr_laser_hide_melee;
 extern cvar_t vr_laser_beam_xoffset, vr_laser_beam_yoffset, vr_laser_beam_zoffset;
 extern qboolean VID_XR_GetActions(iw_xr_action_snapshot_t *actions);
 extern qboolean XR_Input_GetTeleportAim(vec3_t start, vec3_t target);
@@ -115,6 +115,7 @@ static float r_xr_head_anchor_yaw;
 static float r_xr_game_anchor_yaw;
 static float r_xr_ipd;
 static qboolean r_xr_view_basis_valid;
+static qboolean r_xr_view_basis_available;
 static vec3_t r_xr_forward, r_xr_right, r_xr_up;
 static vec3_t r_xr_center_vieworg, r_xr_head_anchor_position;
 static qboolean r_xr_stair_smooth_valid;
@@ -327,6 +328,12 @@ static qboolean R_XRLaserHiddenForMelee (int weapon)
 
 static qboolean R_XRGetVisualFireModel (iw_xr_hand_t hand, int weapon, const qmodel_t **model);
 
+static qboolean R_XRRemoteLasersAllowed (void)
+{
+    return cl.maxclients > 1 &&
+        (cl.gametype != GAME_DEATHMATCH || vr_laser_deathmatch_allow.value != 0.f);
+}
+
 static void R_XRPrepareLasers (void)
 {
     iw_xr_hand_t mainhand = XR_Input_PhysicalHandForRole (XR_HAND_MAINHAND);
@@ -366,7 +373,7 @@ static void R_XRPrepareLasers (void)
         }
     }
 
-    if (cl.maxclients <= 1 || (vr_laser_sight.value < 2.f && vr_laser_beam.value < 2.f))
+    if (!R_XRRemoteLasersAllowed () || (vr_laser_sight.value < 2.f && vr_laser_beam.value < 2.f))
         return;
     for (player = 1; player <= cl.maxclients && player <= MAX_SCOREBOARD; ++player)
     {
@@ -414,7 +421,7 @@ static void R_XRUpdateLaserDots (void)
     }
     for (player = 1; player <= MAX_SCOREBOARD; ++player)
         R_SetVRPlayerLaserDot (player, false, vec3_origin, 0, 0.f);
-    if (vr_laser_sight.value < 2.f)
+    if (!R_XRRemoteLasersAllowed () || vr_laser_sight.value < 2.f)
         return;
     for (player = 1; player <= cl.maxclients && player <= MAX_SCOREBOARD; ++player)
     {
@@ -662,6 +669,7 @@ void R_XRRecenter (void)
 	r_xr_sync_player_yaw = true;
 	r_xr_recenter_to_head = true;
 	r_xr_view_basis_valid = false;
+	r_xr_view_basis_available = false;
 }
 
 void R_XRResync (void)
@@ -671,6 +679,7 @@ void R_XRResync (void)
 	r_xr_sync_player_yaw = true;
 	r_xr_recenter_to_head = false;
 	r_xr_view_basis_valid = false;
+	r_xr_view_basis_available = false;
 }
 
 void R_XRAdjustYaw (float delta)
@@ -2229,7 +2238,7 @@ static void R_XRDrawLaserBeam (void)
     int hand, player;
     for (hand = 0; hand < IW_XR_HAND_COUNT; ++hand)
         R_XRDrawLaserBeamForHand (&r_xr_laser[hand]);
-    if (vr_laser_beam.value < 2.f)
+    if (!R_XRRemoteLasersAllowed () || vr_laser_beam.value < 2.f)
         return;
     for (player = 1; player <= cl.maxclients && player <= MAX_SCOREBOARD; ++player)
         R_XRDrawLaserBeamForHand (&r_xr_remote_laser[player - 1]);
@@ -3268,6 +3277,7 @@ void R_SetXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye)
 		r_xr_head_anchor_valid = false;
 		r_xr_sync_player_yaw = false;
 		r_xr_view_basis_valid = false;
+		r_xr_view_basis_available = false;
 		r_xr_anchor_origin_valid = false;
 	}
 	if (cl.viewentity > 0 && cl.viewentity < cl.num_entities)
@@ -3280,6 +3290,7 @@ void R_SetXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye)
 			r_xr_head_anchor_valid = false;
 			r_xr_sync_player_yaw = false;
 			r_xr_view_basis_valid = false;
+			r_xr_view_basis_available = false;
 		}
 		VectorCopy (cl_entities[cl.viewentity].origin, r_xr_anchor_origin);
 		r_xr_anchor_origin_valid = true;
@@ -3312,6 +3323,7 @@ void R_SetXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye)
 	R_XRRotateYaw (r_xr_right, r_xr_game_anchor_yaw - r_xr_head_anchor_yaw);
 	R_XRRotateYaw (r_xr_up, r_xr_game_anchor_yaw - r_xr_head_anchor_yaw);
 	r_xr_view_basis_valid = true;
+	r_xr_view_basis_available = true;
 
 	r_refdef.viewangles[YAW] = r_xr_game_anchor_yaw + (head_yaw - r_xr_head_anchor_yaw);
 
@@ -3377,6 +3389,19 @@ void R_ClearXREye (void)
 	r_xr_eye_pass = false;
 	r_xr_view_basis_valid = false;
 	R_SetXRFinalTarget (0, 0, 0);
+}
+
+qboolean R_GetXRViewBasis (vec3_t forward, vec3_t right, vec3_t up)
+{
+	if (!r_xr_view_basis_available)
+		return false;
+	if (forward)
+		VectorCopy (r_xr_forward, forward);
+	if (right)
+		VectorCopy (r_xr_right, right);
+	if (up)
+		VectorCopy (r_xr_up, up);
+	return true;
 }
 void R_RenderView (void)
 {

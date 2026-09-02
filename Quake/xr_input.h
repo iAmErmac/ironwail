@@ -18,6 +18,8 @@ qboolean XR_Input_OwnsInput(void);
 qboolean XR_Input_WantsCutsceneSkip(void);
 qboolean XR_Input_UsesRoomscale(void);
 qboolean XR_Input_Move(usercmd_t *cmd);
+qboolean XR_Input_FlyModeActive(void);
+void XR_Input_PrepareFlyViewAngles(vec3_t angles);
 void XR_Input_ApplyDash(void);
 qboolean XR_Input_IsDashing(void);
 qboolean XR_Input_IsTeleportAiming(void);
