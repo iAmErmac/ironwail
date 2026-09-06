@@ -36,6 +36,23 @@ static int vr_weapon_config_count;
 static float vr_weapon_scale = 1.f, vr_weapon_wheel_scale = 1.f;
 static vec3_t vr_weapon_offset, vr_weapon_fire_offset, vr_weapon_fire2_offset;
 
+void V_ReloadVRWeaponConfig(void)
+{
+    int i;
+
+    for (i = 0; i < vr_weapon_config_count; ++i) {
+        if (vr_weapon_configs[i]) JSON_Free(vr_weapon_configs[i]);
+        vr_weapon_configs[i] = NULL;
+    }
+    vr_weapon_config_count = 0;
+    vr_weapon_config_loaded = false;
+    vr_weapon_scale = 1.f;
+    vr_weapon_wheel_scale = 1.f;
+    VectorSet(vr_weapon_offset, 0.f, 0.f, 0.f);
+    VectorSet(vr_weapon_fire_offset, 0.f, 0.f, 0.f);
+    VectorSet(vr_weapon_fire2_offset, 0.f, 0.f, 0.f);
+}
+
 static qboolean V_GameNameMatches(const char *name)
 {
     const char *games, *start, *end;
@@ -181,6 +198,14 @@ static qmodel_t *V_FindConfiguredWeaponReplacement(qmodel_t *model)
     return NULL;
 }
 
+qmodel_t *VR_GetConfiguredModelReplacement(qmodel_t *model)
+{
+    qmodel_t *configured;
+    if (!model || !vr_weapon_replace.value || !vr_mode.value) return model;
+    configured = V_FindConfiguredWeaponReplacement(model);
+    return configured ? configured : model;
+}
+
 static void V_GetVRWeaponSettings(const qmodel_t *model, float *scale, float *wheel_scale, vec3_t offset, vec3_t fire_offset, vec3_t fire2_offset)
 {
     *scale = vr_weapon_scale; *wheel_scale = vr_weapon_wheel_scale; VectorCopy(vr_weapon_offset, offset); VectorCopy(vr_weapon_fire_offset, fire_offset); VectorCopy(vr_weapon_fire2_offset, fire2_offset);
@@ -221,8 +246,8 @@ qmodel_t *VR_GetWeaponModel(qmodel_t *model)
 	qmodel_t *configured;
 	if (!model || !vr_weapon_replace.value) return model;
 	if (!vr_mode.value) return model;
-	configured = V_FindConfiguredWeaponReplacement(model);
-	if (configured) return configured;
+	configured = VR_GetConfiguredModelReplacement(model);
+	if (configured != model) return configured;
 	if (q_strncasecmp(model->name, "progs/v_", 8)) return model;
 	basename = COM_SkipPath(model->name);
 	if (hipnotic) { q_snprintf(replacement, sizeof(replacement), "progs/vr/hipnotic/%s", basename); if (COM_FileExists(replacement, NULL)) return Mod_ForName(replacement, false); }

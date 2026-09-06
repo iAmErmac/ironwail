@@ -11,7 +11,7 @@ build/
 /.vs
 /out/
 qconsole.log
-tools/*
+tools/
 
 # docs
 AGENTS.md

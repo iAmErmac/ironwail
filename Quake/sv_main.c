@@ -23,6 +23,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 // sv_main.c -- server main program
 
 #include "quakedef.h"
+#include "xr_input.h"
 #include "xr_interaction.h"
 
 server_t	sv;
@@ -1912,6 +1913,9 @@ void SV_SpawnServer (const char *server)
 	edict_t		*ent;
 	int			i, signonsize;
 	qcvm_t		*vm = qcvm;
+
+	BotMatch_MapBegin ();
+	XR_Input_MapBegin ();
 
 	XR_Interaction_ResetMeleeState ();
 

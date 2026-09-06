@@ -26,6 +26,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "q_ctype.h"
 #include "bgmusic.h"
 #include "steam.h"
+#include "xr_interaction.h"
 #include <time.h>
 #include <errno.h>
 #include "miniz.h"
@@ -43,6 +44,8 @@ cvar_t	language = {"language","auto",CVAR_ARCHIVE}; /* for 2021 rerelease text *
 static qboolean		com_modified;	// set true if using non-id files
 
 static void COM_Path_f (void);
+static void COM_ApplyPendingBaseReplacement (void);
+static qboolean COM_IsLibreQuakeBase (void);
 
 // if a packfile directory differs from this, it is assumed to be hacked
 #define PAK0_COUNT		339	/* id1/pak0.pak - v1.0x */
@@ -1613,6 +1616,13 @@ static void COM_CheckRegistered (void)
 
 	if (h == -1)
 	{
+		if (COM_IsLibreQuakeBase ())
+		{
+			Cvar_SetROM ("registered", "1");
+			Con_Printf ("Playing LibreQuake base version.\n");
+			return;
+		}
+
 		Cvar_SetROM ("registered", "0");
 		Con_Printf ("Playing shareware version.\n");
 #if defined(ANDROID_GLES3)
@@ -2714,6 +2724,15 @@ void COM_AddGameDirectory (const char *dir)
 	}
 }
 
+void COM_ProbeGameDirectory (const char *dir)
+{
+	qboolean modified = com_modified;
+
+	COM_AddGameDirectory (dir);
+	// Mod discovery must not make the unmodified base game look modified.
+	com_modified = modified;
+}
+
 void COM_ResetGameDirectories(const char *newgamedirs)
 {
 	const char *newpath, *path;
@@ -2850,6 +2869,8 @@ void COM_SwitchGame (const char *paths)
 	//clear out and reload appropriate data
 	Cache_Flush ();
 	Mod_ResetAll();
+	V_ReloadVRWeaponConfig();
+	XR_Interaction_ReloadGameData();
 	Sky_ClearAll();
 	if (!isDedicated)
 	{
@@ -2977,6 +2998,170 @@ static void COM_AddBaseDir (const char *path)
 		Sys_Error ("Too many basedirs (%d)", com_numbasedirs);
 	if ((size_t) q_strlcpy (com_basedirs[com_numbasedirs++], path, sizeof (com_basedirs[0])) >= sizeof (com_basedirs[0]))
 		Sys_Error ("Basedir too long (%d characters, max %d):\n%s\n", (int)strlen (path), (int)sizeof (com_basedirs[0]), path);
+}
+
+static qboolean COM_BaseReplacementMarkerMatches (const char *path)
+{
+	char *contents;
+	char *start;
+	char *end;
+	qboolean matches;
+	size_t length;
+
+	contents = (char *) COM_LoadMallocFile_TextMode_OSPath (path, NULL);
+	if (!contents)
+		return false;
+
+	start = contents;
+	length = strlen (start);
+	if (length >= 3 && (byte) start[0] == 0xef && (byte) start[1] == 0xbb && (byte) start[2] == 0xbf)
+		start += 3;
+	while (q_isspace (*start))
+		++start;
+	end = start + strlen (start);
+	while (end > start && q_isspace (end[-1]))
+		--end;
+	*end = '\0';
+	matches = !q_strcasecmp (start, "librequake_full");
+	free (contents);
+	return matches;
+}
+
+static qboolean COM_FindBaseReplacementBackup (const char *basedir, char *backup, size_t backupsiz)
+{
+	unsigned int index;
+
+	for (index = 0; index < 1000; ++index)
+	{
+		if (index)
+		{
+			if (q_snprintf (backup, backupsiz, "%s/.addon_id1_previous_%u", basedir, index) >= backupsiz)
+				return false;
+		}
+		else
+		{
+			if (q_snprintf (backup, backupsiz, "%s/.addon_id1_previous", basedir) >= backupsiz)
+				return false;
+		}
+		if (Sys_FileType (backup) == FS_ENT_NONE)
+			return true;
+	}
+
+	return false;
+}
+
+static qboolean COM_ApplyBaseReplacement (const char *basedir)
+{
+	char marker[MAX_OSPATH];
+	char stage[MAX_OSPATH];
+	char target[MAX_OSPATH];
+	char pak0[MAX_OSPATH];
+	char pak1[MAX_OSPATH];
+	char signature[MAX_OSPATH];
+	char backup[MAX_OSPATH];
+	int targettype;
+	qboolean moved_old = false;
+
+	if (q_snprintf (marker, sizeof (marker), "%s/%s", basedir, COM_LIBREQUAKE_BASE_MARKER) >= sizeof (marker) ||
+		q_snprintf (stage, sizeof (stage), "%s/%s", basedir, COM_LIBREQUAKE_BASE_STAGE) >= sizeof (stage) ||
+		q_snprintf (target, sizeof (target), "%s/%s", basedir, GAMENAME) >= sizeof (target))
+		return false;
+	if (Sys_FileType (marker) != FS_ENT_FILE)
+		return false;
+	if (!COM_BaseReplacementMarkerMatches (marker))
+	{
+		Sys_Printf ("Ignoring unknown base replacement marker: %s\n", marker);
+		return false;
+	}
+
+	if (Sys_FileType (stage) != FS_ENT_DIRECTORY ||
+		q_snprintf (pak0, sizeof (pak0), "%s/pak0.pak", stage) >= sizeof (pak0) ||
+		q_snprintf (pak1, sizeof (pak1), "%s/pak1.pak", stage) >= sizeof (pak1) ||
+		Sys_FileType (pak0) != FS_ENT_FILE || Sys_FileType (pak1) != FS_ENT_FILE)
+	{
+		Sys_Printf ("LibreQuake base replacement is incomplete; keeping the current id1.\n");
+		return false;
+	}
+
+	if (q_snprintf (signature, sizeof (signature), "%s/%s", stage, COM_LIBREQUAKE_BASE_SIGNATURE) >= sizeof (signature))
+		return false;
+	if (!COM_WriteFile_OSPath (signature, "librequake_full\n", strlen ("librequake_full\n")))
+	{
+		Sys_Printf ("Couldn't mark the staged LibreQuake base.\n");
+		return false;
+	}
+
+	targettype = Sys_FileType (target);
+	if (targettype != FS_ENT_NONE)
+	{
+		if (targettype != FS_ENT_DIRECTORY || !COM_FindBaseReplacementBackup (basedir, backup, sizeof (backup)) ||
+			Sys_rename (target, backup) != 0)
+		{
+			Sys_Printf ("Couldn't preserve the current id1 for LibreQuake replacement.\n");
+			return false;
+		}
+		moved_old = true;
+	}
+
+	if (Sys_rename (stage, target) != 0)
+	{
+		if (moved_old)
+			Sys_rename (backup, target);
+		Sys_Printf ("Couldn't activate the staged LibreQuake base; the current id1 was preserved.\n");
+		return false;
+	}
+
+	if (Sys_remove (marker) != 0 && Sys_FileExists (marker))
+		Sys_Printf ("Warning: couldn't remove %s after applying the base replacement.\n", marker);
+	Sys_Printf ("Applied staged LibreQuake base replacement.\n");
+	return true;
+}
+
+static void COM_ApplyPendingBaseReplacement (void)
+{
+	int i;
+
+	for (i = 0; i < com_numbasedirs; ++i)
+		if (COM_ApplyBaseReplacement (com_basedirs[i]))
+			return;
+
+	if (com_nightdivedir[0])
+	{
+		for (i = 0; i < com_numbasedirs; ++i)
+			if (!q_strcasecmp (com_basedirs[i], com_nightdivedir))
+				break;
+		if (i == com_numbasedirs && COM_ApplyBaseReplacement (com_nightdivedir))
+			return;
+	}
+
+	if (host_parms->userdir && host_parms->userdir[0])
+	{
+		for (i = 0; i < com_numbasedirs; ++i)
+			if (!q_strcasecmp (com_basedirs[i], host_parms->userdir))
+				break;
+		if (i == com_numbasedirs && COM_ApplyBaseReplacement (host_parms->userdir))
+			return;
+	}
+}
+
+static qboolean COM_IsLibreQuakeBase (void)
+{
+	char pak0[MAX_OSPATH];
+	char signature[MAX_OSPATH];
+	int i;
+
+	for (i = com_numbasedirs - 1; i >= 0; --i)
+	{
+		if (q_snprintf (pak0, sizeof (pak0), "%s/%s/pak0.pak", com_basedirs[i], GAMENAME) >= sizeof (pak0))
+			continue;
+		if (Sys_FileType (pak0) != FS_ENT_FILE)
+			continue;
+		if (q_snprintf (signature, sizeof (signature), "%s/%s/%s", com_basedirs[i], GAMENAME, COM_LIBREQUAKE_BASE_SIGNATURE) >= sizeof (signature))
+			return false;
+		return Sys_FileType (signature) == FS_ENT_FILE;
+	}
+
+	return false;
 }
 
 /*
@@ -3532,6 +3717,8 @@ void COM_InitFilesystem (void) //johnfitz -- modified based on topaz's tutorial
 
 	if (!startarg || !COM_SetBaseDirRec (startarg))
 		COM_InitBaseDir ();
+
+	COM_ApplyPendingBaseReplacement ();
 
 	if (host_parms->userdir != host_parms->basedir)
 		COM_AddBaseDir (host_parms->userdir);

@@ -409,7 +409,12 @@ void CL_SendMove (const usercmd_t *cmd)
 
 	if (cmd) 
 	{
+		int team_selection_impulse = XR_Input_ConsumeTeamSelectionImpulse ();
+
 		cl.cmd = *cmd;
+		// Keep controller team selection separate from add-on/console impulses until packet assembly.
+		if (team_selection_impulse)
+			in_impulse = team_selection_impulse;
 		network_impulse = in_impulse;
 		main_requested = (in_attack.state & 3) != 0;
 		// XR used to let both hands influence the same wire attack; choose one canonical owner first.

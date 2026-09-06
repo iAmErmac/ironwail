@@ -24,6 +24,9 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "arch_def.h"
 #include "quakedef.h"
 #include "steam.h"
+#if defined(ANDROID_GLES3)
+#include "android_lifecycle.h"
+#endif
 
 #include <sys/types.h>
 #include <errno.h>
@@ -902,6 +905,51 @@ void Sys_Quit (void)
 	Host_Shutdown();
 
 	exit (0);
+}
+
+qboolean Sys_Restart (void)
+{
+#if defined(ANDROID_GLES3)
+	if (!IW_Android_RequestRestart ())
+	{
+		Sys_Printf ("Automatic restart failed; restart the Android app manually.\n");
+		return false;
+	}
+	return true;
+#else
+	int restart_pipe[2];
+	pid_t child;
+	char signal;
+
+	if (pipe (restart_pipe) != 0)
+	{
+		Sys_Printf ("Automatic restart failed: couldn't create a handoff pipe.\n");
+		return false;
+	}
+	child = fork ();
+	if (child < 0)
+	{
+		close (restart_pipe[0]);
+		close (restart_pipe[1]);
+		Sys_Printf ("Automatic restart failed: couldn't create a new process.\n");
+		return false;
+	}
+	if (child == 0)
+	{
+		close (restart_pipe[1]);
+		if (read (restart_pipe[0], &signal, 1) == 1)
+			execvp (host_parms->argv[0], host_parms->argv);
+		close (restart_pipe[0]);
+		_exit (127);
+	}
+
+	close (restart_pipe[0]);
+	Host_Shutdown ();
+	write (restart_pipe[1], "r", 1);
+	close (restart_pipe[1]);
+	exit (0);
+#endif
+	return true;
 }
 
 double Sys_DoubleTime (void)

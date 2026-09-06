@@ -1135,6 +1135,48 @@ void Sys_Quit (void)
 	exit (0);
 }
 
+qboolean Sys_Restart (void)
+{
+	const wchar_t *current_command_line = GetCommandLineW ();
+	wchar_t command_line[32768];
+	STARTUPINFOW startup;
+	PROCESS_INFORMATION process;
+	size_t length;
+
+	length = wcslen (current_command_line);
+	if (length >= countof (command_line))
+	{
+		Sys_Printf ("Automatic restart failed: command line is too long.\n");
+		return false;
+	}
+	memcpy (command_line, current_command_line, (length + 1) * sizeof (*command_line));
+
+	memset (&startup, 0, sizeof (startup));
+	startup.cb = sizeof (startup);
+	memset (&process, 0, sizeof (process));
+	// Keep the new process paused until this process has closed every game file.
+	if (!CreateProcessW (NULL, command_line, NULL, NULL, FALSE, CREATE_SUSPENDED, NULL, NULL, &startup, &process))
+	{
+		Sys_Printf ("Automatic restart failed (error %lu).\n", GetLastError ());
+		return false;
+	}
+
+	Host_Shutdown ();
+	if (ResumeThread (process.hThread) == (DWORD) -1)
+	{
+		TerminateProcess (process.hProcess, 1);
+		CloseHandle (process.hThread);
+		CloseHandle (process.hProcess);
+		Sys_Printf ("Automatic restart failed while resuming the new process.\n");
+		exit (1);
+	}
+
+	CloseHandle (process.hThread);
+	CloseHandle (process.hProcess);
+	exit (0);
+	return true;
+}
+
 double Sys_DoubleTime (void)
 {
 	return (double)SDL_GetPerformanceCounter() * rcp_counter_freq;

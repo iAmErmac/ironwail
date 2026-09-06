@@ -35,6 +35,8 @@ static qboolean iw_surface;
 static qboolean iw_context_ready;
 static qboolean iw_paused;
 static qboolean iw_audio_focus = true;
+static qboolean iw_restart_requested;
+static qboolean iw_host_shutdown;
 static qboolean iw_touch_active;
 static qboolean iw_attack_as_mouse;
 static qboolean iw_attack_active;
@@ -113,6 +115,8 @@ qboolean IW_Android_Init(const char *base_dir, int argc, const char *const *argv
     }
 
     memset(&iw_parms, 0, sizeof(iw_parms));
+    iw_restart_requested = false;
+    iw_host_shutdown = false;
     iw_parms.argc = argc;
     iw_parms.argv = (char **)argv;
     iw_parms.basedir = (char *)(base_dir && *base_dir ? base_dir : ".");
@@ -227,7 +231,7 @@ void IW_Android_Resize(int width, int height)
 void IW_Android_Frame(uint64_t frame_time_ns)
 {
     double dt;
-    if (!iw_initialized || !iw_surface || !iw_context_ready || iw_paused || !iw_audio_focus)
+    if (!iw_initialized || iw_restart_requested || !iw_surface || !iw_context_ready || iw_paused || !iw_audio_focus)
         return;
     if (vid.width <= 0 || vid.height <= 0)
         return;
@@ -250,7 +254,7 @@ void IW_Android_Frame(uint64_t frame_time_ns)
 
 void IW_Android_FrameXR(uint64_t frame_time_ns, unsigned target_fbo, int target_width, int target_height)
 {
-    if (!iw_initialized || !iw_surface || !iw_context_ready || iw_paused || !iw_audio_focus)
+    if (!iw_initialized || iw_restart_requested || !iw_surface || !iw_context_ready || iw_paused || !iw_audio_focus)
         return;
     if (vid.width <= 0 || vid.height <= 0 || !target_fbo || target_width <= 0 || target_height <= 0)
         return;
@@ -688,16 +692,40 @@ void IW_Android_AudioFocus(qboolean focused)
     IW_LOG("audio focus %s", focused ? "gained" : "lost");
 }
 
+extern qboolean IW_Android_NativeRequestRestart(void);
+
+qboolean IW_Android_RequestRestart(void)
+{
+    if (!iw_initialized || iw_restart_requested)
+        return false;
+
+    // Shut down the old engine before Android launches a new activity over the staged base.
+    Host_Shutdown();
+    iw_host_shutdown = true;
+    iw_restart_requested = true;
+    if (!IW_Android_NativeRequestRestart())
+    {
+        iw_restart_requested = false;
+        IW_LOG("Android restart request was rejected by the activity");
+        return false;
+    }
+    IW_LOG("Android restart requested for staged base replacement");
+    return true;
+}
+
 void IW_Android_Shutdown(void)
 {
     if (!iw_initialized)
         return;
-    Host_Shutdown();
+    if (!iw_host_shutdown)
+        Host_Shutdown();
     free(iw_memory);
     iw_memory = NULL;
     iw_initialized = false;
     iw_surface = false;
     iw_context_ready = false;
+    iw_restart_requested = false;
+    iw_host_shutdown = false;
     IW_LOG("shutdown complete");
 }
 
@@ -722,6 +750,7 @@ void IW_Android_SetVirtualPointer(const float start[3], const float hit[3], qboo
 {
     (void)start; (void)hit; (void)active; (void)color; (void)alpha; (void)width;
 }
+qboolean IW_Android_RequestRestart(void) { return false; }
 qboolean IW_Android_BeginXREye(unsigned eye, unsigned *fbo, int *width, int *height) { (void)eye; if (fbo) *fbo = 0; if (width) *width = 0; if (height) *height = 0; return false; }
 void IW_Android_EndXREye(unsigned eye) { (void)eye; }
 qboolean IW_Android_BeginXRHUD(unsigned *fbo, int *width, int *height) { (void)fbo; (void)width; (void)height; return false; }

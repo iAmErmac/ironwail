@@ -31,6 +31,7 @@ extern	cvar_t		vid_contrast;
 extern float v_blend[4];
 
 void V_Init (void);
+void V_ReloadVRWeaponConfig (void);
 void V_RenderView (void);
 void V_RenderXREye (const iw_xr_frame_snapshot_t *snapshot, unsigned eye);
 void V_CalcBlend (void);

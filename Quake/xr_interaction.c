@@ -42,7 +42,8 @@ cvar_t vr_mouse_alpha = {"vr_mouse_alpha", "0.4", CVAR_ARCHIVE};
 cvar_t vr_aim_beam = {"vr_aim_beam", "1", CVAR_ARCHIVE};
 cvar_t vr_aim_beam_width = {"vr_aim_beam_width", "2.0", CVAR_ARCHIVE};
 
-typedef struct { int item; int impulse; int replaces_item; int local_field_value; const char *name; qmodel_t *model; xr_melee_mode_t melee_mode; qboolean melee_explicit; float melee_damage_scale; qboolean melee_damage_explicit; } xr_weapon_slot_t;
+typedef enum { XR_WEAPON_AMMO_DEFAULT, XR_WEAPON_AMMO_NONE, XR_WEAPON_AMMO_SHELLS, XR_WEAPON_AMMO_NAILS, XR_WEAPON_AMMO_ROCKETS, XR_WEAPON_AMMO_CELLS } xr_weapon_ammo_t;
+typedef struct { int item; int impulse; int replaces_item; int local_field_value; const char *name; qmodel_t *model; xr_melee_mode_t melee_mode; qboolean melee_explicit; float melee_damage_scale; qboolean melee_damage_explicit; xr_weapon_ammo_t ammo_type; } xr_weapon_slot_t;
 static xr_weapon_slot_t xr_weapons[16] = {
     {IT_AXE, 1, 0, 0, "Axe"}, {IT_SHOTGUN, 2, 0, 0, "Shotgun"},
     {IT_SUPER_SHOTGUN, 3, 0, 0, "Super Shotgun"}, {IT_NAILGUN, 4, 0, 0, "Nailgun"},
@@ -140,10 +141,14 @@ static void xr_notify_network_fire(iw_xr_hand_t hand, int weapon)
     float amplitude = 0.35f;
     double interval = 0.1;
     xr_melee_mode_t mode;
-    if (hand < 0 || hand >= IW_XR_HAND_COUNT || realtime < fire_haptic_next_time[hand])
+    qboolean melee_haptic_pending;
+    if (hand < 0 || hand >= IW_XR_HAND_COUNT)
+        return;
+    melee_haptic_pending = xr_melee_hands[hand].haptic_pending;
+    if (!melee_haptic_pending && realtime < fire_haptic_next_time[hand])
         return;
     mode = xr_melee_hands[hand].mode;
-    if (xr_melee_hands[hand].haptic_pending)
+    if (melee_haptic_pending)
     {
         amplitude = CLAMP(0.f, 0.35f * xr_melee_hands[hand].haptic_scale, 1.f);
         xr_melee_hands[hand].haptic_pending = false;
@@ -267,10 +272,14 @@ qboolean XR_Interaction_AllowOffhandFireInput(void)
 void XR_Interaction_NotifyWeaponFire(iw_xr_hand_t hand, float previous_attack_finished, float attack_finished, double time)
 {
     float cadence, amplitude = 0.35f;
+    qboolean melee_haptic_pending;
     if (hand < 0 || hand >= IW_XR_HAND_COUNT || attack_finished <= time + 0.001 ||
-        fabsf(attack_finished - previous_attack_finished) <= 0.001f || realtime < fire_haptic_next_time[hand])
+        fabsf(attack_finished - previous_attack_finished) <= 0.001f)
         return;
-    if (xr_melee_hands[hand].haptic_pending)
+    melee_haptic_pending = xr_melee_hands[hand].haptic_pending;
+    if (!melee_haptic_pending && realtime < fire_haptic_next_time[hand])
+        return;
+    if (melee_haptic_pending)
     {
         amplitude = CLAMP(0.f, 0.35f * xr_melee_hands[hand].haptic_scale, 1.f);
         xr_melee_hands[hand].haptic_pending = false;
@@ -555,6 +564,19 @@ static void xr_wheel_cursor_from_pose(void)
 
 static qboolean xr_offhand_weapon_has_ammo (int item)
 {
+    xr_weapon_slot_t *slot = xr_weapon_slot_for_item(item);
+    if (slot && slot->ammo_type != XR_WEAPON_AMMO_DEFAULT)
+    {
+        switch (slot->ammo_type)
+        {
+        case XR_WEAPON_AMMO_NONE: return true;
+        case XR_WEAPON_AMMO_SHELLS: return cl.stats[STAT_SHELLS] >= 1;
+        case XR_WEAPON_AMMO_NAILS: return cl.stats[STAT_NAILS] >= 1;
+        case XR_WEAPON_AMMO_ROCKETS: return cl.stats[STAT_ROCKETS] >= 1;
+        case XR_WEAPON_AMMO_CELLS: return cl.stats[STAT_CELLS] >= 1;
+        default: break;
+        }
+    }
     if (item == HIT_LASER_CANNON) return cl.stats[STAT_CELLS] > 0;
     if (hipnotic) {
         if (item == HIT_PROXIMITY_GUN) return cl.stats[STAT_ROCKETS] > 0;
@@ -1165,6 +1187,17 @@ static int xr_item_bit(const char *name)
     return atoi(name);
 }
 
+static xr_weapon_ammo_t xr_weapon_ammo_type(const char *name)
+{
+    if (!name || !*name || !q_strcasecmp(name, "default")) return XR_WEAPON_AMMO_DEFAULT;
+    if (!q_strcasecmp(name, "none")) return XR_WEAPON_AMMO_NONE;
+    if (!q_strcasecmp(name, "shells")) return XR_WEAPON_AMMO_SHELLS;
+    if (!q_strcasecmp(name, "nails")) return XR_WEAPON_AMMO_NAILS;
+    if (!q_strcasecmp(name, "rockets")) return XR_WEAPON_AMMO_ROCKETS;
+    if (!q_strcasecmp(name, "cells")) return XR_WEAPON_AMMO_CELLS;
+    return XR_WEAPON_AMMO_DEFAULT;
+}
+
 extern qmodel_t *VR_GetWeaponModel(qmodel_t *model);
 extern qboolean VR_IsConfiguredWeaponModel(const qmodel_t *model);
 extern float VR_WeaponWheelScale(const qmodel_t *model);
@@ -1189,6 +1222,7 @@ static void xr_weaponwheel_add_builtin_slot(int item, int impulse, const char *n
     xr_weapons[slot].impulse = impulse;
     xr_weapons[slot].replaces_item = 0;
     xr_weapons[slot].local_field_value = 0;
+    xr_weapons[slot].ammo_type = XR_WEAPON_AMMO_DEFAULT;
     q_strlcpy(xr_weapon_names[slot], name, sizeof(xr_weapon_names[slot]));
     xr_weapons[slot].name = xr_weapon_names[slot];
     xr_weapons[slot].model = NULL;
@@ -1214,6 +1248,7 @@ static void xr_weaponwheel_set_builtin_slots(void)
         xr_weapons[i].model = NULL;
         xr_weapons[i].replaces_item = 0;
         xr_weapons[i].local_field_value = 0;
+        xr_weapons[i].ammo_type = XR_WEAPON_AMMO_DEFAULT;
         xr_weapon_slot_set_builtin_melee(&xr_weapons[i]);
         xr_weapon_local_fields[i][0] = 0;
         q_strlcpy(xr_weapon_models[i], xr_builtin_model_paths[i], sizeof(xr_weapon_models[i]));
@@ -1239,7 +1274,7 @@ static void xr_weaponwheel_set_builtin_slots(void)
 
 static void xr_weaponwheel_apply_extension_entry(const jsonentry_t *entry)
 {
-    const char *name, *item_name, *model, *replaces_name, *local_field;
+    const char *name, *item_name, *model, *replaces_name, *local_field, *ammo;
     const double *item_number, *impulse, *local_value;
     int item, slot;
 
@@ -1262,6 +1297,8 @@ static void xr_weaponwheel_apply_extension_entry(const jsonentry_t *entry)
     xr_weapons[slot].impulse = (int)*impulse;
     replaces_name = JSON_FindString(entry, "replaces");
     xr_weapons[slot].replaces_item = replaces_name ? xr_item_bit(replaces_name) : 0;
+    ammo = JSON_FindString(entry, "ammo");
+    xr_weapons[slot].ammo_type = xr_weapon_ammo_type(ammo);
     local_value = JSON_FindNumber(entry, "local_value");
     xr_weapons[slot].local_field_value = local_value ? (int)*local_value : 0;
     xr_weapon_slot_set_builtin_melee(&xr_weapons[slot]);
@@ -1434,6 +1471,7 @@ static void xr_weaponwheel_reload_f(void)
     }
     xr_weaponwheel_load_extensions();
 }
+
 static void xr_vignette_init(void)
 {
     xr_vignette_pic = Draw_LoadPicRGBA("gfx/vignette");
@@ -1498,6 +1536,12 @@ void XR_Interaction_Init(void)
     xr_weaponwheel_reload_f();
 }
 
+void XR_Interaction_ReloadGameData(void)
+{
+    xr_wheel_close();
+    xr_weaponwheel_reload_f();
+}
+
 void XR_Interaction_Shutdown(void)
 {
     xr_wheel_close(); xr_keyboard_close(); xr_virtual_pointer_clear(); wheel_bind_active = offhand_wheel_bind_active = false; offhand_weapon_item = 0; offhand_transfer.active = false; memset(&offhand_fire, 0, sizeof(offhand_fire)); offhand_local_fire.executing = false; offhand_local_fire.frame = offhand_local_fire.attack_finished = 0.f; offhand_fire_main_viewmodel_valid = false; offhand_fire_input_suppressed = false; main_fire_input_active = false; local_offhand_fired_this_frame = false; network_visual_fire_pending = false; network_visual_fire_deadline = 0.0; visual_fire_deadline = 0.0; memset(visual_fire_active, 0, sizeof(visual_fire_active)); memset(visual_fire_second, 0, sizeof(visual_fire_second)); memset(visual_fire_weapon, 0, sizeof(visual_fire_weapon)); memset(xr_local_projectile_spawns, 0, sizeof(xr_local_projectile_spawns)); memset(fire_haptic_next_time, 0, sizeof(fire_haptic_next_time)); keyboard_trigger_suppressed = false; virtual_mouse_trigger_suppressed = false; two_hand_wheel_suppressed = false; two_hand_mode_active = false; vignette_value = 0.f; vignette_yaw_valid = false; xr_melee_reset_all(); memset(&xr_melee_damage_context, 0, sizeof(xr_melee_damage_context));
@@ -1510,6 +1554,13 @@ void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions)
     if (cl.maxclients > 1 && (cls.state != ca_connected || cls.signon != SIGNONS || cl.intermission || cl.stats[STAT_HEALTH] <= 0))
     {
         offhand_attack_active = false;
+        if (cl.stats[STAT_HEALTH] <= 0)
+        {
+            // Death invalidates the local offhand ownership; inventory is rebuilt on respawn.
+            offhand_weapon_item = 0;
+            offhand_transfer.active = false;
+            xr_offhand_reset_local_fire();
+        }
         xr_offhand_fire_clear();
         network_visual_fire_pending = false;
     }

@@ -26,6 +26,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 
 extern void VID_XR_Haptic (int hand, float amplitude, float duration_seconds);
+extern qmodel_t *VR_GetConfiguredModelReplacement (qmodel_t *model);
 
 static int cl_network_ammo[4];
 static qboolean cl_network_ammo_valid;
@@ -645,7 +646,7 @@ void CL_ParseUpdate (int bits)
 	//johnfitz
 
 	//johnfitz -- moved here from above
-	model = cl.model_precache[modnum];
+	model = VR_GetConfiguredModelReplacement (cl.model_precache[modnum]);
 	if (model != ent->model)
 	{
 		ent->model = model;
@@ -971,7 +972,7 @@ void CL_ParseStatic (int version) //johnfitz -- added a parameter
 
 // copy it to the current state
 
-	ent->model = cl.model_precache[ent->baseline.modelindex];
+	ent->model = VR_GetConfiguredModelReplacement (cl.model_precache[ent->baseline.modelindex]);
 	ent->lerpflags |= LERP_RESETANIM; //johnfitz -- lerping
 	ent->frame = ent->baseline.frame;
 

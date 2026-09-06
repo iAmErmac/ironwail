@@ -25,8 +25,12 @@ cvar_t vr_teleport_speed = {"vr_teleport_speed", "2800", CVAR_ARCHIVE};
 cvar_t vr_teleport_beam_color = {"vr_teleport_beam_color", "00FFFF", CVAR_ARCHIVE};
 cvar_t vr_teleport_beam_alpha = {"vr_teleport_beam_alpha", "0.6", CVAR_ARCHIVE};
 cvar_t vr_teleport_auto_jump = {"vr_teleport_auto_jump", "0", CVAR_ARCHIVE};
+cvar_t xr_team_select_api = {"xr_team_select_api", "0", CVAR_NONE};
 
 static qboolean xr_key_state[15];
+static qboolean xr_team_red_held, xr_team_blue_held;
+static qboolean xr_team_selection_fire_suppressed;
+static int xr_team_selection_impulse;
 static qboolean xr_owns_input;
 static qboolean xr_ui_release_suppressed, xr_modal_confirm_held;
 static qboolean xr_turn_held;
@@ -174,8 +178,17 @@ void XR_Input_Init(void)
     Cvar_RegisterVariable(&vr_teleport_beam_color);
     Cvar_RegisterVariable(&vr_teleport_beam_alpha);
     Cvar_RegisterVariable(&vr_teleport_auto_jump);
+    Cvar_RegisterVariable(&xr_team_select_api);
     XR_Interaction_Init();
 
+}
+
+void XR_Input_MapBegin(void)
+{
+    xr_team_red_held = false;
+    xr_team_blue_held = false;
+    xr_team_selection_fire_suppressed = false;
+    xr_team_selection_impulse = 0;
 }
 
 void XR_Input_Shutdown(void)
@@ -188,6 +201,10 @@ void XR_Input_Shutdown(void)
         xr_key_state[i] = false;
     }
     xr_owns_input = false;
+    xr_team_red_held = false;
+    xr_team_blue_held = false;
+    xr_team_selection_fire_suppressed = false;
+    xr_team_selection_impulse = 0;
     xr_ui_release_suppressed = false;
     xr_modal_confirm_held = false;
     xr_turn_held = false;
@@ -446,9 +463,78 @@ void XR_Input_PrepareInputGrab(void)
         (actions.hand[dominant].buttons & IW_XR_BUTTON_PRIMARY) != 0;
 }
 
+qboolean XR_Input_TeamSelectionActive(void)
+{
+    edict_t *player;
+
+    if (xr_team_select_api.value < 1.0f || key_dest != key_game || !sv.active ||
+        !svs.clients || svs.maxclients < 1 || !svs.clients[0].active)
+        return false;
+    player = svs.clients[0].edict;
+    // Some CTF add-ons use team 1 as a temporary value before assigning red or blue.
+    return player && !player->free && player->v.team <= 1;
+}
+
+int XR_Input_ConsumeTeamSelectionImpulse(void)
+{
+    int impulse = xr_team_selection_impulse;
+    xr_team_selection_impulse = 0;
+    return impulse;
+}
+
+static qboolean XR_Input_TriggerHeld(const iw_xr_hand_snapshot_t *hand)
+{
+    return hand && (((hand->buttons & IW_XR_BUTTON_TRIGGER) != 0) || hand->trigger > 0.5f);
+}
+
+static qboolean XR_Input_UpdateTeamSelection(const iw_xr_action_snapshot_t *actions)
+{
+    iw_xr_hand_t dominant = XR_Input_PhysicalHandForRole(XR_HAND_MAINHAND);
+    qboolean active = XR_Input_TeamSelectionActive();
+    qboolean right_trigger_held = XR_Input_TriggerHeld(&actions->hand[IW_XR_HAND_RIGHT]);
+    qboolean left_trigger_held = XR_Input_TriggerHeld(&actions->hand[IW_XR_HAND_LEFT]);
+    qboolean red_held = active && right_trigger_held;
+    qboolean blue_held = active && left_trigger_held;
+    qboolean random_team_held = active && (actions->hand[dominant].buttons & IW_XR_BUTTON_SECONDARY) != 0;
+    qboolean red_pressed = red_held && !xr_team_red_held;
+    qboolean blue_pressed = blue_held && !xr_team_blue_held;
+
+    if (active && (right_trigger_held || left_trigger_held))
+        xr_team_selection_fire_suppressed = true;
+    else if (!right_trigger_held && !left_trigger_held)
+        xr_team_selection_fire_suppressed = false;
+    xr_team_red_held = red_held;
+    xr_team_blue_held = blue_held;
+    if (!active)
+        return false;
+
+    if (red_pressed)
+        xr_team_selection_impulse = 1;
+    else if (blue_pressed)
+        xr_team_selection_impulse = 2;
+
+    XR_Input_Key(0, K_RTRIGGER, false);
+    XR_Input_Key(1, K_LTRIGGER, false);
+    XR_Input_Key(2, K_ABUTTON, false);
+    // Keep the add-on's jump/random-team control available during team selection.
+    XR_Input_Key(3, K_BBUTTON, random_team_held);
+    XR_Input_Key(4, K_XBUTTON, false);
+    XR_Input_Key(5, K_YBUTTON, false);
+    XR_Input_Key(6, K_RTHUMB, false);
+    XR_Input_Key(7, K_LTHUMB, false);
+    XR_Input_Key(8, K_ESCAPE, false);
+    XR_Input_Key(9, K_LEFTARROW, false);
+    XR_Input_Key(10, K_RIGHTARROW, false);
+    XR_Input_Key(11, K_DOWNARROW, false);
+    XR_Input_Key(12, K_UPARROW, false);
+    return true;
+}
+
 void XR_Input_Update(void)
 {
     iw_xr_action_snapshot_t actions;
+    iw_xr_action_snapshot_t interaction_actions;
+    const iw_xr_action_snapshot_t *interaction_input;
     iw_xr_hand_t dominant = XR_Input_PhysicalHandForRole(XR_HAND_MAINHAND);
     iw_xr_hand_t offhand = XR_Input_PhysicalHandForRole(XR_HAND_OFFHAND);
     xr_melee_attack_t main_melee;
@@ -473,7 +559,23 @@ void XR_Input_Update(void)
     XR_Input_Key(14, K_RGRIP, (actions.hand[dominant].grip > 0.5f || (actions.hand[dominant].buttons & IW_XR_BUTTON_GRIP)) != 0);
     XR_Input_Key(13, K_LGRIP, (!vr_stabilize_mode.value || (actions.hand[dominant].grip <= 0.5f && (actions.hand[dominant].buttons & IW_XR_BUTTON_GRIP) == 0)) && (actions.hand[offhand].grip > 0.5f || (actions.hand[offhand].buttons & IW_XR_BUTTON_GRIP)));
     was_ui = key_dest != key_game;
-    XR_Interaction_Update(&actions);
+    if (XR_Input_UpdateTeamSelection(&actions))
+    {
+        xr_turn_held = false;
+        xr_roomscale_position_valid = false;
+        return;
+    }
+    interaction_input = &actions;
+    if (xr_team_selection_fire_suppressed)
+    {
+        interaction_actions = actions;
+        interaction_actions.hand[dominant].buttons &= ~IW_XR_BUTTON_TRIGGER;
+        interaction_actions.hand[dominant].trigger = 0.0f;
+        interaction_actions.hand[offhand].buttons &= ~IW_XR_BUTTON_TRIGGER;
+        interaction_actions.hand[offhand].trigger = 0.0f;
+        interaction_input = &interaction_actions;
+    }
+    XR_Interaction_Update(interaction_input);
     main_motion_attack = XR_Interaction_GetMeleePulse(XR_HAND_MAINHAND, &main_melee) &&
         (main_melee.mode == XR_MELEE_AXE || main_melee.mode == XR_MELEE_MJOLNIR);
     if (was_ui && key_dest == key_game)
@@ -498,8 +600,10 @@ void XR_Input_Update(void)
         xr_roomscale_position_valid = false;
         return;
     }
-    XR_Input_Key(0, K_RTRIGGER, (actions.hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) != 0 || main_motion_attack);
-    XR_Input_Key(1, K_LTRIGGER, (actions.hand[offhand].buttons & IW_XR_BUTTON_TRIGGER) != 0 && XR_Interaction_AllowOffhandFireInput());
+    XR_Input_Key(0, K_RTRIGGER, !xr_team_selection_fire_suppressed &&
+        ((actions.hand[dominant].buttons & IW_XR_BUTTON_TRIGGER) != 0 || main_motion_attack));
+    XR_Input_Key(1, K_LTRIGGER, !xr_team_selection_fire_suppressed &&
+        (actions.hand[offhand].buttons & IW_XR_BUTTON_TRIGGER) != 0 && XR_Interaction_AllowOffhandFireInput());
 
 
     {

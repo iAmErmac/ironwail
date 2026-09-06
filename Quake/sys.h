@@ -123,6 +123,7 @@ void Sys_CloseLibrary (void *lib);
 // system IO
 //
 FUNC_NORETURN void Sys_Quit (void);
+qboolean Sys_Restart (void);
 FUNC_NORETURN void Sys_ReportError (const char *error, ...) FUNC_PRINTF(1,2);
 
 #define Sys_Error(...)									\

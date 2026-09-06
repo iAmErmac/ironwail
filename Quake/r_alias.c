@@ -760,8 +760,14 @@ static void R_DrawAliasModel_Real (entity_t *e, aliasmode_t mode)
 	//
 	rs_aliaspolys += paliashdr->numtris;
 	R_SetupAliasLighting (e);
-    if (e->wheel_brightness > 0.f)
-        VectorScale(lightcolor, e->wheel_brightness, lightcolor);
+	if (e->wheel_brightness > 0.f)
+	{
+		// Wheel previews use their own illumination so world shadows cannot hide them.
+		float brightness = q_max (1.f, e->wheel_brightness);
+		lightcolor[0] = brightness;
+		lightcolor[1] = brightness;
+		lightcolor[2] = brightness;
+	}
 
 	//
 	// draw it

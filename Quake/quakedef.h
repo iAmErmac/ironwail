@@ -397,6 +397,7 @@ typedef void (GL_APIENTRYP GLDEBUGPROC) (GLenum source, GLenum type, GLuint id, 
 #include "menu.h"
 #include "cdaudio.h"
 #include "glquake.h"
+#include "botmatch.h"
 
 
 //=============================================================================
@@ -486,6 +487,7 @@ qboolean			Modlist_IsInstalling (void);
 
 extern filelist_item_t **extralevels_sorted;
 extern filelist_item_t	*modlist;
+extern filelist_item_t	*community_modlist;
 extern filelist_item_t	*extralevels;
 extern filelist_item_t	*demolist;
 extern filelist_item_t	*savelist;

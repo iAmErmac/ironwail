@@ -29,6 +29,7 @@ typedef enum {
 
 void XR_Interaction_Init(void);
 void XR_Interaction_Shutdown(void);
+void XR_Interaction_ReloadGameData(void);
 void XR_Interaction_Update(const iw_xr_action_snapshot_t *actions);
 void XR_Interaction_AddWorldEntities(void);
 void XR_Interaction_DrawWorldModels(void);

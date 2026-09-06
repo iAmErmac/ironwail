@@ -12,10 +12,13 @@ typedef enum {
 
 void XR_Input_Init(void);
 void XR_Input_Shutdown(void);
+void XR_Input_MapBegin(void);
 void XR_Input_Update(void);
 void XR_Input_PrepareInputGrab(void);
 qboolean XR_Input_OwnsInput(void);
 qboolean XR_Input_WantsCutsceneSkip(void);
+qboolean XR_Input_TeamSelectionActive(void);
+int XR_Input_ConsumeTeamSelectionImpulse(void);
 qboolean XR_Input_UsesRoomscale(void);
 qboolean XR_Input_Move(usercmd_t *cmd);
 qboolean XR_Input_FlyModeActive(void);

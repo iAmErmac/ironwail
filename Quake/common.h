@@ -324,6 +324,12 @@ void COM_InitFilesystem (void);
 
 void COM_ResetGameDirectories (const char *newgamedirs);
 void COM_AddGameDirectory (const char *dir);
+void COM_ProbeGameDirectory (const char *dir);
+
+#define COM_LIBREQUAKE_BASE_MARKER    "basereplace.txt"
+#define COM_LIBREQUAKE_BASE_STAGE     ".addon_id1_stage"
+#define COM_LIBREQUAKE_BASE_SIGNATURE ".ironwail_librequake"
+
 void COM_SwitchGame (const char *paths);
 
 const char *COM_SkipPath (const char *pathname);

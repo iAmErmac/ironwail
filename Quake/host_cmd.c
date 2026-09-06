@@ -24,6 +24,7 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include "quakedef.h"
 #include "q_ctype.h"
 #include "json.h"
+#include "miniz.h"
 #if defined(IRO_RIFT_ANDROID)
 #include "android_lifecycle.h"
 #endif
@@ -32,6 +33,10 @@ Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
 #include <curl/curl.h>
 #endif
 #define MAX_URL	2048
+#define COMMUNITY_MANIFEST_URL "https://raw.githubusercontent.com/iAmErmac/IronRift-addons/refs/heads/main/newaddons.json"
+#define COMMUNITY_MANIFEST_URL_FILE "newaddons.url"
+#define COMMUNITY_MANIFEST_CACHE "newaddons.json"
+#define COMMUNITY_MANIFEST_URL_CACHE "newaddons.url.data"
 
 extern cvar_t	pausable;
 extern cvar_t	nomonsters;
@@ -682,26 +687,75 @@ typedef struct
 	const char			*download;
 	double				bytes_total;
 	const jsonentry_t	*json;
+	const struct modmanifest_s *manifest;
+	qboolean			community;
 	SDL_atomic_t		bytes_downloaded;
 	SDL_atomic_t		status;
 } modinfo_t;
 
+typedef struct modmanifest_s
+{
+	char				url[MAX_URL];
+	const char		*cache_name;
+	const char		*cache_url_name;
+	json_t			**json_slot;
+	SDL_atomic_t	*cancel;
+	filelist_item_t **list;
+	qboolean		community;
+} modmanifest_t;
+
 filelist_item_t			*modlist;
+filelist_item_t			*community_modlist;
 static char				extramods_addons_url[MAX_URL];
 static json_t			*extramods_json;
 static SDL_atomic_t		extramods_json_cancel;
 static SDL_Thread*		extramods_json_downloader;
+static char				community_manifest_url[MAX_URL];
+static json_t			*community_json;
+static SDL_atomic_t		community_json_cancel;
+static SDL_Thread*		community_json_downloader;
 static SDL_atomic_t		extramods_install_cancel;
 static SDL_Thread*		extramods_install_thread;
+static modmanifest_t		extramods_manifest;
+static modmanifest_t		community_manifest;
 #if defined(IRO_RIFT_ANDROID)
 /* Java calls this only while the single installer request below is active. */
 static SDL_atomic_t        *android_addon_progress;
 #endif
 
+static qboolean Modlist_Check (const char *modname, const char *base);
+static qboolean Modlist_IsBaseReplacement (const modinfo_t *info, const char *target);
+
+static qboolean Modlist_IsInstalledOnDisk (const char *name)
+{
+	int i;
+	for (i = 0; i < com_numbasedirs; i++)
+		if (Modlist_Check (name, com_basedirs[i]))
+			return true;
+	return false;
+}
+
 const char *Modlist_GetFullName (const filelist_item_t *item)
 {
 	const modinfo_t *info = (const modinfo_t *) (item + 1);
 	const char *full_name = info->full_name;
+	filelist_item_t *community_item;
+
+	// Installed entries can reuse the display name from the community manifest.
+	if (!full_name)
+	{
+		for (community_item = community_modlist; community_item; community_item = community_item->next)
+		{
+			const modinfo_t *community_info;
+			if (q_strcasecmp (community_item->name, item->name))
+				continue;
+			community_info = (const modinfo_t *) (community_item + 1);
+			full_name = community_info->full_name;
+			if (full_name)
+				break;
+		}
+	}
+
 	// 2021 rerelease episode names are localized
 	if (full_name && full_name[0] == '$')
 		full_name = LOC_GetRawString (full_name);
@@ -798,6 +852,8 @@ static void Modlist_RegisterAddons (void *param)
 		if (!info->json)
 		{
 			info->json = entry;
+			info->manifest = &extramods_manifest;
+			info->community = false;
 			if (!info->full_name) // don't overwrite custom descript.ion names for installed add-ons
 			{
 				// If the addon has a non-localized name, convert it in-place from UTF-8
@@ -836,6 +892,81 @@ static void Modlist_RegisterAddons (void *param)
 	M_RefreshMods ();
 }
 
+static size_t WriteCommunityManifestChunk (void *buffer, size_t size, size_t nmemb, void *stream)
+{
+	if (SDL_AtomicGet (&community_json_cancel))
+		return 0;
+	Vec_Append ((void **) stream, 1, buffer, nmemb);
+	return nmemb;
+}
+
+static void Modlist_RegisterCommunityAddons (void *param)
+{
+	json_t *json = (json_t *) param;
+	const jsonentry_t *addons, *entry;
+
+	addons = JSON_Find (json->root, "addons", JSON_ARRAY);
+	if (!addons)
+	{
+		JSON_Free (json);
+		return;
+	}
+
+	community_json = json;
+	for (entry = addons->firstchild; entry; entry = entry->next)
+	{
+		const char *download, *gamedir, *name, *author, *date, *description;
+		const char *install_mode;
+		const double *size;
+		modinfo_t *info;
+		filelist_item_t *item;
+
+		if (entry->type != JSON_OBJECT)
+			continue;
+		download = JSON_FindString (entry, "download");
+		gamedir = JSON_FindString (entry, "gamedir");
+		if (!download || !gamedir)
+			continue;
+
+		name = JSON_FindString (entry, "name");
+		author = JSON_FindString (entry, "author");
+		date = JSON_FindString (entry, "date");
+		description = JSON_FindString (JSON_Find (entry, "description", JSON_OBJECT), "en");
+		size = JSON_FindNumber (entry, "size");
+		install_mode = JSON_FindString (entry, "install_mode");
+
+		item = FileList_AddWithData (gamedir, NULL, sizeof (*info), &community_modlist);
+		info = (modinfo_t *) (item + 1);
+		if (!info->json)
+		{
+			info->json = entry;
+			info->manifest = &community_manifest;
+			info->community = true;
+			if (!info->full_name)
+			{
+				if (name && name[0] && name[0] != '$')
+				{
+					char utf8name[1024];
+					q_strlcpy (utf8name, name, sizeof (utf8name));
+					UTF8_ToQuake ((char *) name, strlen (name) + 1, utf8name);
+				}
+				info->full_name = name;
+			}
+			info->download = download;
+			if (size)
+				info->bytes_total = *size;
+			info->description = description;
+			info->author = author;
+			info->date = date;
+			// Base id1 is always present, but LibreQuake Full must remain installable.
+			if (!install_mode || q_strcasecmp (install_mode, "replace_directory"))
+				info->status.value = Modlist_IsInstalledOnDisk (gamedir) ? MODSTATUS_INSTALLED : MODSTATUS_DOWNLOADABLE;
+		}
+	}
+
+	M_RefreshMods ();
+}
+
 static void Modlist_PrintJSONHTTPError (void *param)
 {
 	uintptr_t status = (uintptr_t) param;
@@ -850,6 +981,43 @@ static void Modlist_PrintJSONCurlError (void *param)
 static const char *Modlist_GetInstallDir (void)
 {
 	return com_nightdivedir[0] ? com_nightdivedir : com_basedirs[com_numbasedirs - 1];
+}
+
+static void Modlist_LoadCommunityURL (void)
+{
+	const char *basedir = com_basedirs[com_numbasedirs - 1];
+	char path[MAX_OSPATH];
+	byte *contents;
+	char *url;
+	char *end;
+
+	q_strlcpy (community_manifest_url, COMMUNITY_MANIFEST_URL, sizeof (community_manifest_url));
+	if ((size_t) q_snprintf (path, sizeof (path), "%s/%s", basedir, COMMUNITY_MANIFEST_URL_FILE) >= sizeof (path))
+		return;
+
+	contents = COM_LoadMallocFile_TextMode_OSPath (path, NULL);
+	if (!contents)
+		return;
+
+	url = (char *) contents;
+	if (strlen (url) >= 3 && (unsigned char) url[0] == 0xef && (unsigned char) url[1] == 0xbb && (unsigned char) url[2] == 0xbf)
+		url += 3;
+	while (q_isspace (*url))
+		++url;
+	end = url + strlen (url);
+	while (end > url && q_isspace (end[-1]))
+		--end;
+	*end = '\0';
+
+	if (!url[0] ||
+		(q_strncasecmp (url, "http://", 7) && q_strncasecmp (url, "https://", 8)) ||
+		q_strlcpy (community_manifest_url, url, sizeof (community_manifest_url)) >= sizeof (community_manifest_url))
+	{
+		q_strlcpy (community_manifest_url, COMMUNITY_MANIFEST_URL, sizeof (community_manifest_url));
+		Con_Warning ("Ignoring invalid %s; using the built-in community manifest URL\n", COMMUNITY_MANIFEST_URL_FILE);
+	}
+
+	free (contents);
 }
 
 static int Modlist_DownloadJSON (void *unused)
@@ -948,6 +1116,108 @@ done:
 	return 0;
 }
 
+static int Modlist_DownloadCommunityJSON (void *unused)
+{
+	const char *accept = "Accept: application/json";
+	const char *basedir;
+	const char *installdir;
+	char cachepath[MAX_OSPATH];
+	char cacheurlpath[MAX_OSPATH];
+	char *manifest = NULL;
+	json_t *json = NULL;
+	qboolean urlchanged = true;
+	qboolean cache_valid = false;
+	time_t filetime;
+	time_t now;
+	download_t download;
+
+	if (!community_manifest_url[0])
+		return 1;
+
+	time (&now);
+	basedir = com_basedirs[com_numbasedirs - 1];
+	installdir = Modlist_GetInstallDir ();
+	if ((size_t) q_snprintf (cachepath, sizeof (cachepath), "%s/%s", installdir, COMMUNITY_MANIFEST_CACHE) >= sizeof (cachepath))
+		cachepath[0] = '\0';
+	if ((size_t) q_snprintf (cacheurlpath, sizeof (cacheurlpath), "%s/%s", basedir, COMMUNITY_MANIFEST_URL_CACHE) >= sizeof (cacheurlpath))
+		cacheurlpath[0] = '\0';
+
+	if (cacheurlpath[0])
+	{
+		char *cachedurl = (char *) COM_LoadMallocFile_TextMode_OSPath (cacheurlpath, NULL);
+		if (cachedurl && !strcmp (cachedurl, community_manifest_url))
+			urlchanged = false;
+		free (cachedurl);
+	}
+
+	cache_valid = !urlchanged && cachepath[0] && Sys_GetFileTime (cachepath, &filetime) && difftime (now, filetime) < MANIFEST_RETENTION;
+	if (cache_valid)
+	{
+		manifest = (char *) COM_LoadMallocFile_TextMode_OSPath (cachepath, NULL);
+		if (manifest)
+		{
+			json = JSON_Parse (manifest);
+			free (manifest);
+			manifest = NULL;
+			if (json)
+				goto done;
+		}
+	}
+
+	memset (&download, 0, sizeof (download));
+	download.write_fn = WriteCommunityManifestChunk;
+	download.write_data = &manifest;
+	download.headers = &accept;
+	download.num_headers = 1;
+	download.abort = &community_json_cancel;
+
+	if (!Download (community_manifest_url, &download))
+	{
+		// A stale cache is still preferable to hiding the community list offline.
+		if (cachepath[0])
+		{
+			manifest = (char *) COM_LoadMallocFile_TextMode_OSPath (cachepath, NULL);
+			if (manifest)
+			{
+				json = JSON_Parse (manifest);
+				free (manifest);
+				manifest = NULL;
+				if (json)
+					goto done;
+			}
+		}
+		if (download.error)
+			Host_InvokeOnMainThread (Modlist_PrintJSONCurlError, (void *) download.error);
+		else if (download.response && download.response != 200)
+			Host_InvokeOnMainThread (Modlist_PrintJSONHTTPError, (void *) (uintptr_t) download.response);
+		VEC_FREE (manifest);
+		return 1;
+	}
+
+	if (SDL_AtomicGet (&community_json_cancel))
+	{
+		VEC_FREE (manifest);
+		return 1;
+	}
+
+	VEC_PUSH (manifest, '\0');
+	COM_NormalizeLineEndings (manifest);
+	json = JSON_Parse (manifest);
+	if (json && cachepath[0])
+	{
+		COM_WriteFile_OSPath (cachepath, manifest, strlen (manifest));
+		if (cacheurlpath[0])
+			COM_WriteFile_OSPath (cacheurlpath, community_manifest_url, strlen (community_manifest_url));
+	}
+	VEC_FREE (manifest);
+	if (!json)
+		return 1;
+
+done:
+	Host_InvokeOnMainThread (Modlist_RegisterCommunityAddons, json);
+	return 0;
+}
+
 typedef struct
 {
 	FILE			*file;
@@ -984,9 +1254,24 @@ static void Modlist_FinishInstalling (void *param)
 	if (param)
 	{
 		filelist_item_t *item = (filelist_item_t *) param;
+		modinfo_t *info = (modinfo_t *) (item + 1);
 		const char *desc = Modlist_GetFullName (item);
 		if (!desc)
 			desc = item->name;
+
+		if (Modlist_IsBaseReplacement (info, item->name))
+		{
+			Con_Printf (
+				"\n"
+				"Add-on \"%s\" has been staged.\n"
+				"Restarting Ironwail to replace the base id1 directory.\n"
+				"\n",
+				desc
+			);
+			if (!Sys_Restart ())
+				Con_Warning ("Automatic restart failed; restart Ironwail manually to finish the installation.\n");
+			return;
+		}
 
 		Con_Printf (
 			"\n"
@@ -1025,12 +1310,220 @@ static void Modlist_OnInstallRenameError (void *param)
 	Con_Warning ("Couldn't install add-on (rename error)\n");
 }
 
+static qboolean Modlist_IsSafeDirectoryName (const char *name)
+{
+	const char *p;
+	if (!name || !*name)
+		return false;
+	for (p = name; *p; p++)
+		if (!q_isalnum (*p) && *p != '_' && *p != '-')
+			return false;
+	return true;
+}
+
+static qboolean Modlist_RemoveTree (const char *path)
+{
+	findfile_t *find;
+	qboolean removed = true;
+
+	find = Sys_FindFirst (path, NULL);
+	while (find)
+	{
+		char name[MAX_OSPATH];
+		char child[MAX_OSPATH];
+		qboolean directory = (find->attribs & FA_DIRECTORY) != 0;
+
+		q_strlcpy (name, find->name, sizeof (name));
+		find = Sys_FindNext (find);
+		if (!strcmp (name, ".") || !strcmp (name, ".."))
+			continue;
+		if (q_snprintf (child, sizeof (child), "%s/%s", path, name) >= sizeof (child))
+		{
+			removed = false;
+			continue;
+		}
+		if (directory)
+			removed = Modlist_RemoveTree (child) && removed;
+		else if (Sys_remove (child) != 0)
+			removed = false;
+	}
+
+	if (Sys_remove (path) != 0 && Sys_FileExists (path))
+		removed = false;
+	return removed;
+}
+
+static qboolean Modlist_BuildDownloadURL (const modinfo_t *info, char *url, size_t urlsize)
+{
+	const char *download = info->download;
+	const char *base;
+	char manifest_url[MAX_URL];
+	char *slash;
+
+	if (!download || !*download)
+		return false;
+	if (strstr (download, "://"))
+		return q_strlcpy (url, download, urlsize) < urlsize;
+
+	base = info->manifest ? info->manifest->url : extramods_addons_url;
+	q_strlcpy (manifest_url, base, sizeof (manifest_url));
+	if (info->manifest && info->manifest->community)
+	{
+		slash = strrchr (manifest_url, '/');
+		if (slash)
+			*slash = '\0';
+	}
+	return q_snprintf (url, urlsize, "%s/%s", manifest_url, download) < urlsize;
+}
+
+static qboolean Modlist_EntryUsesZip (const modinfo_t *info, const char *url)
+{
+	const char *format = info->json ? JSON_FindString (info->json, "archive_format") : NULL;
+	if (format)
+		return !q_strcasecmp (format, "zip") || !q_strcasecmp (format, "pk3");
+	return !q_strcasecmp (COM_FileGetExtension (url), "zip") || !q_strcasecmp (COM_FileGetExtension (url), "pk3");
+}
+
+static qboolean Modlist_IsBaseReplacement (const modinfo_t *info, const char *target)
+{
+	const char *install_mode;
+
+	if (!info->community || !info->json || q_strcasecmp (target, GAMENAME))
+		return false;
+	install_mode = JSON_FindString (info->json, "install_mode");
+	return install_mode && !q_strcasecmp (install_mode, "replace_directory");
+}
+
+static qboolean Modlist_ExtractZip (const char *archive_path, const char *basedir, const modinfo_t *info, const char *target)
+{
+	pack_t *pack;
+	const char *archive_root;
+	char root[MAX_QPATH];
+	char stage_dir[MAX_OSPATH];
+	char output[MAX_OSPATH];
+	qboolean replace;
+	int rootlen;
+	int i;
+	qboolean ok = true;
+
+	if (!Modlist_IsSafeDirectoryName (target))
+		return false;
+	archive_root = info->json ? JSON_FindString (info->json, "archive_root") : NULL;
+	replace = Modlist_IsBaseReplacement (info, target);
+	root[0] = '\0';
+	if (archive_root && *archive_root && !FS_Pk3CanonicalizePath (archive_root, root, sizeof (root)))
+		return false;
+	rootlen = strlen (root);
+
+	if (replace)
+	{
+		if (q_snprintf (stage_dir, sizeof (stage_dir), "%s/%s", basedir, COM_LIBREQUAKE_BASE_STAGE) >= sizeof (stage_dir))
+			return false;
+		Modlist_RemoveTree (stage_dir);
+		Sys_mkdir (stage_dir);
+		q_strlcpy (output, stage_dir, sizeof (output));
+	}
+	else
+	{
+		if (q_snprintf (output, sizeof (output), "%s/%s", basedir, target) >= sizeof (output))
+			return false;
+		Sys_mkdir (output);
+	}
+
+	pack = FS_Pk3LoadArchive (archive_path);
+	if (!pack)
+		return false;
+	for (i = 0; i < pack->numfiles; i++)
+	{
+		const packfile_t *file = &pack->files[i];
+		const char *relative = file->name;
+		char path[MAX_OSPATH];
+		FILE *input;
+		FILE *output_file;
+		char buffer[8192];
+		size_t bytes;
+
+		if (rootlen)
+		{
+			if (q_strncasecmp (file->name, root, rootlen) || file->name[rootlen] != '/')
+				continue;
+			relative = file->name + rootlen + 1;
+		}
+		if (!*relative || !FS_Pk3CanonicalizePath (relative, path, sizeof (path)))
+		{
+			ok = false;
+			break;
+		}
+		input = NULL;
+		output_file = NULL;
+		{
+			char output_path[MAX_OSPATH];
+			if (q_snprintf (output_path, sizeof (output_path), "%s/%s", output, path) >= sizeof (output_path))
+			{
+				ok = false;
+				break;
+			}
+			COM_CreatePath (output_path);
+			input = FS_Pk3OpenFile (pack, file);
+			output_file = input ? Sys_fopen (output_path, "wb") : NULL;
+		}
+		if (!input || !output_file)
+		{
+			if (input)
+				fclose (input);
+			if (output_file)
+				fclose (output_file);
+			ok = false;
+			break;
+		}
+		while ((bytes = fread (buffer, 1, sizeof (buffer), input)) > 0)
+		{
+			if (fwrite (buffer, 1, bytes, output_file) != bytes)
+			{
+				ok = false;
+				break;
+			}
+		}
+		fclose (input);
+		fclose (output_file);
+		if (!ok)
+			break;
+	}
+	Sys_FileClose (pack->handle);
+	Z_Free (pack->files);
+	Z_Free (pack);
+
+	if (replace)
+	{
+		char marker[MAX_OSPATH];
+		if (ok)
+		{
+			char signature[MAX_OSPATH];
+			if (q_snprintf (signature, sizeof (signature), "%s/%s", output, COM_LIBREQUAKE_BASE_SIGNATURE) >= sizeof (signature) ||
+				!COM_WriteFile_OSPath (signature, "librequake_full\n", strlen ("librequake_full\n")))
+				ok = false;
+		}
+		if (ok && (q_snprintf (marker, sizeof (marker), "%s/%s", basedir, COM_LIBREQUAKE_BASE_MARKER) >= sizeof (marker) ||
+			!COM_WriteFile_OSPath (marker, "librequake_full\n", strlen ("librequake_full\n"))))
+			ok = false;
+		if (!ok)
+		{
+			Modlist_RemoveTree (output);
+			return false;
+		}
+		// Startup owns the only live id1 swap, after the engine has closed all files.
+	}
+	return ok;
+}
+
 static int Modlist_InstallerThread (void *param)
 {
 	char			url[MAX_URL];
 	char			tmp[MAX_OSPATH];
 	char			path[MAX_OSPATH];
+	char			target[MAX_QPATH];
 	const char		*basedir;
+	const char		*target_dir;
 	FILE			*file;
 	filelist_item_t	*item = (filelist_item_t *) param;
 	modinfo_t		*info = (modinfo_t *) (item + 1);
@@ -1040,14 +1533,23 @@ static int Modlist_InstallerThread (void *param)
 	int				i;
 
 	basedir = Modlist_GetInstallDir ();
-	for (i = 0; i < 1000; i++)
+	target_dir = info->json ? JSON_FindString (info->json, "target_dir") : NULL;
+	if (!target_dir || !*target_dir)
+		target_dir = item->name;
+	if (!Modlist_IsSafeDirectoryName (target_dir) || q_strlcpy (target, target_dir, sizeof (target)) >= sizeof (target))
 	{
-		q_snprintf (tmp, sizeof (tmp), "%s/%s/pak0.%s.tmp", basedir, item->name, COM_TempSuffix (i));
-		Sys_remove (tmp);
+		Host_InvokeOnMainThread (Modlist_OnInstallRenameError, NULL);
+		return 1;
 	}
 	for (i = 0; i < 1000; i++)
 	{
-		q_snprintf (tmp, sizeof (tmp), "%s/%s/pak0.%s.tmp", basedir, item->name, COM_TempSuffix (i));
+		q_snprintf (tmp, sizeof (tmp), "%s/.addon_%s.%s.tmp", basedir, target, COM_TempSuffix (i));
+		Sys_remove (tmp);
+	}
+	file = NULL;
+	for (i = 0; i < 1000; i++)
+	{
+		q_snprintf (tmp, sizeof (tmp), "%s/.addon_%s.%s.tmp", basedir, target, COM_TempSuffix (i));
 		file = Sys_fopen (tmp, "wb");
 		if (file)
 			break;
@@ -1070,7 +1572,22 @@ static int Modlist_InstallerThread (void *param)
 	download.write_data		= &mod;
 	download.abort			= &extramods_install_cancel;
 
-	q_snprintf (url, sizeof (url), "%s/%s", extramods_addons_url, info->download);
+	if (!Modlist_BuildDownloadURL (info, url, sizeof (url)))
+	{
+		fclose (file);
+		Sys_remove (tmp);
+		SDL_AtomicSet (&info->status, MODSTATUS_DOWNLOADABLE);
+		Host_InvokeOnMainThread (Modlist_OnInstallRenameError, NULL);
+		return 1;
+	}
+	if (Modlist_IsBaseReplacement (info, target) && !Modlist_EntryUsesZip (info, url))
+	{
+		fclose (file);
+		Sys_remove (tmp);
+		SDL_AtomicSet (&info->status, MODSTATUS_DOWNLOADABLE);
+		Host_InvokeOnMainThread (Modlist_OnInstallRenameError, NULL);
+		return 1;
+	}
 #if defined(IRO_RIFT_ANDROID)
     fclose (file);
     android_addon_progress = &info->bytes_downloaded;
@@ -1094,9 +1611,19 @@ static int Modlist_InstallerThread (void *param)
 		return 1;
 	}
 
-	q_snprintf (path, sizeof (path), "%s/%s/pak0.pak", basedir, item->name);
-	Sys_remove (path);
-	if (Sys_rename (tmp, path) != 0)
+	if (Modlist_EntryUsesZip (info, url))
+	{
+		ok = Modlist_ExtractZip (tmp, basedir, info, target);
+		Sys_remove (tmp);
+	}
+	else
+	{
+		q_snprintf (path, sizeof (path), "%s/%s/pak0.pak", basedir, target);
+		COM_CreatePath (path);
+		Sys_remove (path);
+		ok = Sys_rename (tmp, path) == 0;
+	}
+	if (!ok)
 	{
 		Sys_remove (tmp);
 		SDL_AtomicSet (&info->status, MODSTATUS_DOWNLOADABLE);
@@ -1297,7 +1824,7 @@ static void Modlist_FindLocal (void)
 #endif
 			if (Modlist_Check (find->name, com_basedirs[i]))
 			{
-				COM_AddGameDirectory (find->name);
+				COM_ProbeGameDirectory (find->name);
 				Modlist_Add (find->name);
 				COM_ResetGameDirectories ("");
 			}
@@ -1336,6 +1863,11 @@ static void Modlist_FindOnline (void)
 	while (p > 0 && extramods_addons_url[p - 1] == '/')
 		--p;
 	extramods_addons_url[p] = '\0';
+	q_strlcpy (extramods_manifest.url, extramods_addons_url, sizeof (extramods_manifest.url));
+	extramods_manifest.json_slot = &extramods_json;
+	extramods_manifest.cancel = &extramods_json_cancel;
+	extramods_manifest.list = &modlist;
+	extramods_manifest.community = false;
 
 	Con_SafePrintf ("\nUsing add-on server \"%s\"\n", extramods_addons_url);
 
@@ -1344,6 +1876,14 @@ static void Modlist_FindOnline (void)
 
 void Modlist_Init (void)
 {
+	SDL_AtomicSet (&community_json_cancel, 0);
+	Modlist_LoadCommunityURL ();
+	q_strlcpy (community_manifest.url, community_manifest_url, sizeof (community_manifest.url));
+	community_manifest.json_slot = &community_json;
+	community_manifest.cancel = &community_json_cancel;
+	community_manifest.list = &community_modlist;
+	community_manifest.community = true;
+	community_json_downloader = SDL_CreateThread (Modlist_DownloadCommunityJSON, "Community mods", NULL);
 	Modlist_FindOnline ();
 	Modlist_FindLocal ();
 }
@@ -1355,6 +1895,12 @@ void Modlist_ShutDown (void)
 		SDL_AtomicSet (&extramods_json_cancel, 1);
 		SDL_WaitThread (extramods_json_downloader, NULL);
 		extramods_json_downloader = NULL;
+	}
+	if (community_json_downloader)
+	{
+		SDL_AtomicSet (&community_json_cancel, 1);
+		SDL_WaitThread (community_json_downloader, NULL);
+		community_json_downloader = NULL;
 	}
 	if (extramods_install_thread)
 	{

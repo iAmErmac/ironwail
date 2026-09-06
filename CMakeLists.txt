@@ -165,6 +165,14 @@ if (EXISTS "${IRONWAIL_VR_WEAPONS_PK3_BUILDER}")
 else()
     message(STATUS "Ironwail VR weapon PK3 builder was not found; VR weapon replacements will not be packaged.")
 endif()
+set(COMMUNITY_MANIFEST_URL_FILE "${CMAKE_CURRENT_SOURCE_DIR}/Misc/newaddons.url")
+if (EXISTS "${COMMUNITY_MANIFEST_URL_FILE}")
+    add_custom_command(TARGET ironwail POST_BUILD
+        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+            "${COMMUNITY_MANIFEST_URL_FILE}"
+            "$<TARGET_FILE_DIR:ironwail>/newaddons.url"
+        VERBATIM)
+endif()
 if (IW_ENABLE_OPENXR AND IRONWAIL_OPENXR_LOADER_DLL)
     add_custom_command(TARGET ironwail POST_BUILD
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different

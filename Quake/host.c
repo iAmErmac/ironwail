@@ -1237,6 +1237,9 @@ void _Host_Frame (double time)
 // process console commands
 	Cbuf_Execute ();
 
+	// Allow botmatch to inject one addon-defined add-bot command before the input packet is built.
+	BotMatch_Frame ();
+
 	NET_Poll();
 
 	if (cl.sendprespawn)
@@ -1411,6 +1414,7 @@ void Host_Init (void)
 	COM_Init ();
 	COM_InitFilesystem ();
 	Host_InitLocal ();
+	BotMatch_Init ();
 	W_LoadWadFile (); //johnfitz -- filename is now hard-coded for honesty
 	if (cls.state != ca_dedicated)
 	{

@@ -140,6 +140,7 @@ void M_Menu_Main_f (void);
 		void M_Menu_Video_f (void);
 		void M_Menu_Gamepad_f (void);
 	void M_Menu_Mods_f (void);
+	void M_Menu_CommunityMods_f (void);
 	void M_Menu_Cheats_f (void);
 		void M_Menu_ModInfo_f (const filelist_item_t *item);
 	void M_Menu_Help_f (void);
@@ -7406,6 +7407,7 @@ typedef struct
 	const filelist_item_t	*source;
 	int						modidx;
 	qboolean				active;
+	qboolean				submenu;
 } moditem_t;
 
 static struct
@@ -7417,6 +7419,7 @@ static struct
 	int					prev_cursor;
 	double				download_flash_time;
 	enum m_state_e		prev;
+	qboolean			community;
 	qboolean			scrollbar_grab;
 	moditem_t			*items;
 } modsmenu;
@@ -7497,10 +7500,22 @@ static void M_Mods_Add (const filelist_item_t *item)
 	modsmenu.list.numitems++;
 }
 
+static void M_Mods_AddCommunitySubmenu (void)
+{
+	moditem_t mod;
+	memset (&mod, 0, sizeof (mod));
+	mod.name = "Community Mods";
+	mod.submenu = true;
+	VEC_PUSH (modsmenu.items, mod);
+	modsmenu.list.numitems++;
+}
+
 static qboolean M_Mods_Match (int index)
 {
 	const filelist_item_t *source = modsmenu.items[index].source;
 	const char *fullname;
+	if (modsmenu.items[index].submenu)
+		return q_strcasestr (modsmenu.items[index].name, modsmenu.list.search.text) != NULL;
 	if (!source)
 		return false;
 
@@ -7513,7 +7528,7 @@ static qboolean M_Mods_Match (int index)
 
 static qboolean M_Mods_IsSelectable (int index)
 {
-	return modsmenu.items[index].source != NULL;
+	return modsmenu.items[index].source != NULL || modsmenu.items[index].submenu;
 }
 
 static void M_Mods_UpdateLayout (void)
@@ -7531,11 +7546,13 @@ static void M_Mods_UpdateLayout (void)
 	modsmenu.list.viewsize = (height - MODLIST_OFS - 16) / 8;
 }
 
-static void M_Mods_Init (void)
+static void M_Mods_Init (qboolean community)
 {
 	int pass, count;
 	filelist_item_t *item;
+	filelist_item_t *list = community ? community_modlist : modlist;
 
+	modsmenu.community = community;
 	modsmenu.scrollbar_grab = false;
 	memset (&modsmenu.list.search, 0, sizeof (modsmenu.list.search));
 	modsmenu.list.search.match_fn = M_Mods_Match;
@@ -7547,11 +7564,13 @@ static void M_Mods_Init (void)
 	VEC_CLEAR (modsmenu.items);
 
 	M_Ticker_Init (&modsmenu.ticker);
+	if (!community)
+		M_Mods_AddCommunitySubmenu ();
 
 	for (pass = 0; pass < 2; pass++)
 	{
 		count = 0;
-		for (item = modlist; item; item = item->next)
+		for (item = list; item; item = item->next)
 		{
 			modstatus_t status = Modlist_GetStatus (item);
 			qboolean installed = status == MODSTATUS_INSTALLED;
@@ -7583,7 +7602,17 @@ void M_Menu_Mods_f (void)
 	modsmenu.prev = m_state;
 	m_state = m_mods;
 	m_entersound = true;
-	M_Mods_Init ();
+	M_Mods_Init (false);
+}
+
+void M_Menu_CommunityMods_f (void)
+{
+	IN_DeactivateForMenu ();
+	key_dest = key_menu;
+	modsmenu.prev = m_state;
+	m_state = m_communitymods;
+	m_entersound = true;
+	M_Mods_Init (true);
 }
 
 void M_Mods_Draw (void)
@@ -7619,7 +7648,7 @@ void M_Mods_Draw (void)
 	y = modsmenu.y;
 	cols = modsmenu.cols;
 
-	Draw_StringEx (x, y + 4, 12, "Mods");
+	Draw_StringEx (x, y + 4, 12, modsmenu.community ? "Community Mods" : "Mods");
 	M_DrawQuakeBar (x - 8, y + 16, namecols + 1);
 	M_DrawQuakeBar (x + namecols * 8, y + 16, cols + 1 - namecols);
 
@@ -7636,7 +7665,12 @@ void M_Mods_Draw (void)
 		const char *message = item->source ? Modlist_GetFullName (item->source) : NULL;
 		qboolean selected = (idx == modsmenu.list.cursor);
 
-		if (!item->source)
+		if (item->submenu)
+		{
+			M_Print (x, y + i*8, item->name);
+			M_Print (x + cols*8 - 24, y + i*8, "...");
+		}
+		else if (!item->source)
 		{
 			M_PrintWhite (x + (cols - strlen (item->name))/2*8, y + i*8, item->name);
 		}
@@ -7751,7 +7785,16 @@ void M_Mods_Key (int key)
 	case K_MOUSE4:
 	case K_MOUSE2:
 		M_List_ClearSearch (&modsmenu.list);
-		m_state = modsmenu.prev;
+		if (m_state == m_communitymods && modsmenu.prev == m_mods)
+		{
+			m_state = m_mods;
+			// Rebuild the installed list after leaving the separate community list.
+			M_Mods_Init (false);
+		}
+		else
+		{
+			m_state = modsmenu.prev;
+		}
 		if (m_state == m_none)
 		{
 			IN_Activate ();
@@ -7765,6 +7808,11 @@ void M_Mods_Key (int key)
 	case K_ABUTTON:
 	enter:
 		M_List_ClearSearch (&modsmenu.list);
+		if (modsmenu.items[modsmenu.list.cursor].submenu)
+		{
+			M_Menu_CommunityMods_f ();
+			break;
+		}
 		item = modsmenu.items[modsmenu.list.cursor].source;
 		if (Modlist_GetStatus (item) == MODSTATUS_INSTALLED)
 		{
@@ -7812,7 +7860,7 @@ void M_Mods_Mousemove (float cx, float cy)
 
 void M_OnModInstall (const char *name)
 {
-	if (key_dest != key_menu || (m_state != m_mods && m_state != m_modinfo))
+	if (key_dest != key_menu || (m_state != m_mods && m_state != m_communitymods && m_state != m_modinfo))
 		return;
 	Cbuf_AddText (va ("game \"%s\"\n", name));
 	M_Menu_Main_f ();
@@ -7820,9 +7868,9 @@ void M_OnModInstall (const char *name)
 
 void M_RefreshMods (void)
 {
-	if (key_dest != key_menu || m_state != m_mods)
+	if (key_dest != key_menu || (m_state != m_mods && m_state != m_communitymods))
 		return;
-	M_Mods_Init ();
+	M_Mods_Init (m_state == m_communitymods);
 }
 
 //=============================================================================
@@ -8054,6 +8102,7 @@ void M_Cheats_Mousemove (float cx, float cy)
 static struct
 {
 	const filelist_item_t	*item;
+	enum m_state_e	prev;
 	int						x, y, cols, lines;
 	char					title[36];
 	char					author[256];
@@ -8090,6 +8139,16 @@ static void M_ModInfo_UpdateLayout (void)
 	modinfomenu.y = m_top + (((m_height - height) / 2) & ~7) + MODINFO_BOXMARGIN * 8;
 }
 
+static qboolean M_ModInfo_DownloadHit (float x, float y)
+{
+	const int len = 8;
+	const int button_x = 160 - (len / 2) * 8;
+	const int button_y = modinfomenu.y + modinfomenu.lines * 8 - 8;
+
+	return x >= button_x - 8 && x <= button_x + len * 8 + 8 &&
+		y >= button_y - 8 && y <= button_y + 16;
+}
+
 void M_Menu_ModInfo_f (const filelist_item_t *item)
 {
 	const char *str;
@@ -8107,6 +8166,7 @@ void M_Menu_ModInfo_f (const filelist_item_t *item)
 	m_state = m_modinfo;
 	m_entersound = true;
 	modinfomenu.item = item;
+	modinfomenu.prev = modsmenu.community ? m_communitymods : m_mods;
 
 	str = Modlist_GetFullName (item);
 	if (!str)
@@ -8205,31 +8265,27 @@ void M_ModInfo_Draw (void)
 
 void M_ModInfo_Key (int key)
 {
-	float dx, dy;
-
 	switch (key)
 	{
 	case K_MOUSE1:
-		dx = fabs (m_mousex - 160) / 8;
-		dy = fabs (m_mousey - modinfomenu.y - (modinfomenu.lines - 1) * 8 - 4) / 8;
-		if (dy > 0 || dx > 4)
+		if (!M_ModInfo_DownloadHit (m_mousex, m_mousey))
 		{
 			m_entersound = true;
 			break;
 		}
-		/* fall-through */
+		// Fall through for the same activation path as the A button.
 
 	case K_ENTER:
 	case K_KP_ENTER:
 	case K_ABUTTON:
 		Modlist_StartInstalling (modinfomenu.item);
-		/* fall-through */
+		// Return to the previous menu after starting the download.
 
 	case K_ESCAPE:
 	case K_BBUTTON:
 	case K_MOUSE4:
 	case K_MOUSE2:
-		m_state = m_mods;
+		m_state = modinfomenu.prev;
 		m_entersound = true;
 		break;
 	}
@@ -8410,6 +8466,10 @@ void M_Draw (void)
 		M_Mods_Draw ();
 		break;
 
+	case m_communitymods:
+		M_Mods_Draw ();
+		break;
+
 	case m_cheats:
 		M_Cheats_Draw ();
 		break;
@@ -8560,6 +8620,10 @@ void M_Keydown (int key, qboolean repeat)
 		M_Mods_Key (key);
 		return;
 
+	case m_communitymods:
+		M_Mods_Key (key);
+		return;
+
 	case m_cheats:
 		M_Cheats_Key (key);
 		return;
@@ -8659,6 +8723,10 @@ static void M_MousemoveCanvas (float x, float y)
 		M_Mods_Mousemove (x, y);
 		return;
 
+	case m_communitymods:
+		M_Mods_Mousemove (x, y);
+		return;
+
 	case m_cheats:
 		M_Cheats_Mousemove (x, y);
 		return;
@@ -8738,6 +8806,9 @@ void M_Charinput (int key)
 	case m_mods:
 		M_Mods_Char (key);
 		return;
+	case m_communitymods:
+		M_Mods_Char (key);
+		return;
 	case m_options:
 		M_Options_Char (key);
 		return;
@@ -8763,6 +8834,8 @@ textmode_t M_TextEntry (void)
 	case m_maps:
 		return M_Maps_TextEntry ();
 	case m_mods:
+		return M_Mods_TextEntry ();
+	case m_communitymods:
 		return M_Mods_TextEntry ();
 	case m_options:
 		return M_Options_TextEntry ();
